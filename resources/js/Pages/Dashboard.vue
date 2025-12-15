@@ -11,7 +11,8 @@ const props = defineProps(['total_jobs_processing', 'total_submissions_processin
                            'token_days', 'job_labels', 'classifications', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
                            'total_jobs_completed', 'total_submissions_unpublished',
                            'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
-                           'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'has_submitter', 'submitter_curie'])
+                           'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'has_submitter', 'submitter_curie',
+                           'total_unique_sids', 'published_sids_count', 'unpublished_sids_count', 'new_sids_count', 'pending_republish_sids_count', 'pending_unpublish_sids_count'])
 
 const toast = useToast();
 const isSyncingClingen = ref(false);
@@ -130,7 +131,9 @@ onUnmounted(() => {
                                 :unprocessed_job_status="unprocessed_job_status" :unprocessed_job_date="unprocessed_job_date" :unprocessed_job_slug="unprocessed_job_slug" :unprocessed_job_ident="unprocessed_job_ident" :unprocessed_job_is_publishing="unprocessed_job_is_publishing" :unprocessed_job_is_processing="unprocessed_job_is_processing"
                                 :unprocessed_new_count="unprocessed_new_count" :unprocessed_republish_count="unprocessed_republish_count"
                                 :unprocessed_unpublish_count="unprocessed_unpublish_count" :unprocessed_error_count="unprocessed_error_count"
-                                :has_submitter="has_submitter" />
+                                :has_submitter="has_submitter"
+                                :total_unique_sids="total_unique_sids" :published_sids_count="published_sids_count" :unpublished_sids_count="unpublished_sids_count"
+                                :new_sids_count="new_sids_count" :pending_republish_sids_count="pending_republish_sids_count" :pending_unpublish_sids_count="pending_unpublish_sids_count" />
                 </div>
             </div>
         </div>

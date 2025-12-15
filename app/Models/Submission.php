@@ -154,24 +154,38 @@ class Submission extends Model
 
 
     /**
-     * To guarantee uniqueness of generated submission ids (sids), we base them off the
-     * tables id field.  This means a quick update after a record is newly
-     * created.  Since the record is still cached, the update is immediate.
+     * Generate a new unique SID using the sgc_sequences table.
+     * This ensures sequential SIDs even when versioned submissions share the same SID.
      *
+     * @return string The new SID in format SGC-1XXXXX
+     */
+    public static function generateNewSid(): string
+    {
+        $sequenceId = \DB::table('sgc_sequences')->insertGetId(['created_at' => now()]);
+        return 'SGC-1' . str_pad($sequenceId, 5, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Auto-generate SID for new submissions using the sequence table.
+     * Only generates a new SID if one is not already set (versioned submissions
+     * inherit their SID from the original submission).
      */
     public static function booted(): void
     {
         static::created(function (Model $model) {
             if ($model->sid === null || $model->sid == '') {
+                // Generate a new SID using the sequence table
+                $newSid = self::generateNewSid();
+
                 // Update sid without triggering timestamp updates to preserve historical dates during imports
                 // Use a direct DB update to avoid any issues with model save() overwriting other attributes
                 // (e.g., document_id was being lost when $model->save() was called here)
                 \DB::table('submissions')
                     ->where('id', $model->id)
-                    ->update(['sid' => 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT)]);
+                    ->update(['sid' => $newSid]);
 
                 // Update the model in memory to reflect the change
-                $model->sid = 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT);
+                $model->sid = $newSid;
                 $model->syncOriginal(); // Reset dirty tracking to match DB state
             }
         });
@@ -436,6 +450,7 @@ class Submission extends Model
     {
 		return $query->select('id', 'gene_id', 'user_id', 'disease_id', 'original_disease_id', 'inheritance_id',
                               'classification_id', 'submitter_id', 'job_id', 'origin_job_id', 'ident', 'sid',
+                              'version_number', // Required for display_id accessor
                               'local_key', 'friendly', 'submission_date', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
                               // Removed: 'original_submission_data', 'evidence' - too large for listing

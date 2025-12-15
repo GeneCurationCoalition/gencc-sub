@@ -143,7 +143,7 @@
 
         // Apply global filter manually to match PrimeVue's behavior
         const searchTerm = filters.value.global.value.toLowerCase();
-        const globalFilterFields = ['sid', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date'];
+        const globalFilterFields = ['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date'];
 
         return rowFiltered.filter(item => {
             return globalFilterFields.some(field => {
@@ -820,6 +820,7 @@
                 // Search across all the globalFilterFields
                 const searchableText = [
                     row.sid,
+                    row.display_id,
                     row.friendly,
                     row.gene?.symbol,
                     row.gene?.hgnc_id,
@@ -1147,7 +1148,7 @@ table tbody tr:hover {
             <Toast />
 
             <DataTable v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissions?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="submission_date" :sortOrder="-1"
-                    :rowStyle="rowStyle" :globalFilterFields="['sid', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date']" tableStyle="min-width: 20rem; width: auto;"
+                    :rowStyle="rowStyle" :globalFilterFields="['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date']" tableStyle="min-width: 20rem; width: auto;"
                     dataKey="sid">
                 <template #header>
                     <!-- Bulk Action Toolbar -->

@@ -197,6 +197,21 @@ class PublishController extends Controller
                     if ($targetState === Submission::STATUS_PUBLISHED) {
                         $submission->published_at = Carbon::now();
                         $submission->original_submission_data = $submission->submission_data;
+
+                        // Mark all previous versions of this SID as not current
+                        Submission::where('sid', $submission->sid)
+                            ->where('id', '!=', $submission->id)
+                            ->where('is_current', true)
+                            ->update(['is_current' => false]);
+
+                        // Mark this version as current
+                        $submission->is_current = true;
+                    }
+
+                    // When unpublishing, mark as not current
+                    if ($targetState === Submission::STATUS_UNPUBLISHED) {
+                        $submission->is_current = false;
+                        $submission->unpublished_at = Carbon::now();
                     }
 
                     $submission->save();
@@ -624,7 +639,6 @@ class PublishController extends Controller
         $newJob = new Job();
         $newJob->user_id = $userId;
         $newJob->submitter_id = $submitterId;
-        $newJob->status = Job::STATUS_PROCESSING; // Legacy status
         $newJob->status = Job::STATUS_DRAFT;
         $newJob->submission_date = now();
         $newJob->save();

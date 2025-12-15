@@ -15,7 +15,12 @@
                                'token_days', 'job_labels', 'classifications', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
                                 'total_jobs_completed', 'total_submissions_unpublished',
                                 'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
-                                'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'unprocessed_new_error_count', 'unprocessed_republish_error_count', 'unprocessed_unpublish_error_count', 'has_submitter'])
+                                'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'unprocessed_new_error_count', 'unprocessed_republish_error_count', 'unprocessed_unpublish_error_count', 'has_submitter',
+                                'total_unique_sids', 'published_sids_count', 'unpublished_sids_count', 'new_sids_count', 'pending_republish_sids_count', 'pending_unpublish_sids_count'])
+
+    // Computed totals for the table
+    const processedTotal = computed(() => props.published_sids_count + props.unpublished_sids_count);
+    const unprocessedTotal = computed(() => props.new_sids_count + props.pending_republish_sids_count + props.pending_unpublish_sids_count);
 
     const seriesColors = ['#22c55e', '#3b82f6', '#ef4444'];
 
@@ -324,20 +329,54 @@
 
             <div class="grid grid-cols-2 gap-4">
                 <div class="">
-                    <Fieldset legend="Processed Submission History">
-                        <div class="m-0 space-y-2">
-                            <div class="flex items-baseline gap-2">
-                                <span class="font-semibold">Jobs:</span>
-                                <span>{{ total_jobs_completed }}</span>
+                    <Fieldset legend="Submission Statistics">
+                        <div class="m-0">
+                            <!-- Header row with total -->
+                            <div class="text-center mb-3">
+                                <span class="font-semibold">Total Unique SGCs:</span>
+                                <span class="text-xl font-bold text-blue-600 ml-2">{{ total_unique_sids }}</span>
                             </div>
-                            <div class="flex items-baseline gap-2">
-                                <span class="font-semibold">Published:</span>
-                                <span>{{ total_submissions_published }}</span>
-                            </div>
-                            <div class="flex items-baseline gap-2">
-                                <span class="font-semibold">Unpublished:</span>
-                                <span>{{ total_submissions_unpublished }}</span>
-                            </div>
+                            <!-- Table -->
+                            <table class="w-full border-collapse">
+                                <thead>
+                                    <tr class="border-b-2 border-gray-300">
+                                        <th class="text-left py-2 px-2 font-semibold text-green-700 w-1/2">Processed ({{ processedTotal }})</th>
+                                        <th class="text-left py-2 px-2 font-semibold text-amber-700 w-1/2">Unprocessed ({{ unprocessedTotal }})</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td class="py-1 px-2 align-top">
+                                            <div class="space-y-1">
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Published:</span>
+                                                    <span class="text-green-600 font-medium">{{ published_sids_count }}</span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Unpublished:</span>
+                                                    <span class="text-red-500">{{ unpublished_sids_count }}</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="py-1 px-2 align-top border-l border-gray-200">
+                                            <div class="space-y-1">
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">New:</span>
+                                                    <span class="text-amber-600">{{ new_sids_count }}</span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Republish:</span>
+                                                    <span class="text-blue-600">{{ pending_republish_sids_count }}</span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Unpublish:</span>
+                                                    <span class="text-orange-500">{{ pending_unpublish_sids_count }}</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </Fieldset>
                 </div>

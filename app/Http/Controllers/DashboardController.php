@@ -31,9 +31,51 @@ use Carbon\CarbonPeriod;
  * */
 class DashboardController extends Controller
 {
+    /**
+     * Count submissions by status type for a given job.
+     * Returns counts for new, republish, unpublish, and optionally errors.
+     *
+     * @param  \App\Models\Job  $job
+     * @param  bool  $includeErrors  Whether to count errors per status type
+     * @return array
+     */
+    private function countSubmissionsByStatus(Job $job, bool $includeErrors = false): array
+    {
+        $counts = [
+            'new' => $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+                ->count(),
+            'republish' => $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->count(),
+            'unpublish' => $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+                ->count(),
+        ];
+
+        if ($includeErrors) {
+            $counts['errors'] = $job->submissions()
+                ->whereNotNull('submission_errors')
+                ->count();
+            $counts['new_errors'] = $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+                ->whereNotNull('submission_errors')
+                ->count();
+            $counts['republish_errors'] = $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->whereNotNull('submission_errors')
+                ->count();
+            $counts['unpublish_errors'] = $job->submissions()
+                ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+                ->whereNotNull('submission_errors')
+                ->count();
+        }
+
+        return $counts;
+    }
 
     /**
-     * Gather all the metrics and statistics for the dashboard page.  
+     * Gather all the metrics and statistics for the dashboard page.
      *
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\Response
@@ -79,13 +121,13 @@ class DashboardController extends Controller
         $job_error_count = 0;
         $submission_error_count = 0;
 
-        $jobs->each(function ($item) use (&$count, &$job_error_count, &$submission_error_count, &$job_processing_count, &$submission_processing_count, &$submission_new_count, &$submission_republish_count, &$submission_unpublish_count){
-
+        foreach ($jobs as $item) {
             // V2: Count jobs with errors using computed property
-            if ($item->has_errors)
+            if ($item->has_errors) {
                 $job_error_count++;
-            else
+            } else {
                 $job_processing_count++;
+            }
 
             $count += $item->submissions()->count();
 
@@ -103,14 +145,14 @@ class DashboardController extends Controller
                 ])
             )->count();
 
-            // V2: Count by origin_state for submitted jobs
+            // V2: Count by status for submitted jobs using shared helper method
             if ($item->status === Job::STATUS_SUBMITTED) {
-                $submission_new_count += $item->submissions()->whereNull('origin_state')->count();
-                $submission_republish_count += $item->submissions()->where('origin_state', 'published')->count();
-                $submission_unpublish_count += $item->submissions()->where('origin_state', 'unpublished')->count();
+                $statusCounts = $this->countSubmissionsByStatus($item);
+                $submission_new_count += $statusCounts['new'];
+                $submission_republish_count += $statusCounts['republish'];
+                $submission_unpublish_count += $statusCounts['unpublish'];
             }
-
-        });
+        }
 
         // V2: Processed jobs - jobs that have been fully processed
         if ($submitter_id === null) {
@@ -227,42 +269,20 @@ class DashboardController extends Controller
                 $unprocessed_job_date = $unprocessedJob->updated_at->format('Y-m-d');
             }
 
-            // Count submissions by origin state
-            // origin_state is null for new submissions, 'published' for republish, 'unpublished' for unpublish
-            $unprocessed_new_count = $unprocessedJob->submissions()
-                ->whereNull('origin_state')
-                ->count();
+            // Count submissions by status type using shared helper method
+            $includeErrors = $unprocessedJob->status === Job::STATUS_DRAFT;
+            $statusCounts = $this->countSubmissionsByStatus($unprocessedJob, $includeErrors);
 
-            $unprocessed_republish_count = $unprocessedJob->submissions()
-                ->where('origin_state', 'published')
-                ->count();
+            $unprocessed_new_count = $statusCounts['new'];
+            $unprocessed_republish_count = $statusCounts['republish'];
+            $unprocessed_unpublish_count = $statusCounts['unpublish'];
 
-            $unprocessed_unpublish_count = $unprocessedJob->submissions()
-                ->where('origin_state', 'unpublished')
-                ->count();
-
-            // Count errors (only relevant for draft jobs)
-            // Submissions have errors if submission_errors field is not null
-            if ($unprocessedJob->status === Job::STATUS_DRAFT) {
-                $unprocessed_error_count = $unprocessedJob->submissions()
-                    ->whereNotNull('submission_errors')
-                    ->count();
-
-                // Count errors per status type
-                $unprocessed_new_error_count = $unprocessedJob->submissions()
-                    ->whereNull('origin_state')
-                    ->whereNotNull('submission_errors')
-                    ->count();
-
-                $unprocessed_republish_error_count = $unprocessedJob->submissions()
-                    ->where('origin_state', 'published')
-                    ->whereNotNull('submission_errors')
-                    ->count();
-
-                $unprocessed_unpublish_error_count = $unprocessedJob->submissions()
-                    ->where('origin_state', 'unpublished')
-                    ->whereNotNull('submission_errors')
-                    ->count();
+            // Error counts (only relevant for draft jobs)
+            if ($includeErrors) {
+                $unprocessed_error_count = $statusCounts['errors'];
+                $unprocessed_new_error_count = $statusCounts['new_errors'];
+                $unprocessed_republish_error_count = $statusCounts['republish_errors'];
+                $unprocessed_unpublish_error_count = $statusCounts['unpublish_errors'];
             }
         }
 
@@ -277,6 +297,76 @@ class DashboardController extends Controller
                 $submitter_curie = $submitter->curie;
             }
         }
+
+        // Versioning statistics - unique SGC IDs by their publication state
+        $versioningQuery = Submission::query();
+        if ($submitter_id !== null) {
+            $versioningQuery->where('submitter_id', $submitter_id);
+        }
+
+        // Total unique SGC IDs (distinct sid values)
+        $total_unique_sids = (clone $versioningQuery)->distinct('sid')->count('sid');
+
+        // PROCESSED COLUMN:
+        // Count unique SGC IDs that are currently published OR have a pending unpublish
+        // (draft_unpublish/submitted_unpublish are still publicly visible until processed)
+        $published_sids_count = (clone $versioningQuery)
+            ->whereIn('status', [
+                Submission::STATUS_PUBLISHED,
+                Submission::STATUS_DRAFT_UNPUBLISH,
+                Submission::STATUS_SUBMITTED_UNPUBLISH,
+            ])
+            ->distinct('sid')
+            ->count('sid');
+
+        // Count unique SGC IDs that are fully unpublished (status = unpublished only)
+        // These are SGC IDs where the unpublish has been processed
+        $unpublished_sids_count = (clone $versioningQuery)
+            ->where('status', Submission::STATUS_UNPUBLISHED)
+            ->distinct('sid')
+            ->count('sid');
+
+        // UNPROCESSED COLUMN:
+        // Count unique SGC IDs that are new (never been published - only draft_new or submitted_new status exists)
+        $new_sids_count = (clone $versioningQuery)
+            ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+            ->whereNotExists(function ($query) use ($submitter_id) {
+                $query->select(\DB::raw(1))
+                    ->from('submissions as s2')
+                    ->whereColumn('s2.sid', 'submissions.sid')
+                    ->whereIn('s2.status', [
+                        Submission::STATUS_PUBLISHED,
+                        Submission::STATUS_UNPUBLISHED,
+                        Submission::STATUS_DRAFT_REPUBLISH,
+                        Submission::STATUS_SUBMITTED_REPUBLISH,
+                        Submission::STATUS_DRAFT_UNPUBLISH,
+                        Submission::STATUS_SUBMITTED_UNPUBLISH,
+                    ]);
+                if ($submitter_id !== null) {
+                    $query->where('s2.submitter_id', $submitter_id);
+                }
+            })
+            ->distinct('sid')
+            ->count('sid');
+
+        // Count unique SGC IDs with pending republish (draft_republish, submitted_republish)
+        $pending_republish_sids_count = (clone $versioningQuery)
+            ->whereIn('status', [
+                Submission::STATUS_DRAFT_REPUBLISH,
+                Submission::STATUS_SUBMITTED_REPUBLISH,
+            ])
+            ->distinct('sid')
+            ->count('sid');
+
+        // Count unique SGC IDs with pending unpublish (draft_unpublish, submitted_unpublish)
+        // Note: These are also counted in published_sids_count since they're still publicly visible
+        $pending_unpublish_sids_count = (clone $versioningQuery)
+            ->whereIn('status', [
+                Submission::STATUS_DRAFT_UNPUBLISH,
+                Submission::STATUS_SUBMITTED_UNPUBLISH,
+            ])
+            ->distinct('sid')
+            ->count('sid');
 
         // Calculate classification distribution from processed jobs
         // This counts classifications from the last published version of each SGC ID
@@ -404,7 +494,13 @@ class DashboardController extends Controller
             'classifications' => $classifications,
             'submissions_new' => $submissions_new,
             'submissions_republished' => $submissions_republished,
-            'submissions_unpublished_chart' => $submissions_unpublished_chart
+            'submissions_unpublished_chart' => $submissions_unpublished_chart,
+            'total_unique_sids' => $total_unique_sids,
+            'published_sids_count' => $published_sids_count,
+            'unpublished_sids_count' => $unpublished_sids_count,
+            'new_sids_count' => $new_sids_count,
+            'pending_republish_sids_count' => $pending_republish_sids_count,
+            'pending_unpublish_sids_count' => $pending_unpublish_sids_count
         ]);
     }
 
