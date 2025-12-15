@@ -1240,7 +1240,7 @@ table tbody tr:hover {
                         <InputText v-model="filterModel.value" type="text" @input="filterCallback()" class="p-column-filter" placeholder="Search by name" />
                      </template>-->
                      <template #body="{ data }">
-                        <div class="font-medium">{{ data.sid }}</div>
+                        <div class="font-medium">{{ data.display_id || data.sid }}</div>
                     </template>
                 </Column>
                 <Column field="gene.symbol" header="Gene" sortable>

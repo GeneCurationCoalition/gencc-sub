@@ -7,6 +7,7 @@
 	"data":  {
 				"type": "Submission",
 				"submission_id": "{{ $submission->sid }}",
+				"version_number": {{ $submission->version_number ?? 1 }},
 				"submission_label": "{{ $submission->friendly }}",
 				"local_key": "{{ $submission->local_key }}",
 				"submitted": "{{ $submission->submission_date }}",

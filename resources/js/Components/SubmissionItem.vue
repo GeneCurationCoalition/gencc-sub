@@ -1014,7 +1014,7 @@ console.log(props.submission)
                         <div class="col-span-2 pt-3 text-right pr-3">Submission ID:</div>
                         <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
                             <div class="font-normal font-bold flex items-center gap-2">
-                                {{ submission.sid }}
+                                {{ submission.display_id || submission.sid }}
                                 <i v-if="submission.submission_errors && Object.keys(submission.submission_errors).length > 0"
                                    class="pi pi-exclamation-triangle text-red-500 text-xl"
                                    title="Submission has errors"></i>

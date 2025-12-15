@@ -91,6 +91,9 @@ class ImportGencc extends Command
             {
                 try {
 
+                    // Get SGC ID and version number from separate columns
+                    $uuid = $row['sgc_id'];
+                    $versionNumber = (int) ($row['version_number'] ?? 1);
 
                     $gene = Gene::hgnc_id($row['gene_curie'])->first();
                     if (!$gene) {
@@ -131,12 +134,12 @@ class ImportGencc extends Command
 
                     // Validate and fix dates (handle typos like 3016 -> 2016)
                     // Use submitted_run_date as fallback for invalid report_date
-                    $publish_date = $this->validate_and_fix_date($row['submitted_run_date'], $row['uuid']);
-                    $report_date = $this->validate_and_fix_date($row['submitted_as_date'], $row['uuid'], $publish_date);
+                    $publish_date = $this->validate_and_fix_date($row['submitted_run_date'], $uuid);
+                    $report_date = $this->validate_and_fix_date($row['submitted_as_date'], $uuid, $publish_date);
 
                     $submission = new Submission([
                         'type' => Submission::TYPE_GENCC_IMPORT,
-                        'friendly' => $row['uuid'],
+                        'friendly' => $uuid,
                         'local_key' => $row['submitted_as_submission_id'],
                         'job_id' => $job->id,
                         'user_id' => $coordinator->id ?? 1,
@@ -194,7 +197,7 @@ class ImportGencc extends Command
                     $submission->submission_data = [
                         "moi" => ["id" => $row['moi_curie'], "name" => $row['moi_title']],
                         "submission_id" => '',
-                        "submission_label" => $row['uuid'],
+                        "submission_label" => $uuid,
                         "local_key" => $row['submitted_as_submission_id'],
                         "gene" => ["id" => $row['gene_curie'], "symbol" => $row['gene_symbol']],
                         "type" => "Reserved",
@@ -266,7 +269,7 @@ class ImportGencc extends Command
                     }
                 }
                 catch (\Exception $e) {
-                    $this->error("Error processing spreadsheet row with UUID: {$row['uuid']}");
+                    $this->error("Error processing spreadsheet row with SGC ID: {$row['sgc_id']}");
                     $this->error($e);
                 }
             }

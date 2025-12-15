@@ -700,34 +700,70 @@ class SubmissionController extends Controller
 
     /**
      * Cancel a submission (V2 state transitions)
-     * Transitions draft_republish back to published/unpublished or draft_unpublish back to published
+     *
+     * NEW VERSIONING APPROACH:
+     * For draft_republish: Simply DELETE the draft version record.
+     *                      The original published version remains unchanged.
+     * For draft_unpublish: Transition back to published (no deletion needed,
+     *                      unpublish doesn't create a new version).
      */
     public function cancel(Request $request, string $id)
     {
+        // For versioned submissions, we need to find the draft version
+        // The $id is the SID which may have multiple versions
         $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                        ->where('sid', $id)->first();
+                        ->where('sid', $id)
+                        ->whereIn('status', [
+                            Submission::STATUS_DRAFT_REPUBLISH,
+                            Submission::STATUS_DRAFT_UNPUBLISH
+                        ])
+                        ->first();
 
         if ($submission === null)
                 return response()->json(['success' => 'false',
                     'status_code' => 3002,
-                    'message' => 'Unauthorized'],
+                    'message' => 'No draft submission found to cancel'],
                     200);
 
         try {
-            // Use state machine to cancel
-            SubmissionStateMachine::cancel($submission);
-            $submission->save();
+            $status = $submission->status;
+            $versionNumber = $submission->version_number ?? 1;
 
-            // Reload to get job relationship
-            $submission->load('job');
+            if ($status === Submission::STATUS_DRAFT_REPUBLISH) {
+                // NEW VERSIONING: Simply delete the draft version
+                // The original published version remains unchanged
+                Log::info("Cancelling draft_republish: Deleting version {$versionNumber} of {$id}");
 
-            return response()->json(['success' => 'true',
-                    'status_code' => 200,
-                    'message' => 'Submission Cancelled',
-                    'status' => $submission->status,
-                    'job_ident' => $submission->job->ident ?? null],
-                    200);
+                // Get the job before deleting
+                $jobIdent = $submission->job->ident ?? null;
+
+                // Delete the draft version (soft delete)
+                $submission->delete();
+
+                return response()->json(['success' => 'true',
+                        'status_code' => 200,
+                        'message' => "Draft version {$versionNumber} cancelled and removed",
+                        'status' => 'deleted',
+                        'job_ident' => $jobIdent],
+                        200);
+
+            } else {
+                // draft_unpublish: Use state machine (unpublish doesn't create new versions)
+                SubmissionStateMachine::cancel($submission);
+                $submission->save();
+
+                // Reload to get job relationship
+                $submission->load('job');
+
+                return response()->json(['success' => 'true',
+                        'status_code' => 200,
+                        'message' => 'Unpublish cancelled',
+                        'status' => $submission->status,
+                        'job_ident' => $submission->job->ident ?? null],
+                        200);
+            }
         } catch (\Exception $e) {
+            Log::error("Cancel failed for {$id}: " . $e->getMessage());
             return response()->json(['success' => 'false',
                     'status_code' => 3008,
                     'message' => 'Cannot cancel: ' . $e->getMessage()],
@@ -738,17 +774,35 @@ class SubmissionController extends Controller
 
     /**
      * Initiate republish workflow for a published submission
-     * Transitions published → draft_republish and moves to draft job
+     *
+     * NEW VERSIONING APPROACH:
+     * Instead of transitioning the existing submission, we now:
+     * 1. Keep the original published submission unchanged
+     * 2. Create a NEW submission record with version_number + 1
+     * 3. The new record has status = draft_republish
+     *
+     * This preserves the complete version history.
      */
     public function republish(Request $request, string $id)
     {
-        $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                        ->where('sid', $id)->first();
+        // Find the current published submission by SID
+        $originalSubmission = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                        ->where('sid', $id)
+                        ->where('status', Submission::STATUS_PUBLISHED)
+                        ->first();
 
-        if ($submission === null)
+        if ($originalSubmission === null) {
+            // Also check for unpublished submissions that can be republished
+            $originalSubmission = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                        ->where('sid', $id)
+                        ->where('status', Submission::STATUS_UNPUBLISHED)
+                        ->first();
+        }
+
+        if ($originalSubmission === null)
                 return response()->json(['success' => 'false',
                     'status_code' => 3002,
-                    'message' => 'Unauthorized'],
+                    'message' => 'Submission not found or not in a publishable state'],
                     200);
 
         try {
@@ -766,8 +820,20 @@ class SubmissionController extends Controller
                     200);
             }
 
+            // Check if there's already a draft version for this SID
+            $existingDraft = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                ->where('sid', $id)
+                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->first();
+
+            if ($existingDraft) {
+                return response()->json(['success' => 'false',
+                    'status_code' => 3012,
+                    'message' => 'A draft version already exists for this submission'],
+                    200);
+            }
+
             // Find or create a draft job for this submitter
-            // Look for the most recent draft job
             $job = Job::where('submitter_id', $effectiveSubmitterId)
                 ->where('status', Job::STATUS_DRAFT)
                 ->orderBy('id', 'desc')
@@ -787,26 +853,40 @@ class SubmissionController extends Controller
                 Log::info("Using existing draft job {$job->slug} for republishing submission {$id}");
             }
 
-            // Use state machine to transition to draft_republish
-            // This will automatically store origin_job_id and origin_state
-            SubmissionStateMachine::transition(
-                $submission,
-                Submission::STATUS_DRAFT_REPUBLISH,
-                $submission->status  // Store origin state
-            );
+            // Calculate the next version number
+            $maxVersion = Submission::where('sid', $id)->max('version_number') ?? 1;
+            $newVersionNumber = $maxVersion + 1;
 
-            // Move submission to the draft job
-            $submission->job_id = $job->id;
-            $submission->save();
+            // Create a NEW submission record as a copy of the original
+            // This preserves the original submission unchanged
+            // Exclude 'ident' from replication - it must be unique and will be auto-generated
+            $newSubmission = $originalSubmission->replicate(['ident']);
+            $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString(); // Generate new unique ident
+            $newSubmission->version_number = $newVersionNumber;
+            $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
+            $newSubmission->job_id = $job->id;
+            $newSubmission->origin_job_id = $originalSubmission->job_id; // Reference to original job
+            $newSubmission->origin_state = $originalSubmission->status; // Remember what state we came from
+            $newSubmission->origin_snapshot = null; // No longer needed - original submission is preserved
+            $newSubmission->published_at = null; // New version not yet published
+            $newSubmission->save();
+
+            // Copy pubmed associations
+            $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
+            $newSubmission->pubmeds()->sync($pubmedIds);
+
+            Log::info("Created new version {$newVersionNumber} of submission {$id} (new id: {$newSubmission->id})");
 
             return response()->json(['success' => 'true',
                     'status_code' => 200,
-                    'message' => 'Submission moved to draft for republishing',
-                    'status' => $submission->status,
+                    'message' => "Created new version {$newVersionNumber} for republishing",
+                    'status' => $newSubmission->status,
+                    'version_number' => $newVersionNumber,
                     'job' => $job->slug,
-                    'submission_ident' => $submission->ident],
+                    'submission_ident' => $newSubmission->ident],
                     200);
         } catch (\Exception $e) {
+            Log::error("Republish failed for {$id}: " . $e->getMessage());
             return response()->json(['success' => 'false',
                     'status_code' => 3009,
                     'message' => 'Cannot republish: ' . $e->getMessage()],

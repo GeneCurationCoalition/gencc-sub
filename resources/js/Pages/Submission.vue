@@ -43,7 +43,7 @@
                 </div>
                 <div class="text-left col-span-6">
                     <p class="font-black px-2 ml-3 text-xl inline-block align-center leading-4">
-                        {{ submission.sid }}<br>
+                        {{ submission.display_id || submission.sid }}<br>
                     </p>
                 </div>
                 <div class="text-right text-base col-span-2">

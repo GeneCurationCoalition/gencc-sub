@@ -49,7 +49,8 @@ class Submission extends Model
         'history' => 'array',
         'tags' => 'array',
         'published_at' => 'datetime',
-        'origin_snapshot' => 'array'
+        'origin_snapshot' => 'array',
+        'version_number' => 'integer'
     ];
 
     /**
@@ -59,7 +60,7 @@ class Submission extends Model
      */
 	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
-                            'uuid', 'sid', 'job_id', 'user_id', 'evidence', 'original_submission_data',
+                            'uuid', 'sid', 'version_number', 'job_id', 'user_id', 'evidence', 'original_submission_data',
                             'submission_date', 'submission_data', 'submission_errors', 'history', 'tags',
                             'status', 'origin_state', 'origin_job_id', 'local_key', 'last_edited_by',
                             'document_id'];
@@ -69,7 +70,7 @@ class Submission extends Model
      *
      * @var array
      */
-    protected $appends = ['last_edited_by_admin'];
+    protected $appends = ['last_edited_by_admin', 'display_id'];
 
     /**
      * String-based status constants for submission workflow
@@ -510,6 +511,40 @@ class Submission extends Model
 
         // submission_errors is cast as object, check if it has any properties
         return count((array) $this->submission_errors) > 0;
+    }
+
+    /**
+     * Get the display ID (SGC ID with version number).
+     * Format: SGC-XXXXXX.N (e.g., SGC-100001.2)
+     *
+     * @return string
+     */
+    public function getDisplayIdAttribute(): string
+    {
+        return $this->sid . '.' . ($this->version_number ?? 1);
+    }
+
+    /**
+     * Scope to get all versions of a specific SGC ID.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @param string $sid The SGC ID (sid)
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeAllVersions($query, string $sid)
+    {
+        return $query->where('sid', '=', $sid)->orderBy('version_number', 'desc');
+    }
+
+    /**
+     * Scope to get only the current (latest published) version of submissions.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeCurrentVersion($query)
+    {
+        return $query->where('status', '=', self::STATUS_PUBLISHED);
     }
 
     /**

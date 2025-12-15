@@ -212,6 +212,7 @@ class PublishController extends Controller
                 // Track this submission as successfully processed with its action type and classification
                 $successfulSubmissions[] = [
                     'sid' => $submission->sid,
+                    'display_id' => $submission->display_id,
                     'action' => $action,
                     'classification_id' => $submission->classification_id
                 ];
@@ -254,6 +255,7 @@ class PublishController extends Controller
         foreach ($failedSubmissions as $failure) {
             $allSubmittedEntries[] = [
                 'sid' => $failure['submission']->sid,
+                'display_id' => $failure['submission']->display_id,
                 'action' => 'error'
             ];
         }

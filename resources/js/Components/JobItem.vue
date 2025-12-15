@@ -40,7 +40,8 @@ const groupedProcessedSubmissions = computed(() => {
 
     props.job.processed_submission_ids.forEach(item => {
         if (groups[item.action]) {
-            groups[item.action].push(item.sid);
+            // Use display_id (SGC-XXXXXX.N) if available, fallback to sid for legacy data
+            groups[item.action].push(item.display_id || item.sid);
         }
     });
 
