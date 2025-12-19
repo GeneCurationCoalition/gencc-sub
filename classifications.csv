@@ -1,0 +1,9 @@
+1,GENCC_100001,GENCC:100001,Definitive,Definitive classification,null,DEF.,#12345,gencc-definitive,definitive,curations_definitive,10,1,null,null
+3,GENCC_100002,GENCC:100002,Strong,Strong classification,null,STR.,#12345,gencc-strong,strong,curations_strong,20,1,null,null
+4,GENCC_100003,GENCC:100003,Moderate,Moderate classification,null,MOD.,#12345,gencc-moderate,moderate,curations_moderate,30,1,null,null
+5,GENCC_100009,GENCC:100009,Supportive,Supportive,null,SUP.,#12345,gencc-supportive,supportive,curations_supportive,40,1,null,null
+6,GENCC_100004,GENCC:100004,Limited,Limited classification,null,LMT.,#12345,gencc-limited,limited,curations_limited,50,1,null,null
+7,GENCC_100005,GENCC:100005,Disputed Evidence,Disputed evidence classification,null,DE.,#12345,gencc-disputed,disputed,curations_disputed,60,1,null,null
+8,GENCC_100006,GENCC:100006,Refuted Evidence,Refuted evidence classification,null,DE.,#12345,gencc-refute,refuted,curations_refuted,70,1,null,null
+9,GENCC_100007,GENCC:100007,Animal Model Only,Animal model only classification,null,AMO.,#12345,gencc-animalmodelonly,animal-model-only,curations_animal,80,1,null,null
+10,GENCC_100008,GENCC:100008,No Known Disease Relationship,No known disease relationship classification,null,NKD,#12345,gencc-noknown,no-known,curations_noknown,90,1,null,null

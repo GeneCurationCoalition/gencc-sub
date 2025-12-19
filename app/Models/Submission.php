@@ -1,0 +1,1017 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
+
+use Carbon\Carbon;
+
+use App\Jobs\ProcessPubmed;
+
+use Auth;
+
+/**
+ *
+ * @category   Model
+ * @package    GenCC
+ * @author     P. Weller <pweller1@geisinger.edu>
+ * @copyright  2024 Geisinger
+ * @license    http://www.php.net/license/3_01.txt  PHP License 3.01
+ * @version    Release: @package_version@
+ * @link       http://pear.php.net/package/PackageName
+ * @see        NetOther, Net_Sample::Net_Sample()
+ * @since      Class available since Release 1.0.0
+ *
+ * The submissions table is the primary repository of all submission data for GenCC.  It includes 
+ * joins to the submitting user, to the submitting organization, and to various tables for gene, disease, moi,
+ * and mod.
+ * 
+ * */
+class Submission extends Model
+{
+    use HasFactory;
+    use SoftDeletes;
+
+
+    /**
+     * The attributes that should be cast to native types.
+     *
+     * @var array
+     */
+    protected $casts = [
+        'submission_data' => 'object',
+        'original_submission_data' => 'object',
+        'submission_errors' => 'object',
+        'evidence' => 'object',
+        'history' => 'array',
+        'tags' => 'array',
+        'published_at' => 'datetime',
+        'origin_snapshot' => 'array'
+    ];
+
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array
+     */
+	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
+                            'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
+                            'uuid', 'sid', 'job_id', 'user_id', 'evidence', 'original_submission_data',
+                            'submission_date', 'submission_data', 'submission_errors', 'history', 'tags',
+                            'status', 'origin_state', 'origin_job_id', 'local_key', 'last_edited_by',
+                            'document_id'];
+
+	/**
+     * Non-persistent storage model attributes.
+     *
+     * @var array
+     */
+    protected $appends = ['last_edited_by_admin'];
+
+    /**
+     * String-based status constants for submission workflow
+     */
+    public const STATUS_DRAFT_NEW = 'draft_new';
+    public const STATUS_SUBMITTED_NEW = 'submitted_new';
+    public const STATUS_PUBLISHED = 'published';
+    public const STATUS_DRAFT_REPUBLISH = 'draft_republish';
+    public const STATUS_SUBMITTED_REPUBLISH = 'submitted_republish';
+    public const STATUS_DRAFT_UNPUBLISH = 'draft_unpublish';
+    public const STATUS_SUBMITTED_UNPUBLISH = 'submitted_unpublish';
+    public const STATUS_UNPUBLISHED = 'unpublished';
+
+    /**
+     * @deprecated Legacy integer status constants - only kept for migration commands.
+     * Use string STATUS_* constants above. Will be removed after all migrations complete.
+     */
+    public const LEGACY_STATUS_INITIALIZING = 0;
+    public const LEGACY_STATUS_NEW = 1;
+    public const LEGACY_STATUS_PROCESSING = 3;
+    public const LEGACY_STATUS_ERRORS = 4;
+    public const LEGACY_STATUS_REMOVED = 9;
+    public const LEGACY_STATUS_PUBLISHED = 20;
+
+    /*
+     * Status strings for display methods (string-based status)
+     *
+     * @var array
+     * */
+    protected $status_strings = [
+        'draft_new' => 'Draft (New)',
+        'submitted_new' => 'Submitted (New)',
+        'published' => 'Published',
+        'draft_republish' => 'Draft (Republish)',
+        'submitted_republish' => 'Submitted (Republish)',
+        'draft_unpublish' => 'Draft (Unpublish)',
+        'submitted_unpublish' => 'Submitted (Unpublish)',
+        'unpublished' => 'Unpublished'
+    ];
+
+    public const TYPE_NONE = 0;
+    public const TYPE_API_SUBMISSION = 1;
+    public const TYPE_FILE_SUBMISSION = 2;
+    public const TYPE_PORTAL_SUBMISSION = 3;
+    public const TYPE_OMIM_SUBMISSION = 4;
+    public const TYPE_GENCC_IMPORT = 7;
+
+
+    /**
+     * A map of json to model fields, so we can maintain
+     * fexibility in the json schema without having to make
+     * model changes
+     * 
+     */
+    /*protected $json_map = [
+        'type' => 'type',
+        'sid' => 'sid',
+        'uuid' => 'uuid',
+        'gene' => 'gene',
+        'disease' => 'disease',
+        'moi' => 'moi',
+        'workflow' => 'workflow',
+        'report' => 'report',
+        'classification' => 'classification',
+        'criteria' => 'criteria',
+        'evidence' => 'evidence',
+        'lumpspit' => 'lumpspit',
+        'notes' => 'notes',
+        'version' => 'version',
+        'submitted_by' => 'submitted_by',
+        'contributors' => 'contributors',
+        'meta' => 'meta',
+        'anciliary' => 'anciliary'
+    ];*/
+
+    /**
+     * Maintain a temporary errors bag for the model so that custom bulk load methods
+     * can keep track of problems
+     */
+    protected $errors_bag = [];
+
+
+    /**
+     * To guarantee uniqueness of generated submission ids (sids), we base them off the
+     * tables id field.  This means a quick update after a record is newly
+     * created.  Since the record is still cached, the update is immediate.
+     *
+     */
+    public static function booted(): void
+    {
+        static::created(function (Model $model) {
+            if ($model->sid === null || $model->sid == '') {
+                // Update sid without triggering timestamp updates to preserve historical dates during imports
+                // Use a direct DB update to avoid any issues with model save() overwriting other attributes
+                // (e.g., document_id was being lost when $model->save() was called here)
+                \DB::table('submissions')
+                    ->where('id', $model->id)
+                    ->update(['sid' => 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT)]);
+
+                // Update the model in memory to reflect the change
+                $model->sid = 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT);
+                $model->syncOriginal(); // Reset dirty tracking to match DB state
+            }
+        });
+
+        // Set published_at when submission status changes to PUBLISHED (for non-import workflows)
+        // Only set if:
+        // - status is changing to PUBLISHED
+        // - published_at is not already set
+        // - we're not just updating published_at (backfill scenario)
+        static::updating(function (Model $model) {
+            $dirty = $model->getDirty();
+
+            // Skip if we're updating published_at (backfill scenario)
+            if ($model->isDirty('published_at')) {
+                \Log::info("Skipping published_at auto-set for submission {$model->id} - published_at is dirty (backfill)");
+                return;
+            }
+
+            if ($model->isDirty('status') &&
+                $model->status == self::STATUS_PUBLISHED &&
+                $model->published_at === null) {
+                \Log::info("Setting published_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
+                $model->published_at = Carbon::now();
+            }
+        });
+    }
+
+	/**
+     * Automatically assign an ident on instantiation
+     *
+     * @param	array	$attributes
+     * @return 	void
+     */
+    public function __construct(array $attributes = array())
+    {
+        $this->attributes['ident'] = Str::uuid()->toString();
+        parent::__construct($attributes);
+    }
+
+
+    /**
+     * Get the user associated with this submission
+     */
+    public function user()
+    {
+       return $this->belongsTo('App\Models\User');
+    }
+
+
+    /**
+     * Get the user who last edited this submission
+     */
+    public function lastEditedByUser()
+    {
+       return $this->belongsTo('App\Models\User', 'last_edited_by');
+    }
+
+
+    /**
+     * Get the job associated with this submission
+     */
+    public function job()
+    {
+       return $this->belongsTo('App\Models\Job');
+    }
+
+
+    /**
+     * Get the origin job this submission can be restored to (V2 state model)
+     */
+    public function originJob()
+    {
+       return $this->belongsTo('App\Models\Job', 'origin_job_id');
+    }
+
+
+    /**
+     * Get the gene associated with this submission
+     */
+    public function gene()
+    {
+       return $this->belongsTo('App\Models\Gene');
+    }
+
+
+    /**
+     * Get the disease associated with this submission (normalized to MONDO)
+     */
+    public function disease()
+    {
+       return $this->belongsTo('App\Models\Disease');
+    }
+
+
+    /**
+     * Get the original disease that was uploaded/entered (could be MONDO, OMIM, or Orphanet)
+     */
+    public function originalDisease()
+    {
+       return $this->belongsTo('App\Models\Disease', 'original_disease_id');
+    }
+
+
+    /**
+     * Get the classification associated with this submission
+     */
+    public function classification()
+    {
+       return $this->belongsTo('App\Models\Classification');
+    }
+
+
+    /**
+     * Get the gene moi with this submission
+     */
+    public function inheritance()
+    {
+       return $this->belongsTo('App\Models\Inheritance');
+    }
+
+
+    /**
+     * Get the mechanism of disease with this submission
+     */
+    public function mechanism()
+    {
+       return $this->belongsTo('App\Models\Mechanism');
+    }
+
+
+    /**
+     * Get the submitter associated with this submission
+     */
+    public function submitter()
+    {
+       return $this->belongsTo('App\Models\Submitter');
+    }
+
+
+    /**
+     * Query all pubmed articles referenced by this submission
+     * 
+     */
+    public function pubmeds()
+    {
+        return $this->belongsToMany('App\Models\Pubmed');
+    }
+
+
+    /**
+     * Query scope by ident
+     *
+     * @param	string	$ident
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeIdent($query, $ident)
+    {
+		return $query->where('ident', $ident);
+    }
+
+
+    /**
+     * Query scope by status of published
+     *
+     * @@param
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopePublished($query)
+    {
+		return $query->where('status', self::STATUS_PUBLISHED);
+    }
+
+
+    /**
+     * Query scope by sid
+     *
+     * @param	string	$sid
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeSid($query, $sid)
+    {
+		return $query->where('sid', $sid);
+    }
+
+
+    /**
+     * Query scope by errors
+     *
+     * @param
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeErrors($query)
+    {
+		return $query->whereNotNull('submission_errors');
+    }
+
+
+    /**
+     * Query scope for draft states
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeDraftStates($query)
+    {
+		return $query->whereIn('status', [
+            self::STATUS_DRAFT_NEW,
+            self::STATUS_DRAFT_REPUBLISH,
+            self::STATUS_DRAFT_UNPUBLISH
+        ]);
+    }
+
+
+    /**
+     * Query scope for submitted states
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeSubmittedStates($query)
+    {
+		return $query->whereIn('status', [
+            self::STATUS_SUBMITTED_NEW,
+            self::STATUS_SUBMITTED_REPUBLISH,
+            self::STATUS_SUBMITTED_UNPUBLISH
+        ]);
+    }
+
+
+    /**
+     * Query scope for unpublished status
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeUnpublished($query)
+    {
+		return $query->where('status', self::STATUS_UNPUBLISHED);
+    }
+
+
+    /**
+     * Query scope by specific status
+     *
+     * @param string $status
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeByStatus($query, $status)
+    {
+		return $query->where('status', $status);
+    }
+
+
+    /**
+     * Query scope for listing/export views
+     *
+     * Includes all fields and relationships needed for the submissions listing
+     * and CSV export functionality. Use this scope to ensure consistency between
+     * JobController and SubmissionController queries.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+	public function scopeForListing($query)
+    {
+		return $query->select('id', 'gene_id', 'user_id', 'disease_id', 'original_disease_id', 'inheritance_id',
+                              'classification_id', 'submitter_id', 'job_id', 'origin_job_id', 'ident', 'sid',
+                              'local_key', 'friendly', 'submission_date', 'publish_date',
+                              // Include submission_data for display of "Submitted as" labels
+                              // Removed: 'original_submission_data', 'evidence' - too large for listing
+                              'submission_data', 'submission_errors', 'status', 'origin_state')
+                     ->with('gene:id,hgnc_id,symbol')
+                     ->with('disease:id,curie,name,deprecated_name,status')
+                     ->with('originalDisease:id,curie,name,deprecated_name,status')
+                     ->with('inheritance:id,curie,name')
+                     ->with('classification:id,curie,name')
+                     ->with('submitter:id,curie,name')
+                     ->with('job:id,status')
+                     ->with('originJob:id,slug');
+    }
+
+
+    /**
+     * Get a display formatted form of job status
+     *
+     * @@param
+     * @return
+     */
+    public function getDisplayStatusAttribute()
+    {
+       return $this->status_strings[$this->status] ?? 'Unknown';
+    }
+
+
+    /**
+     * Get a display formatted form of submission status
+     *
+     * @@param
+     * @return
+     */
+    public function getJsonDisplayStatusAttribute()
+    {
+       return $this->json_status_strings[$this->status] ?? 'Unknown';
+    }
+
+
+    /**
+     * Check if the last editor is a member of the admin team
+     *
+     * @return bool
+     */
+    public function getLastEditedByAdminAttribute()
+    {
+        if (!$this->last_edited_by || !$this->relationLoaded('lastEditedByUser')) {
+            return false;
+        }
+
+        $lastEditor = $this->lastEditedByUser;
+        if (!$lastEditor || !$lastEditor->relationLoaded('teams')) {
+            return false;
+        }
+
+        return $lastEditor->teams()
+            ->where('teams.name', 'admin')
+            ->where('teams.personal_team', false)
+            ->exists();
+    }
+
+    /**
+     * Check if the submission has validation errors.
+     * This replaces the legacy STATUS_ERRORS check.
+     *
+     * @return bool
+     */
+    public function getHasErrorsAttribute(): bool
+    {
+        if ($this->submission_errors === null) {
+            return false;
+        }
+
+        // submission_errors is cast as object, check if it has any properties
+        return count((array) $this->submission_errors) > 0;
+    }
+
+    /**
+     * Scope to query submissions with errors.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeWithErrors($query)
+    {
+        return $query->whereNotNull('submission_errors')
+            ->whereRaw("JSON_LENGTH(submission_errors) > 0");
+    }
+
+    /**
+     * Scope to query submissions without errors.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeWithoutErrors($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('submission_errors')
+              ->orWhereRaw("JSON_LENGTH(submission_errors) = 0");
+        });
+    }
+
+    /**
+     * Add an event to the history
+     *
+     * @@param string $event
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function addEvent($event)
+    {
+        if ($this->history === null)
+            $this->history = [];
+        
+        $history = $this->history;
+		$history[] = ['user_id' => Auth::user()->id, 'date' => Carbon::now(), 'event' => $event];
+        $this->history = $history;
+    }
+
+
+    /**
+     * Load the model from a json object.  This is used when processing api submissions.  Since
+     * a job may contain multiple submissions, each submission creates/modifies a record and 
+     * calls this method to update.
+     * 
+     * @params object $obj
+     * @return boolean if no errors, array errorsbag if errors
+     */
+    public function load_from_json($obj, $lookupCaches = null)
+    {
+        // clear the errors
+        $this->errors_bag = [];
+
+        /**
+         * Assert the gene lookup by HGNC ID.  If invalid, add to the errors_bag
+         */
+        if (isset($lookupCaches['genes']) && isset($obj->gene->id)) {
+            // Use cache lookup for performance
+            $gene = $lookupCaches['genes']->get($obj->gene->id);
+        } else {
+            // Fallback to database query
+            $gene = isset($obj->gene->id) ? Gene::hgnc_id($obj->gene->id)->first() : null;
+        }
+        $this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id', 'Invalid HGNC ID');
+        if ($this->gene_id === null)
+            $this->gene_id = $lookupCaches['defaults']['gene_id'] ?? Gene::symbol('-')->first()->id;
+
+        /**
+         * Assert the disease lookup by ID.  If invalid, add to the errors_bag
+         * Logic:
+         * 1. Find the exact disease record for the uploaded CURIE (original_disease_id)
+         * 2. Find the MONDO mapping for normalization (disease_id)
+         * 3. If MONDO uploaded: both fields point to same record
+         * 4. If OMIM/Orphanet uploaded: original_disease_id = OMIM/Orphanet, disease_id = mapped MONDO
+         * 5. If no MONDO mapping exists, validation error
+         */
+        $uploadedDiseaseId = $obj->disease->id ?? null;
+        $originalDisease = null;
+        $mondoDisease = null;
+
+        if ($uploadedDiseaseId) {
+            // Step 1: Find the exact disease record that was uploaded
+            if (isset($lookupCaches['diseases'])) {
+                $originalDisease = $lookupCaches['diseases']->get($uploadedDiseaseId);
+            } else {
+                // Direct lookup by curie for exact match
+                $originalDisease = Disease::curie($uploadedDiseaseId)->first();
+            }
+
+            // Step 2: Find the MONDO mapping (normalized disease)
+            if (isset($lookupCaches['mondo_mappings'])) {
+                // Use MONDO mapping cache
+                $mondoDisease = $lookupCaches['mondo_mappings']->get($uploadedDiseaseId);
+            } else {
+                // Fallback: Use rosetta method which handles MONDO normalization
+                $mondoDisease = Disease::rosetta($uploadedDiseaseId);
+            }
+        }
+
+        // Set original_disease_id (the exact disease record for uploaded CURIE)
+        $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
+        if ($this->original_disease_id === null)
+            $this->original_disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
+
+        // Set disease_id (normalized to MONDO)
+        $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID - no MONDO mapping found');
+        if ($this->disease_id === null)
+            $this->disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
+
+        // Note: Deprecated diseases are allowed in submissions
+        // The UI shows a warning symbol (⚠) to indicate deprecated status
+
+        /**
+         * Assert the inheritance lookup by ID.  If invalid, add to the errors_bag
+         */
+        if (isset($lookupCaches['moi']) && isset($obj->moi->id)) {
+            // Use cache lookup for performance
+            $moi = $lookupCaches['moi']->get($obj->moi->id);
+        } else {
+            // Fallback to database query
+            $moi = isset($obj->moi->id) ? Inheritance::curie($obj->moi->id)->first() : null;
+        }
+        $this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id', 'Invalid MOI ID');
+        if ($this->inheritance_id === null)
+            $this->inheritance_id = $lookupCaches['defaults']['moi_id'] ?? Inheritance::curie('HP:0000005')->first()->id;
+
+        /**
+         * Assert the classification lookup by ID.  If invalid, add to the errors_bag
+         */
+        if (isset($lookupCaches['classifications']) && isset($obj->classification->id)) {
+            // Use cache lookup for performance
+            $classification = $lookupCaches['classifications']->get($obj->classification->id);
+        } else {
+            // Fallback to database query
+            $classification = isset($obj->classification->id) ? Classification::curie($obj->classification->id)->first() : null;
+        }
+        $this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id', 'Invalid Classification ID');
+        // classification_id can remain null if invalid - file validation prevents invalid data from being imported
+
+        /**
+         * Assert the mechanism lookup by ID.  If invalid, add to the errors_bag
+         */
+        if (isset($lookupCaches['mechanisms']) && !empty($obj->mechanism->id)) {
+            // Use cache lookup for performance
+            $mechanism = $lookupCaches['mechanisms']->get($obj->mechanism->id);
+        } else {
+            // Fallback to database query
+            $mechanism = !empty($obj->mechanism->id) ? Mechanism::curie($obj->mechanism->id)->first() : null;
+        }
+        //$this->mechanism_id = $this->asserterrors($mechanism->id ?? null, 'mechanism_of_disease', 'Invalid Mechanism ID');
+
+        $this->type = self::TYPE_API_SUBMISSION;
+
+        $this->local_key = $obj->submission_label ?? null;
+        $this->friendly = $obj->submission_label ?? null;
+
+        // TODO:  Need SOP /assertion criteria 
+        
+        /**
+         * Assert the report date is present.  If not, add to the errors_bag
+         */
+        $this->report_date = $this->asserterrors($obj->report->display_date ?? null, 'report_date', 'Missing Report Date');
+        if ($this->report_date !== null)
+        {
+            // we let carbon try to parse the date, and if it can't we catch the exception and clean things up
+            try {
+                $this->report_date = Carbon::parse($this->report_date);
+            } catch (Exception $e) {
+                $this->report_date = null;
+                $this->asserterrors(null, 'report_date', 'Invalid Report Date');
+            }
+        }
+        
+        /**
+         * Assert the report url if present.  If not, add to the errors_bag
+         */
+        //$this->report_url = $this->asserterrors($obj->report->ext_url ?? null, 'report_url', 'Missing Report URL');
+        $this->report_url = $obj->report->ext_url ?? null;
+        if (!empty($this->report_url))
+        {
+            // we confirm that this is a valid URL, at least in format
+            if(!filter_var($this->report_url, FILTER_VALIDATE_URL))
+            {
+                $this->report_url = null;
+                $this->asserterrors(null, 'report_url', 'Invalid Report URL');
+            }
+        }
+
+        /**
+         * The version is optional, but we set a default if excluded
+         */
+        $this->version = $obj->version->internal ?? '1.0';
+
+        /**
+         * We save the entire submission packet, unmodified, for future use
+         */
+        $this->original_submission_data = $obj;
+
+        /** 
+         * We also save a copy which can be edited by the user
+         */
+        $this->submission_data = $obj;
+
+
+        /**
+         * Process any PMIDs
+         */
+        if (isset($this->submission_data->evidence))
+        {
+            // IMPORTANT: Clear existing evidence array to fully replace PMIDs
+            // This ensures that republish/update operations don't append to old PMIDs
+            $this->evidence = [];
+
+            foreach ($this->submission_data->evidence as $evidence)
+            {
+                if (empty($evidence->pmid))
+                    continue;
+
+                // do some checking to make sure the pmid is formated correctly
+                $pmid =  (stripos($evidence->pmid, "PMID:") === 0 ? substr($evidence->pmid, 5) : $evidence->pmid);
+
+                $pmid = trim($pmid);
+
+                // Validate format: must be numeric with no leading zeros
+                if (!is_numeric($pmid))
+                {
+                    $this->asserterrors(null, 'invalid_pmid', 'Invalid PMID format: must be numeric');
+                    continue;
+                }
+
+                // Check for leading zeros on multi-digit numbers
+                if (strlen($pmid) > 1 && $pmid[0] === '0')
+                {
+                    $this->asserterrors(null, 'invalid_pmid', 'Invalid PMID format: no leading zeros allowed');
+                    continue;
+                }
+
+                // Check if pmid exists in cache first, then database
+                // Do not throw error if PMID doesn't exist in PubMed yet - it will be fetched by batch job
+                $pmid_record = null;
+                if (isset($lookupCaches['pubmeds'])) {
+                    $pmid_record = $lookupCaches['pubmeds']->get($pmid);
+                    if (!$pmid_record) {
+                        // Not in cache - create new and add to cache for future lookups in same batch
+                        $pmid_record = Pubmed::firstOrCreate(
+                            ['pmid' => $pmid, 'uid' => $pmid],
+                            ['status' => Pubmed::STATUS_INITIALIZING]
+                        );
+                        $lookupCaches['pubmeds']->put($pmid, $pmid_record);
+                    }
+                } else {
+                    // Fallback to database query (no cache available)
+                    $pmid_record = Pubmed::firstOrCreate(
+                        ['pmid' => $pmid, 'uid' => $pmid],
+                        ['status' => Pubmed::STATUS_INITIALIZING]
+                    );
+                }
+
+                // for convenience, maintain a list of valid pmids outside of submission_data
+                $ev = $this->evidence;
+                $ev[] = $pmid_record->pmid;
+                $this->evidence = $ev;
+
+                // note: we leave the parent to make changes to the pivot table
+            }
+        }
+
+        // Note: Workflow state is managed by status via the SubmissionStateMachine.
+        // Error state is determined by submission_errors via has_errors accessor.
+
+        if (!empty($this->errors_bag))
+            return $this->errors_bag;
+
+        return true;
+    }
+
+
+    /**
+     * Assert that the passed element is a non-zero, or non-zero equivalent.
+     * If not, add the errormsg to the errors_bag.
+     * 
+     * @params string $element
+     * @params string $errortype
+     * @params string $errormsg
+     * @rerurn string 
+     */
+    protected function asserterrors($element, $errortype, $errormsg)
+    {
+        if (empty($element))
+            $this->errors_bag[$errortype] = $errormsg;
+
+        return $element;
+    }
+
+    /**
+     * Initialize a submission for testing
+     * 
+     */
+    public static function initialize($id = 927)
+    {
+        $submission = self::where('sid', $id)->first();
+
+        if ($submission === null)
+            return;
+
+        $eb = $submission->submission_errors;
+
+        $eb->gene_hgnc_id = 'Invalid HGNC ID';
+        $eb->disease_curie_id = 'Invalid Disease ID';
+        $eb->moi_curie_id = 'Invalid MOI ID';
+        $eb->classification_curie_id = 'Invalid Classification ID';
+        $eb->submitter_curie_id = 'Unauthorized  Submitter ID';
+        $eb->publish_date = 'Missing Curation Publish Date';
+        $eb->report_date = 'Missing Report Date';
+       // $eb->report_url = 'Missing Report URL';
+        $eb->submission_id = 'Missing Submission ID';
+
+        $submission->submission_errors = $eb;
+        $submission->save();
+    }
+
+
+    /**
+     * Initialize the error bag for a blank submission
+     * 
+     */
+    public function initialize_submission_errors()
+    {
+        $this->submission_errors = [
+            "gene_hgnc_id" => 'Missing or Invalid HGNC ID',
+            "disease_curie_id" => 'Missing or Invalid Disease ID',
+            "moi_curie_id" => 'Missing or Invalid MOI ID',
+            "classification_curie_id" => 'Missing or Invalid Classification ID',
+           // "mech_of_disease" => 'Missing or Invalid Mechanism ID',
+            "criteria_url" => 'Missing or Invalid Criteria URL',
+           // "report_url" => 'Missing or Invalid Report URL',
+            "report_date" => 'Missing or Invalid Evaluated Date',
+        ];
+    }
+
+
+    /**
+     * Initialize the submission_data structure for a blank submission
+     * Uses empty placeholders when foreign keys are null
+     */
+    public function initialize_submission_data()
+    {
+        $this->submission_data = [
+                    "moi" => ["id" => "", "name" => ""],
+                    "submission_id" => $this->sid,
+                    "local_key" => $this->local_key,
+                    "submission_label" => $this->friendly,
+                    "gene" => ["id" => "", "symbol" => ""],
+                    "type" => "Reserved",
+                    "notes" => ["display" => "", "private" => ""],
+                    "report" => ["ext_url" => "", "display_date" => ""],
+                    "disease" => ["id" => "", "name" => ""],
+                    "version" => ["display" => "1.0", "reasons" => ["NEW_CURATION"], "internal" => "1.0.0.0", "description" => ""],
+                    "criteria" => ["url" => "", "name" => ""],
+                    "evidence" => [["pmid" => ""]],
+                    "workflow"=> ["creation_date" => Carbon::now()],
+                    //"lumpsplit" => [["key" => "value"]],
+                    "contributors"=> ["primary" => ["id" => "", "name" => ""]],
+                    "classification" => ["id" => "", "name" => ""],
+                    "mechanism" => ["id" => "", "name" => "", "comment" => ""],
+                    "additional_information" => [["key" => "values"]]
+                ];
+    }
+
+
+    /** 
+     * Return an updated version number based on the reason code.
+     */
+    public function newversion($code = null)
+    {
+        if (empty($this->version))
+            return "1.0.0";
+
+        $version = explode('.', $this->version);
+
+        $version[0]++;
+
+        return implode('.', $version);
+    }
+
+
+    /**
+     * A temporary addition to morph all sids to the specified format.  Will likely
+     * be removed once a standard is approved.
+     */
+    public static function morph()
+    {
+        foreach (Submission::all() as $submission)
+        {
+            $submission->sid = 'SGC-1' . str_pad($submission->id, 5, '0', STR_PAD_LEFT);
+            $submission->save(['timestamps' => false]);
+        }
+    }
+
+    /**
+     * Validate that submission state is consistent with job state
+     * Rules:
+     * - draft_xxx submissions ONLY in draft jobs
+     * - submitted_xxx submissions ONLY in submitted jobs
+     * - published/unpublished submissions ONLY in processed jobs
+     *
+     * @return bool
+     * @throws \Exception if inconsistent
+     */
+    public function validateJobStateConsistency(): bool
+    {
+        // Skip validation if no job assigned yet
+        if (!$this->job_id || !$this->job) {
+            return true;
+        }
+
+        // Skip validation if job doesn't have status yet
+        if (!$this->status || !$this->job->status) {
+            return true;
+        }
+
+        $submissionState = $this->status;
+        $jobState = $this->job->status;
+
+        // Draft submissions must be in draft jobs
+        if (in_array($submissionState, [
+            self::STATUS_DRAFT_NEW,
+            self::STATUS_DRAFT_REPUBLISH,
+            self::STATUS_DRAFT_UNPUBLISH
+        ])) {
+            if ($jobState !== \App\Models\Job::STATUS_DRAFT) {
+                throw new \Exception("Draft submission {$this->sid} (state: {$submissionState}) cannot be in non-draft job {$this->job->slug} (state: {$jobState})");
+            }
+        }
+
+        // Submitted submissions must be in submitted jobs
+        if (in_array($submissionState, [
+            self::STATUS_SUBMITTED_NEW,
+            self::STATUS_SUBMITTED_REPUBLISH,
+            self::STATUS_SUBMITTED_UNPUBLISH
+        ])) {
+            if ($jobState !== \App\Models\Job::STATUS_SUBMITTED) {
+                throw new \Exception("Submitted submission {$this->sid} (state: {$submissionState}) cannot be in non-submitted job {$this->job->slug} (state: {$jobState})");
+            }
+        }
+
+        // Published/unpublished submissions must be in processed jobs
+        if (in_array($submissionState, [
+            self::STATUS_PUBLISHED,
+            self::STATUS_UNPUBLISHED
+        ])) {
+            if ($jobState !== \App\Models\Job::STATUS_PROCESSED) {
+                throw new \Exception("Published/unpublished submission {$this->sid} (state: {$submissionState}) cannot be in non-processed job {$this->job->slug} (state: {$jobState})");
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Restore submission fields from origin_snapshot
+     * Used when cancelling a republish/unpublish operation
+     *
+     * @return void
+     */
+    public function restoreFromSnapshot(): void
+    {
+        if (!$this->origin_snapshot) {
+            return;
+        }
+
+        $snapshot = is_object($this->origin_snapshot) ? (array) $this->origin_snapshot : $this->origin_snapshot;
+
+        // Restore basic fields
+        if (isset($snapshot['local_key'])) {
+            $this->local_key = $snapshot['local_key'];
+        }
+        if (isset($snapshot['gene_id'])) {
+            $this->gene_id = $snapshot['gene_id'];
+        }
+        if (isset($snapshot['disease_id'])) {
+            $this->disease_id = $snapshot['disease_id'];
+        }
+        if (isset($snapshot['inheritance_id'])) {
+            $this->inheritance_id = $snapshot['inheritance_id'];
+        }
+        if (isset($snapshot['classification_id'])) {
+            $this->classification_id = $snapshot['classification_id'];
+        }
+        if (isset($snapshot['report_date'])) {
+            $this->report_date = $snapshot['report_date'];
+        }
+        if (isset($snapshot['report_url'])) {
+            $this->report_url = $snapshot['report_url'];
+        }
+        if (isset($snapshot['submission_data'])) {
+            $this->submission_data = $snapshot['submission_data'];
+        }
+    }
+}

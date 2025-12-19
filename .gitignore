@@ -1,0 +1,50 @@
+# Development environment files
+.env
+php81.sh
+.envrc
+
+# PHP dependencies
+/vendor
+# NPM dependencies
+/node_modules
+# JS build output
+/public/build
+# ClinGen pipeline data
+/data/clingen
+/scripts/clingen_pipeline/data
+# Temporary files created by Claude AI
+.claude
+.vscode/settings.json
+
+# PM2 logs (stored in storage/logs/)
+/storage/logs/pm2-*.log
+
+# PHPUnit and testing artifacts
+.phpunit.result.cache
+
+# Vite dev server
+/public/hot
+
+# Laravel storage symlink (created via php artisan storage:link)
+/public/storage
+
+# Vue type definitions (auto-generated)
+/node_modules/.vue-global-types/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Database backups
+/data/*.sql
+
+# Excel temporary lock files
+/data/~$*.xlsx
+.env.bak*
+
+# ignore downloaded files from external sources
+data/genemap2.txt
+data/mondo-with-equivalents.json
+data/mimTitles.txt
+data/en_product1.xml
+data/gencc-submissions.xlsx
