@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GenCC State Model Diagrams</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            startOnLoad: true,
+            securityLevel: 'loose',
+            theme: 'default',
+            themeVariables: {
+                'edgeLabelBackground': '#ffffff',
+                'tertiaryColor': '#ffffff'
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: #f9fafb;
+            color: #111827;
+        }
+        h1 {
+            color: #1f2937;
+            border-bottom: 3px solid #3b82f6;
+            padding-bottom: 0.5rem;
+        }
+        h2 {
+            color: #374151;
+            margin-top: 3rem;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 0.5rem;
+        }
+        h3 {
+            color: #4b5563;
+            margin-top: 2rem;
+        }
+        .diagram-container {
+            background: white;
+            padding: 2rem;
+            margin: 2rem 0;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .legend {
+            background: #fef3c7;
+            padding: 1rem;
+            border-radius: 6px;
+            margin: 1rem 0;
+            border-left: 4px solid #f59e0b;
+        }
+        .legend ul {
+            margin: 0.5rem 0;
+            padding-left: 1.5rem;
+        }
+        .note {
+            background: #dbeafe;
+            padding: 1rem;
+            border-radius: 6px;
+            margin: 1rem 0;
+            border-left: 4px solid #3b82f6;
+        }
+        .toc {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        .toc li {
+            padding: 0.25rem 0;
+        }
+        .toc a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        .toc a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Submission and Job State Model - Visual Diagrams</h1>
+
+    <div class="note">
+        <strong>Note:</strong> This document contains Mermaid state diagrams for the submission and job state workflows.
+        Colors and styling are defined using Mermaid's theming capabilities.
+    </div>
+
+    <div class="toc">
+        <h2>Table of Contents</h2>
+        <ul>
+            <li><a href="#combined-system-flow">Combined System Flow</a> - Jobs + Submissions together</li>
+            <li><a href="#complete-submission-state-diagram">Complete Submission State Diagram</a> - All 8 submission states</li>
+            <li><a href="#new-submission-workflow">New Submission Workflow</a> - Initial submission flow</li>
+            <li><a href="#republish-workflow-published">Republish Workflow (from Published)</a> - Update published data</li>
+            <li><a href="#republish-workflow-unpublished">Republish Workflow (from Unpublished)</a> - Restore unpublished data</li>
+            <li><a href="#unpublish-workflow">Unpublish Workflow</a> - Remove from public view</li>
+            <li><a href="#complete-job-state-diagram">Complete Job State Diagram</a> - All 3 job states</li>
+            <li><a href="#job-state-failure">Job State with Failure Handling</a> - Failure scenarios</li>
+            <li><a href="#create-new-submission">Create New Submission</a> - Detailed flow</li>
+            <li><a href="#republish-existing">Republish Existing Submission</a> - Detailed flow</li>
+            <li><a href="#unpublish-submission">Unpublish Submission</a> - Detailed flow</li>
+            <li><a href="#job-lifecycle">Job Lifecycle</a> - Complete job flow</li>
+        </ul>
+    </div>
+
+    <h2 id="combined-system-flow">Combined System Flow</h2>
+    <p>This diagram shows how jobs and submissions work together in the complete workflow.</p>
+    <div class="diagram-container">
+        <pre class="mermaid">
+graph TB
+    subgraph Job[Job Lifecycle]
+        J1[Create Draft Job]
+        J2[Submit Job]
+        J3[Process Job run:publish]
+        J4[Job Processed]
+
+        J1 -->|Add submissions| J1
+        J1 -->|All valid| J2
+        J2 -->|Daily cycle| J3
+        J3 -->|Success| J4
+        J3 -->|All fail| J2
+    end
+
+    subgraph New[New Submission Flow]
+        S1[draft_new]
+        S2[submitted_new]
+        S3[published]
+
+        S1 -->|Job submitted| S2
+        S2 -->|run:publish| S3
+    end
+
+    subgraph Republish[Republish Flow]
+        S4[draft_republish]
+        S5[submitted_republish]
+
+        S3 -->|Click Edit| S4
+        S4 -->|Store origin_snapshot| S4
+        S4 -->|Job submitted| S5
+        S5 -->|run:publish| S3
+        S4 -->|Restore| S3
+    end
+
+    subgraph Unpublish[Unpublish Flow]
+        S6[draft_unpublish]
+        S7[submitted_unpublish]
+        S8[unpublished]
+
+        S3 -->|Click Unpublish| S6
+        S6 -->|Job submitted| S7
+        S7 -->|run:publish| S8
+        S6 -->|Restore| S3
+        S8 -->|Click Republish| S4
+    end
+
+    J1 -.->|Contains| S1
+    J2 -.->|Contains| S2
+    J4 -.->|Records| REC[processed_submission_ids]
+
+    style J1 fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px
+    style J2 fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px
+    style J3 fill:#BFDBFE,stroke:#3B82F6,stroke-width:2px
+    style J4 fill:#86EFAC,stroke:#10B981,stroke-width:2px
+    style S1 fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px
+    style S2 fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px
+    style S3 fill:#86EFAC,stroke:#10B981,stroke-width:2px
+    style S4 fill:#FDE68A,stroke:#F59E0B,stroke-width:2px
+    style S5 fill:#BFDBFE,stroke:#3B82F6,stroke-width:2px
+    style S6 fill:#FBBF24,stroke:#F59E0B,stroke-width:2px
+    style S7 fill:#60A5FA,stroke:#3B82F6,stroke-width:2px
+    style S8 fill:#D1D5DB,stroke:#6B7280,stroke-width:2px
+    style REC fill:#FEE2E2,stroke:#EF4444,stroke-width:2px
+        </pre>
+    </div>
+
+    <div class="legend">
+        <strong>Legend:</strong>
+        <ul>
+            <li>🟡 <strong>Yellow</strong> = Draft states (editable)</li>
+            <li>🔵 <strong>Blue</strong> = Submitted states (awaiting processing)</li>
+            <li>🟢 <strong>Green</strong> = Published/Processed (active/complete)</li>
+            <li>⚫ <strong>Gray</strong> = Unpublished (hidden)</li>
+        </ul>
+    </div>
+
+    <h2 id="complete-submission-state-diagram">Complete Submission State Diagram</h2>
+    <p>This diagram shows all possible state transitions for submissions in the V2 state machine.</p>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> draft_new: Create New Submission
+
+    draft_new --> submitted_new: Submit Job
+    draft_new --> [*]: Delete Submission
+
+    submitted_new --> published: Publish Success
+    submitted_new --> draft_new: Restore Job
+
+    published --> draft_republish: Click Edit
+    published --> draft_unpublish: Click Unpublish
+
+    draft_republish --> submitted_republish: Submit Job
+    draft_republish --> published: Restore from published
+    draft_republish --> unpublished: Restore from unpublished
+
+    submitted_republish --> published: Publish Success
+    submitted_republish --> draft_republish: Restore Job
+
+    draft_unpublish --> submitted_unpublish: Submit Job
+    draft_unpublish --> published: Restore
+
+    submitted_unpublish --> unpublished: Unpublish Success
+    submitted_unpublish --> draft_unpublish: Restore Job
+
+    unpublished --> draft_republish: Click Republish
+
+    note right of draft_new
+        🟡 Draft New
+        ━━━━━━━━━━━━━━
+        • Editable
+        • In draft job
+        • Can have errors
+        • Stores: origin_job_id
+    end note
+
+    note right of submitted_new
+        🔵 Submitted New
+        ━━━━━━━━━━━━━━━━
+        • Not editable
+        • In submitted job
+        • No errors allowed
+        • Awaits daily processing
+    end note
+
+    note right of published
+        🟢 Published
+        ━━━━━━━━━━━━
+        • Public visible
+        • Not editable
+        • Has SGC ID
+        • Can republish/unpublish
+    end note
+
+    note right of draft_republish
+        🟠 Draft Republish
+        ━━━━━━━━━━━━━━━━━
+        • Editable
+        • In draft job
+        • Stores: origin_state,
+          origin_snapshot,
+          origin_job_id
+    end note
+
+    note right of draft_unpublish
+        🟤 Draft Unpublish
+        ━━━━━━━━━━━━━━━━━
+        • Read-only
+        • In draft job
+        • Stores: origin_state,
+          origin_job_id
+    end note
+
+    note right of unpublished
+        ⚫ Unpublished
+        ━━━━━━━━━━━━━━
+        • Hidden from public
+        • Not editable
+        • Has SGC ID
+        • Can republish
+    end note
+
+    classDef draftStyle fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px,color:#000
+    classDef submittedStyle fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#000
+    classDef publishedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
+    classDef unpublishedStyle fill:#D1D5DB,stroke:#6B7280,stroke-width:2px,color:#000
+
+    class draft_new,draft_republish,draft_unpublish draftStyle
+    class submitted_new,submitted_republish,submitted_unpublish submittedStyle
+    class published publishedStyle
+    class unpublished unpublishedStyle
+        </pre>
+    </div>
+
+    <h2 id="new-submission-workflow">New Submission Workflow</h2>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> draft_new: Create via UI or Upload
+
+    draft_new --> submitted_new: Job Submitted
+    draft_new --> [*]: Delete
+
+    submitted_new --> published: Publish Success
+    submitted_new --> draft_new: Job Restored
+
+    note right of draft_new
+        Initial State
+        - Editable
+        - In draft job
+        - Has validation
+    end note
+
+    note right of submitted_new
+        Awaiting Publish
+        - Not editable
+        - In submitted job
+        - No errors allowed
+    end note
+
+    note right of published
+        Terminal State
+        - Public visible
+        - Can republish or unpublish
+    end note
+        </pre>
+    </div>
+
+    <h2 id="republish-workflow-published">Republish Workflow (from Published)</h2>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    published --> draft_republish: Click Republish
+
+    draft_republish --> submitted_republish: Job Submitted
+    draft_republish --> published: Restore
+
+    submitted_republish --> published: Publish Success
+    submitted_republish --> draft_republish: Job Restored
+
+    note right of draft_republish
+        Update Mode
+        - Editable
+        - In draft job
+        - origin_state = 'published'
+    end note
+
+    note right of submitted_republish
+        Awaiting Republish
+        - Not editable
+        - In submitted job
+    end note
+        </pre>
+    </div>
+
+    <h2 id="republish-workflow-unpublished">Republish Workflow (from Unpublished)</h2>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    unpublished --> draft_republish: Click Republish
+
+    draft_republish --> submitted_republish: Job Submitted
+    draft_republish --> unpublished: Restore
+
+    submitted_republish --> published: Publish Success
+    submitted_republish --> draft_republish: Job Restored
+
+    note right of draft_republish
+        Restore Mode
+        - Editable
+        - In draft job
+        - origin_state = 'unpublished'
+    end note
+
+    note right of unpublished
+        Hidden State
+        - Not public visible
+        - Can be restored
+    end note
+        </pre>
+    </div>
+
+    <h2 id="unpublish-workflow">Unpublish Workflow</h2>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    published --> draft_unpublish: Click Unpublish
+
+    draft_unpublish --> submitted_unpublish: Job Submitted
+    draft_unpublish --> published: Restore
+
+    submitted_unpublish --> unpublished: Unpublish Success
+    submitted_unpublish --> draft_unpublish: Job Restored
+
+    note right of draft_unpublish
+        Unpublish Mode
+        - NOT editable
+        - In draft job
+    end note
+
+    note right of submitted_unpublish
+        Awaiting Unpublish
+        - Not editable
+        - In submitted job
+    end note
+
+    note right of unpublished
+        Hidden State
+        - Not public visible
+        - Can be republished
+    end note
+        </pre>
+    </div>
+
+    <h2 id="complete-job-state-diagram">Complete Job State Diagram</h2>
+    <p>This diagram shows all possible state transitions for jobs in the V2 state machine.</p>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> draft: Create Job
+
+    draft --> submitted: Submit Job
+    draft --> [*]: Delete Job
+
+    submitted --> processed: Publish Success
+    submitted --> submitted: Publish All Failed
+    submitted --> draft: Restore Before Processing
+
+    processed --> [*]
+
+    note right of draft
+        🟡 Draft
+        ━━━━━━━━━━
+        • Add/edit/remove submissions
+        • All submissions must be draft_xxx
+        • Can delete if empty
+        • One per submitter limit
+    end note
+
+    note right of submitted
+        🔵 Submitted
+        ━━━━━━━━━━━━━
+        • No edits allowed
+        • Can restore before run:publish
+        • Processed daily automatically
+        • Blocks new draft creation
+    end note
+
+    note right of processed
+        🟢 Processed
+        ━━━━━━━━━━━━━
+        • Terminal state
+        • All submissions processed
+        • Cannot be deleted
+        • Records processed_submission_ids:
+          [{sid, action}]
+    end note
+
+    classDef draftStyle fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px,color:#000
+    classDef submittedStyle fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#000
+    classDef processedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
+
+    class draft draftStyle
+    class submitted submittedStyle
+    class processed processedStyle
+        </pre>
+    </div>
+
+    <h2 id="job-state-failure">Job State with Failure Handling</h2>
+    <div class="diagram-container">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> draft: Create Job
+
+    draft --> submitted: Submit
+
+    submitted --> processing: Publish Starts
+
+    processing --> processed: All Success
+    processing --> failed_partial: Some Failed
+    processing --> submitted: All Failed
+
+    failed_partial --> processed: Mark Original
+    failed_partial --> draft: Create New Job with Failures
+
+    note right of processing
+        During run:publish
+        - Processing submissions
+        - Validating data
+        - Sending to GenCC-Search
+    end note
+
+    note right of failed_partial
+        Partial Failure
+        - Successful submissions → processed
+        - Failed submissions → new draft job
+        - Failed submissions reset to draft_xxx
+    end note
+        </pre>
+    </div>
+
+    <h2>Submission Lifecycle by Action</h2>
+
+    <h3 id="create-new-submission">Create New Submission</h3>
+    <div class="diagram-container">
+        <pre class="mermaid">
+flowchart TD
+    A[User Creates Submission] --> B{Has Errors?}
+    B -->|Yes| C[draft_new with errors]
+    B -->|No| D[draft_new no errors]
+
+    C --> E[User Fixes Errors]
+    E --> D
+
+    D --> F[User Submits Job]
+    F --> G[submitted_new]
+
+    G --> H[run:publish Executes]
+    H --> I{Success?}
+    I -->|Yes| J[published]
+    I -->|No| K[Back to draft_new with errors]
+        </pre>
+    </div>
+
+    <h3 id="republish-existing">Republish Existing Submission</h3>
+    <div class="diagram-container">
+        <pre class="mermaid">
+flowchart TD
+    A[published submission] --> B[User clicks Republish]
+    B --> C[Move to draft job]
+    C --> D[draft_republish state]
+    D --> E{Store origin data}
+    E --> F[origin_state = 'published']
+    E --> G[origin_snapshot = field values]
+    E --> H[origin_job_id = original job]
+
+    H --> I[User Edits]
+    I --> J{User Action?}
+
+    J -->|Submit| K[Job Submitted]
+    K --> L[submitted_republish]
+    L --> M[run:publish]
+    M --> N[published + processed_submission_ids]
+
+    J -->|Restore| O[Revert all changes]
+    O --> P[Restore from origin_snapshot]
+    O --> Q[Back to published state]
+    O --> R[Back to original_job_id]
+        </pre>
+    </div>
+
+    <h3 id="unpublish-submission">Unpublish Submission</h3>
+    <div class="diagram-container">
+        <pre class="mermaid">
+flowchart TD
+    A[published submission] --> B[User clicks Unpublish]
+    B --> C[Move to draft job]
+    C --> D[draft_unpublish state - READ ONLY]
+    D --> E{Store origin data}
+    E --> F[origin_state = 'published']
+    E --> G[origin_job_id = original job]
+
+    G --> H{User Action?}
+
+    H -->|Submit| I[Job Submitted]
+    I --> J[submitted_unpublish]
+    J --> K[run:publish unpublish]
+    K --> L[unpublished + processed_submission_ids]
+
+    H -->|Restore| M[Revert]
+    M --> N[Back to published]
+    M --> O[Back to original job]
+        </pre>
+    </div>
+
+    <h3 id="job-lifecycle">Job Lifecycle</h3>
+    <div class="diagram-container">
+        <pre class="mermaid">
+flowchart TD
+    A[Create Job] --> B[draft state]
+
+    B --> C[Add Submissions]
+    C --> D{All Valid?}
+    D -->|No| E[Fix Errors]
+    E --> D
+    D -->|Yes| F[Ready to Submit]
+
+    F --> G[User Submits]
+    G --> H[submitted state]
+
+    H --> I{Process Scheduled?}
+    I -->|Not Yet| J{User Restores?}
+    J -->|Yes| K[Restore Job]
+    K --> B
+
+    I -->|Yes| L[Process Executes Daily]
+    L --> M{Results?}
+
+    M -->|All Success| N[processed state]
+    N --> O[Record processed_submission_ids]
+    M -->|All Fail| P[Stay submitted with errors]
+    M -->|Partial| Q[Split]
+
+    Q --> R[Successful → processed]
+    R --> O
+    Q --> S[Failed → new draft job]
+        </pre>
+    </div>
+
+    <h2>Color Coding Guide</h2>
+    <div class="diagram-container">
+        <h3>Submission States (Tag Colors)</h3>
+        <ul>
+            <li><strong>draft_new:</strong> Light Orange (#FEF3C7) - New submission in draft</li>
+            <li><strong>submitted_new:</strong> Light Blue (#DBEAFE) - New submission processing</li>
+            <li><strong>published:</strong> Green (#86EFAC) - Live/active submission</li>
+            <li><strong>draft_republish:</strong> Medium Orange (#FDE68A) - Editing published submission</li>
+            <li><strong>submitted_republish:</strong> Medium Blue (#BFDBFE) - Update processing</li>
+            <li><strong>draft_unpublish:</strong> Dark Orange (#FBBF24) - Pending removal (read-only)</li>
+            <li><strong>submitted_unpublish:</strong> Dark Blue (#60A5FA) - Unpublish processing</li>
+            <li><strong>unpublished:</strong> Dark Gray (#3F3F46) - Removed/hidden</li>
+        </ul>
+
+        <h3>Job States</h3>
+        <ul>
+            <li><strong>draft:</strong> Orange/Yellow tag - Work in progress</li>
+            <li><strong>submitted:</strong> Blue tag - Awaiting daily processing</li>
+            <li><strong>processed:</strong> Green tag - Completed processing</li>
+        </ul>
+    </div>
+
+</body>
+</html>
