@@ -922,12 +922,12 @@ class SubmissionApiTest extends TestCase
         $response->assertStatus(200);
         $response->assertJson([
             'success' => 'false',
-            'status_code' => 3009
+            'status_code' => 3002  // Submission not found or not in a publishable state
         ]);
     }
 
     /**
-     * Test republish transitions to draft_republish status
+     * Test republish creates a new draft version with draft_republish status
      */
     public function test_republish_transitions_to_draft_republish(): void
     {
@@ -947,9 +947,16 @@ class SubmissionApiTest extends TestCase
             'status' => Submission::STATUS_DRAFT_REPUBLISH
         ]);
 
-        // Verify submission status changed
+        // Original submission remains published (implementation creates a new copy)
         $this->submission->refresh();
-        $this->assertEquals(Submission::STATUS_DRAFT_REPUBLISH, $this->submission->status);
+        $this->assertEquals(Submission::STATUS_PUBLISHED, $this->submission->status);
+
+        // A new draft version was created with the same SID
+        $draftVersion = Submission::where('sid', $this->submission->sid)
+            ->where('status', Submission::STATUS_DRAFT_REPUBLISH)
+            ->first();
+        $this->assertNotNull($draftVersion);
+        $this->assertNotEquals($this->submission->id, $draftVersion->id);
     }
 
     /**
@@ -987,16 +994,24 @@ class SubmissionApiTest extends TestCase
     // ========================================================================
 
     /**
-     * Test cancel draft republish restores to published
+     * Test cancel draft republish deletes the draft version
      */
     public function test_cancel_draft_republish_restores_to_published(): void
     {
-        // Set up submission in draft_republish state
+        // First create a published version
         $this->submission->update([
-            'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'publish_date' => now(),
-            'origin_state' => Submission::STATUS_PUBLISHED
+            'status' => Submission::STATUS_PUBLISHED,
+            'publish_date' => now()
         ]);
+
+        // Create a draft_republish version (like the republish endpoint does)
+        $draftVersion = $this->submission->replicate(['ident']);
+        $draftVersion->ident = \Illuminate\Support\Str::uuid()->toString();
+        $draftVersion->version_number = 2;
+        $draftVersion->status = Submission::STATUS_DRAFT_REPUBLISH;
+        $draftVersion->job_id = $this->job->id;
+        $draftVersion->origin_state = Submission::STATUS_PUBLISHED;
+        $draftVersion->save();
 
         $response = $this->actingAs($this->user)
             ->postJson('/api/submissions/' . $this->submission->sid . '/cancel');
@@ -1007,7 +1022,10 @@ class SubmissionApiTest extends TestCase
             'status_code' => 200
         ]);
 
-        // Verify submission was restored
+        // Draft version should be deleted (soft deleted)
+        $this->assertSoftDeleted('submissions', ['id' => $draftVersion->id]);
+
+        // Original published version remains
         $this->submission->refresh();
         $this->assertEquals(Submission::STATUS_PUBLISHED, $this->submission->status);
     }
