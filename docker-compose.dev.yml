@@ -1,0 +1,57 @@
+# Development Docker Compose for GenCC Submission Portal
+# Compatible with Podman: podman-compose -f docker-compose.dev.yml up
+#
+# Usage:
+#   podman-compose -f docker-compose.dev.yml up -d
+#   podman-compose -f docker-compose.dev.yml logs -f app
+#   podman-compose -f docker-compose.dev.yml down
+#
+# Prerequisites:
+#   - Local MySQL running with gencc_sub database prepared
+#   - Run restore-from-production.sh locally first to set up the database
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: gencc-dev
+    volumes:
+      # Mount source code for hot reload
+      - .:/var/www/html:Z
+      # Use named volumes for dependencies to avoid overwriting
+      - vendor:/var/www/html/vendor
+      - node_modules:/var/www/html/node_modules
+    ports:
+      - "8001:8001"   # Laravel dev server
+      - "5173:5173"   # Vite HMR
+    extra_hosts:
+      - "host.docker.internal:192.168.127.1"
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      # Use host machine's MySQL (192.168.127.1 is Podman's host gateway on macOS)
+      - DB_CONNECTION=mysql
+      - DB_HOST=host.docker.internal
+      - DB_PORT=3306
+      - DB_DATABASE=gencc_sub
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      - QUEUE_CONNECTION=database
+      - CACHE_DRIVER=file
+      - SESSION_DRIVER=file
+      # Point to gencc-search on host machine
+      - PUBLISH_URL=http://host.docker.internal:8000/api/publish
+      - SUBMIT_URL=http://host.docker.internal:8001/api/submit
+    # Install dependencies on startup, then run dev servers
+    command: >
+      bash -c "
+        composer install --no-interaction &&
+        npm install &&
+        php artisan key:generate --force --no-interaction 2>/dev/null || true &&
+        pm2-runtime ecosystem.dev.config.cjs
+      "
+
+volumes:
+  vendor:
+  node_modules:
