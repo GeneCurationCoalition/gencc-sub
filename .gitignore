@@ -48,3 +48,5 @@ data/mondo-with-equivalents.json
 data/mimTitles.txt
 data/en_product1.xml
 data/gencc-submissions.xlsx
+wrapper.env.txt
+.env copy.testing

@@ -1,0 +1,56 @@
+# Development Dockerfile for GenCC Submission Portal
+# Optimized for local development with hot reload support
+
+FROM php:8.1-fpm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libzip-dev \
+    libonig-dev \
+    libpng-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    zip \
+    unzip \
+    git \
+    curl \
+    default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        pdo_mysql \
+        mbstring \
+        zip \
+        pcntl \
+        gd \
+        opcache
+
+# Copy Node.js from official image
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/
+COPY --from=node:22-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && npm install -g pm2
+
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /var/www/html
+
+# PHP development configuration
+RUN cp "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini"
+
+# Increase memory limit for development (2GB needed for UniProt import)
+RUN echo "memory_limit = 2048M" >> "$PHP_INI_DIR/conf.d/docker-php-memlimit.ini"
+
+# Create storage directories and set permissions
+RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+# Expose ports: 8001 (Laravel), 5173 (Vite HMR)
+EXPOSE 8001 5173
+
+# Default command - can be overridden
+CMD ["pm2-runtime", "ecosystem.dev.config.cjs"]

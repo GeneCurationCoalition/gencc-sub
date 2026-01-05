@@ -93,13 +93,61 @@ npm run build        # Production build
 
 ### Running the Application
 
-**Option 1: Using PM2 (Recommended)**
+**Option 1: Using Podman/Docker (Recommended for Isolation)**
+
+Run the entire application stack in containers with no local dependencies beyond Podman.
+
+```bash
+# Start all services (app + MySQL database)
+podman-compose -f docker-compose.dev.yml up -d
+
+# Watch the logs
+podman-compose -f docker-compose.dev.yml logs -f app
+
+# Stop everything
+podman-compose -f docker-compose.dev.yml down
+```
+
+**Access Points:**
+| Service | URL |
+|---------|-----|
+| Laravel App | http://localhost:8001 |
+| Vite HMR | http://localhost:5173 |
+| MySQL | localhost:3306 |
+
+**What Happens on Startup:**
+1. MySQL container starts and waits until healthy
+2. App container runs `composer install` and `npm install`
+3. Generates app key and runs migrations
+4. Starts PM2 with Laravel server, Vite, and queue worker
+
+**Useful Container Commands:**
+```bash
+# Rebuild after Dockerfile changes
+podman-compose -f docker-compose.dev.yml up -d --build
+
+# Run artisan commands
+podman exec -it gencc-dev php artisan migrate:status
+
+# Access MySQL
+podman exec -it gencc-db mysql -u gencc -pgencc_dev_password gencc_sub
+
+# View PM2 status inside container
+podman exec -it gencc-dev pm2 status
+
+# Shell into the container
+podman exec -it gencc-dev bash
+```
+
+**Note:** First startup may take a few minutes to build the image and install dependencies. Subsequent starts are much faster since dependencies are cached in named volumes.
+
+**Option 2: Using PM2 (Local Install)**
 
 PM2 manages all services automatically with auto-restart, logging, and monitoring.
 
 ```bash
 # Start all services (dev server, Vite, queue worker)
-pm2 start ecosystem.config.cjs
+pm2 start ecosystem.dev.config.cjs
 
 # View status
 pm2 status
@@ -118,7 +166,7 @@ pm2 stop all
 - Production setup
 - Troubleshooting
 
-**Option 2: Manual (3 terminals)**
+**Option 3: Manual (3 terminals)**
 
 ```bash
 # Terminal 1: Laravel dev server
