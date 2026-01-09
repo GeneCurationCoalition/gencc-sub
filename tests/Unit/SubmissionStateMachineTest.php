@@ -46,13 +46,13 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_PUBLISHED);
 
         $this->assertEquals(Submission::STATUS_PUBLISHED, $submission->status);
-        $this->assertNull($submission->origin_state);
-        $this->assertNull($submission->origin_snapshot);
-        $this->assertNull($submission->origin_job_id);
     }
 
     /**
-     * Test valid transition from published to draft_republish with origin tracking
+     * Test valid transition from published to draft_republish
+     * Note: With versioning, a NEW submission record is created for republish.
+     * The state machine only handles status transitions - version creation is handled
+     * by the controller.
      */
     public function test_published_to_draft_republish(): void
     {
@@ -76,10 +76,6 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_DRAFT_REPUBLISH);
 
         $this->assertEquals(Submission::STATUS_DRAFT_REPUBLISH, $submission->status);
-        $this->assertEquals('published', $submission->origin_state);
-        $this->assertEquals($originalJob->id, $submission->origin_job_id);
-        $this->assertNotNull($submission->origin_snapshot);
-        $this->assertIsArray($submission->origin_snapshot);
     }
 
     /**
@@ -88,8 +84,7 @@ class SubmissionStateMachineTest extends TestCase
     public function test_draft_republish_to_submitted_republish(): void
     {
         $submission = Submission::factory()->create([
-            'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'origin_state' => 'published'
+            'status' => Submission::STATUS_DRAFT_REPUBLISH
         ]);
 
         $this->assertTrue(
@@ -107,9 +102,7 @@ class SubmissionStateMachineTest extends TestCase
     public function test_submitted_republish_to_published(): void
     {
         $submission = Submission::factory()->create([
-            'status' => Submission::STATUS_SUBMITTED_REPUBLISH,
-            'origin_state' => 'published',
-            'origin_job_id' => 1
+            'status' => Submission::STATUS_SUBMITTED_REPUBLISH
         ]);
 
         $this->assertTrue(
@@ -119,29 +112,20 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_PUBLISHED);
 
         $this->assertEquals(Submission::STATUS_PUBLISHED, $submission->status);
-        // Origin data should be cleared after successful republish
-        $this->assertNull($submission->origin_state);
-        $this->assertNull($submission->origin_job_id);
     }
 
     /**
-     * Test cancel from draft_republish back to published
+     * Test transition from draft_republish back to published (cancel scenario)
+     * Note: With versioning, cancelling deletes the draft version and restores
+     * is_most_recent on the original. This test validates the state transition only.
      */
-    public function test_cancel_draft_republish_to_published(): void
+    public function test_cancel_draft_republish(): void
     {
-        $originalJob = Job::factory()->create();
         $draftJob = Job::factory()->create(['status' => Job::STATUS_DRAFT]);
 
         $submission = Submission::factory()->create([
             'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'origin_state' => 'published',
-            'origin_job_id' => $originalJob->id,
-            'job_id' => $draftJob->id,
-            'origin_snapshot' => [
-                'gene_id' => 1,
-                'disease_id' => 1,
-                'local_key' => 'TEST-001'
-            ]
+            'job_id' => $draftJob->id
         ]);
 
         $this->assertTrue(
@@ -151,14 +135,11 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_PUBLISHED);
 
         $this->assertEquals(Submission::STATUS_PUBLISHED, $submission->status);
-        $this->assertEquals($originalJob->id, $submission->job_id);
-        $this->assertNull($submission->origin_state);
-        $this->assertNull($submission->origin_job_id);
-        $this->assertNull($submission->origin_snapshot);
     }
 
     /**
      * Test valid transition from published to draft_unpublish
+     * Note: With versioning, a NEW submission record is created for unpublish.
      */
     public function test_published_to_draft_unpublish(): void
     {
@@ -178,8 +159,6 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_DRAFT_UNPUBLISH);
 
         $this->assertEquals(Submission::STATUS_DRAFT_UNPUBLISH, $submission->status);
-        $this->assertEquals('published', $submission->origin_state);
-        $this->assertEquals($originalJob->id, $submission->origin_job_id);
     }
 
     /**
@@ -188,8 +167,7 @@ class SubmissionStateMachineTest extends TestCase
     public function test_draft_unpublish_to_submitted_unpublish(): void
     {
         $submission = Submission::factory()->create([
-            'status' => Submission::STATUS_DRAFT_UNPUBLISH,
-            'origin_state' => 'published'
+            'status' => Submission::STATUS_DRAFT_UNPUBLISH
         ]);
 
         $this->assertTrue(
@@ -217,12 +195,11 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_UNPUBLISHED);
 
         $this->assertEquals(Submission::STATUS_UNPUBLISHED, $submission->status);
-        $this->assertNull($submission->origin_state);
-        $this->assertNull($submission->origin_job_id);
     }
 
     /**
      * Test valid transition from unpublished to draft_republish
+     * Note: With versioning, a NEW submission record is created for republish.
      */
     public function test_unpublished_to_draft_republish(): void
     {
@@ -242,22 +219,18 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_DRAFT_REPUBLISH);
 
         $this->assertEquals(Submission::STATUS_DRAFT_REPUBLISH, $submission->status);
-        $this->assertEquals('unpublished', $submission->origin_state);
-        $this->assertEquals($originalJob->id, $submission->origin_job_id);
     }
 
     /**
      * Test cancel from draft_republish back to unpublished
+     * Note: With versioning, the draft version is deleted and original submission restored.
      */
-    public function test_cancel_draft_republish_to_unpublished(): void
+    public function test_cancel_draft_republish_from_unpublished(): void
     {
-        $originalJob = Job::factory()->create();
         $draftJob = Job::factory()->create(['status' => Job::STATUS_DRAFT]);
 
         $submission = Submission::factory()->create([
             'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'origin_state' => 'unpublished',
-            'origin_job_id' => $originalJob->id,
             'job_id' => $draftJob->id
         ]);
 
@@ -268,9 +241,6 @@ class SubmissionStateMachineTest extends TestCase
         SubmissionStateMachine::transition($submission, Submission::STATUS_UNPUBLISHED);
 
         $this->assertEquals(Submission::STATUS_UNPUBLISHED, $submission->status);
-        $this->assertEquals($originalJob->id, $submission->job_id);
-        $this->assertNull($submission->origin_state);
-        $this->assertNull($submission->origin_job_id);
     }
 
     /**
@@ -302,65 +272,6 @@ class SubmissionStateMachineTest extends TestCase
         $this->assertFalse(
             SubmissionStateMachine::canTransition($submission, Submission::STATUS_UNPUBLISHED)
         );
-    }
-
-    /**
-     * Test origin_snapshot captures field values
-     */
-    public function test_origin_snapshot_captures_values(): void
-    {
-        $job = Job::factory()->create();
-        $submission = Submission::factory()->create([
-            'status' => Submission::STATUS_PUBLISHED,
-            'job_id' => $job->id,
-            'gene_id' => 123,
-            'disease_id' => 456,
-            'local_key' => 'TEST-KEY',
-            'submission_data' => ['test' => 'data']
-        ]);
-
-        $newJob = Job::factory()->create(['status' => Job::STATUS_DRAFT]);
-        $submission->job_id = $newJob->id;
-        SubmissionStateMachine::transition($submission, Submission::STATUS_DRAFT_REPUBLISH);
-
-        $snapshot = $submission->origin_snapshot;
-        $this->assertEquals(123, $snapshot['gene_id']);
-        $this->assertEquals(456, $snapshot['disease_id']);
-        $this->assertEquals('TEST-KEY', $snapshot['local_key']);
-        $this->assertEquals(['test' => 'data'], $snapshot['submission_data']);
-    }
-
-    /**
-     * Test restoreFromSnapshot restores field values
-     */
-    public function test_restore_from_snapshot_restores_values(): void
-    {
-        $originalJob = Job::factory()->create();
-        $draftJob = Job::factory()->create(['status' => Job::STATUS_DRAFT]);
-
-        $submission = Submission::factory()->create([
-            'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'origin_state' => 'published',
-            'origin_job_id' => $originalJob->id,
-            'job_id' => $draftJob->id,
-            'gene_id' => 999,
-            'disease_id' => 888,
-            'local_key' => 'CHANGED',
-            'origin_snapshot' => [
-                'gene_id' => 123,
-                'disease_id' => 456,
-                'local_key' => 'ORIGINAL',
-                'submission_data' => ['original' => 'value']
-            ]
-        ]);
-
-        $submission->restoreFromSnapshot();
-
-        $this->assertEquals(123, $submission->gene_id);
-        $this->assertEquals(456, $submission->disease_id);
-        $this->assertEquals('ORIGINAL', $submission->local_key);
-        // submission_data is cast as object, so it will be stdClass
-        $this->assertEquals((object)['original' => 'value'], $submission->submission_data);
     }
 
     /**

@@ -244,39 +244,39 @@ class JobModelTest extends TestCase
     }
 
     /**
-     * Test published_at is set when status changes to processed
+     * Test released_at is set when status changes to processed
      */
-    public function test_published_at_set_on_processed(): void
+    public function test_released_at_set_on_processed(): void
     {
         $job = Job::factory()->create([
             'status' => Job::STATUS_SUBMITTED,
-            'published_at' => null
+            'released_at' => null
         ]);
 
         $job->status = Job::STATUS_PROCESSED;
         $job->save();
 
         $job->refresh();
-        $this->assertNotNull($job->published_at);
+        $this->assertNotNull($job->released_at);
     }
 
     /**
-     * Test published_at not overwritten if already set
+     * Test released_at not overwritten if already set
      */
-    public function test_published_at_not_overwritten(): void
+    public function test_released_at_not_overwritten(): void
     {
         $originalDate = Carbon::now()->subMonth();
 
         $job = Job::factory()->create([
             'status' => Job::STATUS_SUBMITTED,
-            'published_at' => $originalDate
+            'released_at' => $originalDate
         ]);
 
         $job->status = Job::STATUS_PROCESSED;
         $job->save();
 
         $job->refresh();
-        $this->assertEquals($originalDate->format('Y-m-d H:i:s'), $job->published_at->format('Y-m-d H:i:s'));
+        $this->assertEquals($originalDate->format('Y-m-d H:i:s'), $job->released_at->format('Y-m-d H:i:s'));
     }
 
     /**
@@ -299,7 +299,6 @@ class JobModelTest extends TestCase
     public function test_casts_configured(): void
     {
         $job = Job::factory()->create([
-            'submission_date' => Carbon::now(),
             'submission_data' => (object)['key' => 'value'],
             'activity' => (object)['event' => 'test'],
             'is_publishing' => true
@@ -307,7 +306,7 @@ class JobModelTest extends TestCase
 
         $job->refresh();
 
-        $this->assertInstanceOf(Carbon::class, $job->submission_date);
+        $this->assertInstanceOf(Carbon::class, $job->created_at);
         $this->assertIsObject($job->submission_data);
         $this->assertIsObject($job->activity);
         $this->assertTrue($job->is_publishing);

@@ -135,7 +135,7 @@ class SubmissionFileValidationTest extends TestCase
             'user_id' => 1,
             'submitter_id' => 1,
             'status' => \App\Models\Job::STATUS_DRAFT,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
         ]);
     }
 
@@ -593,7 +593,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),
         ]);
@@ -634,7 +634,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),
         ]);

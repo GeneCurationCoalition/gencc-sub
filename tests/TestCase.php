@@ -4,6 +4,7 @@ namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 
 abstract class TestCase extends BaseTestCase
 {
@@ -50,6 +51,21 @@ abstract class TestCase extends BaseTestCase
                 "This would destroy production data. " .
                 "Tests MUST use ':memory:' SQLite database."
             );
+        }
+
+        // Clear rate limiters to prevent 429 errors between test classes
+        // The rate limiter key format is "api:{user_id}" or "api:{ip}", so clear both
+        RateLimiter::clear('api');
+        RateLimiter::clear('api:127.0.0.1');
+        RateLimiter::clear('api:1'); // User ID 1 is commonly used in tests
+
+        // Also clear any cache-based rate limiters
+        if (app()->bound('cache')) {
+            try {
+                app('cache')->flush();
+            } catch (\Exception $e) {
+                // Ignore cache flush errors in tests
+            }
         }
     }
 }

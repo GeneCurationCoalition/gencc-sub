@@ -577,7 +577,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -587,7 +587,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => Gene::where('hgnc_id', 'HGNC:9673')->first()->id,
             'disease_id' => $diseaseId,
@@ -628,7 +628,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -642,7 +642,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -723,7 +723,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -737,7 +737,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -784,7 +784,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -798,7 +798,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -847,7 +847,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -861,7 +861,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -908,7 +908,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -931,7 +931,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease1->id,
@@ -947,7 +947,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease2->id,
