@@ -11,11 +11,11 @@
     // Compute header class based on job status
     const headerClass = computed(() => {
         if (props.job.status === 'draft') {
-            return 'bg-amber-600'; // Amber theme for Draft
+            return 'bg-amber-700'; // Amber theme for Draft
         } else if (props.job.status === 'submitted') {
-            return 'bg-blue-600'; // Blue theme for Submitted
+            return 'bg-blue-700'; // Blue theme for Submitted
         } else if (props.job.status === 'processed') {
-            return 'bg-green-600'; // Green theme for Processed
+            return 'bg-green-700'; // Green theme for Processed
         }
         return 'bg-sky-800'; // Default color for legacy statuses
     })
@@ -66,20 +66,20 @@
         <template #header>
             <div class="font-semibold text-4xl text-white leading-tight grid grid-cols-10">
                 <div class="col-span-1">
-                    Job ID:
+                    Job:
                 </div>
-                <div class="text-left col-span-7">
-                    <p v-if="job.friendly" class="font-black px-2 ml-3 text-xl inline-block align-bottom leading-4">
+                <div class="text-left col-span-7 pl-2">
+                    <p v-if="job.friendly" class="font-black text-2xl inline-block align-bottom leading-5">
                         {{ job.slug }}
                         <i v-if="job.is_publishing" class="pi pi-spin pi-spinner text-white ml-2" title="Publishing..."></i>
                         <br>
-                        <span class="text-base underline" @click="openDialog('friendly')">{{ job.friendly }}</span>
+                        <span class="text-sm underline font-normal" @click="openDialog('friendly')">{{ job.friendly }}</span>
                     </p>
-                    <p v-else class="font-black px-2 ml-3 text-xl inline-block align-bottom leading-4">
+                    <p v-else class="font-black text-2xl inline-block align-bottom leading-5">
                         {{ job.slug }}
                         <i v-if="job.is_publishing" class="pi pi-spin pi-spinner text-white ml-2" title="Publishing..."></i>
                         <br>
-                        <span class="text-base underline" @click="openDialog('friendly')">Add a Label</span>
+                        <span class="text-sm underline font-normal" @click="openDialog('friendly')">Add a Label</span>
                     </p>
                 </div>
                 <div class="text-right text-base col-span-2">

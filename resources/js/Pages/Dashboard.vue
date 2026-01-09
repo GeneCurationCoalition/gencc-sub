@@ -12,7 +12,15 @@ const props = defineProps(['total_jobs_processing', 'total_submissions_processin
                            'total_jobs_completed', 'total_submissions_unpublished',
                            'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
                            'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'has_submitter', 'submitter_curie',
-                           'total_unique_sids', 'published_sids_count', 'unpublished_sids_count', 'new_sids_count', 'pending_republish_sids_count', 'pending_unpublish_sids_count'])
+                           'total_unique_sids',
+                           // Section 1: Submissions Released
+                           'released_first_version_count', 'released_republish_count', 'released_unpublish_count', 'released_total',
+                           // Section 2: Submissions Awaiting Release
+                           'awaiting_first_version_count', 'awaiting_republish_count', 'awaiting_unpublish_count', 'awaiting_total',
+                           // Section 3: Submissions Archived
+                           'archived_first_version_unique', 'archived_republish_unique', 'archived_unpublish_unique',
+                           'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
+                           'archived_unique_total', 'archived_total'])
 
 const toast = useToast();
 const isSyncingClingen = ref(false);
@@ -113,7 +121,7 @@ onUnmounted(() => {
                     v-if="isClingenSubmitter"
                     label="GCI Sync Submissions"
                     icon="pi pi-sync"
-                    class="!bg-amber-500 hover:!bg-amber-600 !border-amber-500 hover:!border-amber-600 !text-white"
+                    severity="success"
                     :loading="isSyncingClingen"
                     @click="syncClingenSubmissions"
                     title="Run ClinGen GCI sync pipeline and download results"
@@ -132,8 +140,15 @@ onUnmounted(() => {
                                 :unprocessed_new_count="unprocessed_new_count" :unprocessed_republish_count="unprocessed_republish_count"
                                 :unprocessed_unpublish_count="unprocessed_unpublish_count" :unprocessed_error_count="unprocessed_error_count"
                                 :has_submitter="has_submitter"
-                                :total_unique_sids="total_unique_sids" :published_sids_count="published_sids_count" :unpublished_sids_count="unpublished_sids_count"
-                                :new_sids_count="new_sids_count" :pending_republish_sids_count="pending_republish_sids_count" :pending_unpublish_sids_count="pending_unpublish_sids_count" />
+                                :total_unique_sids="total_unique_sids"
+                                :released_first_version_count="released_first_version_count" :released_republish_count="released_republish_count"
+                                :released_unpublish_count="released_unpublish_count" :released_total="released_total"
+                                :awaiting_first_version_count="awaiting_first_version_count" :awaiting_republish_count="awaiting_republish_count"
+                                :awaiting_unpublish_count="awaiting_unpublish_count" :awaiting_total="awaiting_total"
+                                :archived_first_version_unique="archived_first_version_unique" :archived_republish_unique="archived_republish_unique"
+                                :archived_unpublish_unique="archived_unpublish_unique" :archived_first_version_total="archived_first_version_total"
+                                :archived_republish_total="archived_republish_total" :archived_unpublish_total="archived_unpublish_total"
+                                :archived_unique_total="archived_unique_total" :archived_total="archived_total" />
                 </div>
             </div>
         </div>

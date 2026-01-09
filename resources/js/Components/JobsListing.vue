@@ -64,6 +64,16 @@
         });
     });
 
+    // Transform jobs to include a sortable status_date field
+    // This allows PrimeVue DataTable to sort on the computed status date
+    const jobsWithStatusDate = computed(() => {
+        if (!props.jobs) return [];
+        return props.jobs.map(job => ({
+            ...job,
+            status_date: getStatusDateRaw(job)
+        }));
+    });
+
     // Check if there are any draft jobs with errors
     const hasDraftJobsWithErrors = computed(() => {
         if (!props.jobs || props.jobs.length === 0) return false;
@@ -91,7 +101,7 @@
         return rowFiltered.filter(job => {
             return (job.slug && job.slug.toLowerCase().includes(searchTerm)) ||
                    (job.friendly && job.friendly.toLowerCase().includes(searchTerm)) ||
-                   (job.submission_date && job.submission_date.toLowerCase().includes(searchTerm)) ||
+                   (getStatusDate(job) && getStatusDate(job).toLowerCase().includes(searchTerm)) ||
                    (job.status && displayStatusV2(job.status).toLowerCase().includes(searchTerm)) ||
                    (job.status && displayStatus(job.status).toLowerCase().includes(searchTerm));
         }).length;
@@ -124,7 +134,7 @@
         const statusMap = {
             'draft': 'Draft',
             'submitted': 'Submitted',
-            'processed': 'Processed'
+            'processed': 'Released'
         };
         return statusMap[status] || status;
     }
@@ -149,6 +159,55 @@
         return classMap[status] || '';
     }
 
+    // Get the status date based on job status
+    // Draft: created_at, Submitted: submitted_at, Processed: released_at
+    function getStatusDate(job) {
+        if (!job.status) return null;
+
+        let dateStr = null;
+        switch (job.status) {
+            case 'draft':
+                dateStr = job.created_at;
+                break;
+            case 'submitted':
+                dateStr = job.submitted_at || job.created_at;
+                break;
+            case 'processed':
+                dateStr = job.released_at || job.submitted_at || job.created_at;
+                break;
+            default:
+                dateStr = job.created_at;
+        }
+
+        if (!dateStr) return null;
+
+        // Return date format: YYYY-MM-DD
+        return new Date(Date.parse(dateStr)).toISOString().split('T')[0];
+    }
+
+    // Get raw status date for sorting (returns Date object or null)
+    function getStatusDateRaw(job) {
+        if (!job.status) return null;
+
+        let dateStr = null;
+        switch (job.status) {
+            case 'draft':
+                dateStr = job.created_at;
+                break;
+            case 'submitted':
+                dateStr = job.submitted_at || job.created_at;
+                break;
+            case 'processed':
+                dateStr = job.released_at || job.submitted_at || job.created_at;
+                break;
+            default:
+                dateStr = job.created_at;
+        }
+
+        if (!dateStr) return null;
+        return new Date(Date.parse(dateStr));
+    }
+
     // Check if a job is currently uploading submissions
     // This includes both queued (validated + is_processing) and actively uploading states
     function isJobUploading(job) {
@@ -162,7 +221,7 @@
     const filters = ref({
         global: { value: null, matchMode: FilterMatchMode.CONTAINS },
         ident: { value: null, matchMode: FilterMatchMode.CONTAINS },
-        submission_date: { value: null, matchMode: FilterMatchMode.CONTAINS }
+        status_date: { value: null, matchMode: FilterMatchMode.CONTAINS }
     })
 
     const displayOptions = ref([
@@ -229,11 +288,11 @@
 
             // Only include non-zero counts
             if (republishCount > 0) {
-                message += `• Restore ${republishCount} republished submission(s)\n`;
+                message += `• Delete ${republishCount} draft republish submission(s)\n`;
             }
 
             if (unpublishCount > 0) {
-                message += `• Restore ${unpublishCount} unpublished submission(s)\n`;
+                message += `• Delete ${unpublishCount} draft unpublish submission(s)\n`;
             }
 
             if (draftNewCount > 0) {
@@ -457,62 +516,61 @@ table tbody tr:hover {
         <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
 
             <!-- Show yellow success message when there are draft jobs ready for submission -->
-            <div v-if="hasEligibleJobs" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 my-2" role="alert">
+            <div v-if="hasEligibleJobs" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 my-2" role="alert">
                 <p class="font-bold">There are draft jobs ready to be submitted for processing. Only one draft job is allowed at any time.</p>
             </div>
 
             <!-- Show red error warning when there are draft jobs with errors -->
-            <div v-if="!hasEligibleJobs && hasDraftJobs && hasDraftJobsWithErrors" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 my-2" role="alert">
+            <div v-if="!hasEligibleJobs && hasDraftJobs && hasDraftJobsWithErrors" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 my-2" role="alert">
                 <p class="font-bold">Draft jobs contain submission errors that must be resolved before submission.</p>
             </div>
 
             <!-- Show yellow warning when there are draft jobs but none are ready (no submissions or other issues) -->
-            <div v-if="!hasEligibleJobs && hasDraftJobs && !hasDraftJobsWithErrors" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 my-2" role="alert">
+            <div v-if="!hasEligibleJobs && hasDraftJobs && !hasDraftJobsWithErrors" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 my-2" role="alert">
                 <p class="font-bold">Draft jobs exist but are not ready for submission. Draft jobs must have at least one submission with no errors to be submitted.</p>
             </div>
 
             <!-- Show yellow info message when there are no draft or submitted jobs at all -->
-            <div v-if="!hasDraftJobs && !hasSubmittedJobs" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 my-2" role="alert">
+            <div v-if="!hasDraftJobs && !hasSubmittedJobs" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 my-2" role="alert">
                 <p class="font-bold">Create a new job or upload submissions to get started.</p>
             </div>
 
             <!-- Show info message when there are submitted jobs awaiting processing -->
-            <div v-if="hasSubmittedJobs" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 my-2" role="alert">
+            <div v-if="hasSubmittedJobs" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 my-2" role="alert">
                 <p class="font-bold">The Submitted job will be processed during the next scheduled processing cycle. A new draft job cannot be created until the current submitted job is processed.</p>
             </div>
 
             <!-- Show block message when job creation is not allowed -->
-            <div v-if="blockMessage" class="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 my-2" role="alert">
+            <div v-if="blockMessage" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 my-2" role="alert">
                 <p class="font-bold">{{ blockMessage }}</p>
             </div>
 
             <ConfirmDialog group="headless">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-question text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0 whitespace-pre-line">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button label="Delete Job" @click="acceptCallback" class="bg-red-500 ring-red-500"></Button>
-                            <Button label="Cancel" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button label="Delete Job" @click="acceptCallback" class="!bg-red-700 !ring-red-700 hover:!bg-red-800"></Button>
+                            <Button label="Cancel" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
             </ConfirmDialog>
             <Toast />
 
-            <DataTable v-model:filters="filters" ref="dt" :value="jobs?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="submission_date" :sortOrder="-1" 
-                    :rowStyle="rowStyle" :globalFilterFields="['slug', 'friendly', 'submission_date', 'status']" tableStyle="min-width: 20rem; width: auto;">
+            <DataTable v-model:filters="filters" ref="dt" :value="jobsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="slug" :sortOrder="-1"
+                    :rowStyle="rowStyle" :globalFilterFields="['slug', 'friendly', 'status_date', 'status']" tableStyle="min-width: 20rem; width: auto;">
                 <template #header>
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <span class="font-bold">
                             <Button icon="pi pi-download"
                                     label="Download"
                                     @click="exportCSV($event)"
-                                    severity="info"
-                                    outlined
+                                    severity="success"
                                     raised
                                     :disabled="filteredJobsCount === 0" />
                             <span class="ml-3">Total of {{ jobs ? jobs.length : 0 }} jobs. </span>
@@ -556,9 +614,9 @@ table tbody tr:hover {
                         <div class="font-medium">{{ data.user?.name || 'N/A' }}</div>
                     </template>
                 </Column>
-                <Column field="submission_date" header="Submitted" sortable>
+                <Column field="status_date" header="Status Date" sortable>
                      <template #body="{ data }">
-                        {{ new Date(Date.parse(data.submission_date)).toISOString().split('T')[0] }}
+                        {{ getStatusDate(data) }}
                      </template>
                 </Column>
                 <Column field="status" header="Status" sortable>

@@ -16,11 +16,18 @@
                                 'total_jobs_completed', 'total_submissions_unpublished',
                                 'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
                                 'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'unprocessed_new_error_count', 'unprocessed_republish_error_count', 'unprocessed_unpublish_error_count', 'has_submitter',
-                                'total_unique_sids', 'published_sids_count', 'unpublished_sids_count', 'new_sids_count', 'pending_republish_sids_count', 'pending_unpublish_sids_count'])
+                                'total_unique_sids',
+                                // Section 1: Submissions Released
+                                'released_first_version_count', 'released_republish_count', 'released_unpublish_count', 'released_total',
+                                // Section 2: Submissions Awaiting Release
+                                'awaiting_first_version_count', 'awaiting_republish_count', 'awaiting_unpublish_count', 'awaiting_total',
+                                // Section 3: Submissions Archived
+                                'archived_first_version_unique', 'archived_republish_unique', 'archived_unpublish_unique',
+                                'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
+                                'archived_unique_total', 'archived_total'])
 
-    // Computed totals for the table
-    const processedTotal = computed(() => props.published_sids_count + props.unpublished_sids_count);
-    const unprocessedTotal = computed(() => props.new_sids_count + props.pending_republish_sids_count + props.pending_unpublish_sids_count);
+    // Visible in gencc-search = first version + republish (excludes hidden/unpublished)
+    const visibleInSearch = computed(() => props.released_first_version_count + props.released_republish_count);
 
     const seriesColors = ['#22c55e', '#3b82f6', '#ef4444'];
 
@@ -44,7 +51,7 @@
                 }
             },
             title: {
-                text: "Last 5 Processed Jobs"
+                text: "Last 5 Released Jobs"
             },
             plotOptions: {
                 bar: {
@@ -137,7 +144,7 @@
     };
 
     const series = [{
-            name: 'New',
+            name: 'New (v1)',
             data: props.submissions_new
     }, {
             name: 'Republished',
@@ -318,7 +325,7 @@
             <!--<ApplicationLogo class="block h-12 w-auto" /> -->
 
             <!-- API Token expiration warning - only show if 60 days or less -->
-            <div v-if="token_days <= 60" :class="token_days <= 30 ? 'bg-red-100 border-red-500 text-red-700' : 'bg-amber-100 border-amber-500 text-amber-700'" class="border-l-4 p-4 mb-2" role="alert">
+            <div v-if="token_days <= 60" :class="token_days <= 30 ? 'bg-red-100 border-red-700 text-red-800' : 'bg-amber-100 border-amber-700 text-amber-800'" class="border-l-4 p-4 mb-2" role="alert">
                 <p class="font-bold">API Token expires {{ token_expire_date }}
                 <span class="ml-4">({{ token_days }} days)</span>
                 </p>
@@ -331,46 +338,84 @@
                 <div class="">
                     <Fieldset legend="Submission Statistics">
                         <div class="m-0">
-                            <!-- Header row with total -->
+                            <!-- Header row with total unique SGCs -->
                             <div class="text-center mb-3">
                                 <span class="font-semibold">Total Unique SGCs:</span>
                                 <span class="text-xl font-bold text-blue-600 ml-2">{{ total_unique_sids }}</span>
                             </div>
-                            <!-- Table -->
-                            <table class="w-full border-collapse">
+
+                            <!-- Three-column table: Released | Awaiting | Archived -->
+                            <table class="w-full border-collapse text-sm">
                                 <thead>
                                     <tr class="border-b-2 border-gray-300">
-                                        <th class="text-left py-2 px-2 font-semibold text-green-700 w-1/2">Processed ({{ processedTotal }})</th>
-                                        <th class="text-left py-2 px-2 font-semibold text-amber-700 w-1/2">Unprocessed ({{ unprocessedTotal }})</th>
+                                        <th class="text-left py-2 px-2 font-semibold text-green-700">
+                                            Released ({{ released_total }})
+                                            <div class="text-xs font-normal text-gray-500">Visible: {{ visibleInSearch }}</div>
+                                        </th>
+                                        <th class="text-left py-2 px-2 font-semibold text-amber-700 border-l border-gray-200">
+                                            Awaiting ({{ awaiting_total }})
+                                        </th>
+                                        <th class="text-left py-2 px-2 font-semibold text-gray-600 border-l border-gray-200">
+                                            Archived ({{ archived_unique_total }})
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
+                                        <!-- Released Column -->
                                         <td class="py-1 px-2 align-top">
                                             <div class="space-y-1">
                                                 <div class="flex justify-between">
-                                                    <span class="text-gray-600">Published:</span>
-                                                    <span class="text-green-600 font-medium">{{ published_sids_count }}</span>
+                                                    <span class="text-gray-600">New (v1):</span>
+                                                    <span>{{ released_first_version_count }}</span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Republished:</span>
+                                                    <span>{{ released_republish_count }}</span>
                                                 </div>
                                                 <div class="flex justify-between">
                                                     <span class="text-gray-600">Unpublished:</span>
-                                                    <span class="text-red-500">{{ unpublished_sids_count }}</span>
+                                                    <span>{{ released_unpublish_count }}</span>
                                                 </div>
                                             </div>
                                         </td>
+                                        <!-- Awaiting Column -->
                                         <td class="py-1 px-2 align-top border-l border-gray-200">
                                             <div class="space-y-1">
                                                 <div class="flex justify-between">
-                                                    <span class="text-gray-600">New:</span>
-                                                    <span class="text-amber-600">{{ new_sids_count }}</span>
+                                                    <span class="text-gray-600">New (v1):</span>
+                                                    <span>{{ awaiting_first_version_count }}</span>
                                                 </div>
                                                 <div class="flex justify-between">
                                                     <span class="text-gray-600">Republish:</span>
-                                                    <span class="text-blue-600">{{ pending_republish_sids_count }}</span>
+                                                    <span>{{ awaiting_republish_count }}</span>
                                                 </div>
                                                 <div class="flex justify-between">
                                                     <span class="text-gray-600">Unpublish:</span>
-                                                    <span class="text-orange-500">{{ pending_unpublish_sids_count }}</span>
+                                                    <span>{{ awaiting_unpublish_count }}</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <!-- Archived Column -->
+                                        <td class="py-1 px-2 align-top border-l border-gray-200">
+                                            <div class="space-y-1">
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">New (v1):</span>
+                                                    <span>{{ archived_first_version_unique }}</span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Republished:</span>
+                                                    <span>
+                                                        {{ archived_republish_unique }}
+                                                        <span v-if="archived_republish_total !== archived_republish_unique" class="text-xs text-gray-400">({{ archived_republish_total }})</span>
+                                                    </span>
+                                                </div>
+                                                <div class="flex justify-between">
+                                                    <span class="text-gray-600">Unpublished:</span>
+                                                    <span>
+                                                        {{ archived_unpublish_unique }}
+                                                        <span v-if="archived_unpublish_total !== archived_unpublish_unique" class="text-xs text-gray-400">({{ archived_unpublish_total }})</span>
+                                                    </span>
                                                 </div>
                                             </div>
                                         </td>
@@ -404,7 +449,7 @@
                             <!-- Second Column: Counts -->
                             <div class="space-y-2">
                                 <div class="flex items-baseline gap-2">
-                                    <span class="font-semibold">New:</span>
+                                    <span class="font-semibold">New (v1):</span>
                                     <span>{{ unprocessed_job_status === 'submitted' ? active_new_count : unprocessed_new_count }}</span>
                                     <i v-if="unprocessed_new_count > 0 && unprocessed_new_error_count > 0" class="pi pi-exclamation-circle text-red-600 ml-1" v-tooltip.top="`${unprocessed_new_error_count} error(s)`"></i>
                                 </div>

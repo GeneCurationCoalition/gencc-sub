@@ -18,6 +18,7 @@
     import ChangeLocalKey from './ChangeLocalKey.vue';
     import MarkdownDisplay from './MarkdownDisplay.vue';
     import ConfirmDialog from 'primevue/confirmdialog';
+    import Tag from 'primevue/tag';
     import { useConfirm } from "primevue/useconfirm";
     import { useToast } from "primevue/usetoast";
 
@@ -30,7 +31,7 @@
     // Check if submission is editable
     // Read-only if:
     // - Published (status='published')
-    // - Draft unpublish (status='draft_unpublish') - user must restore first
+    // - Draft unpublish (status='draft_unpublish') - user must delete draft to keep published version
     // - Legacy: published (status=20) OR job not in processing/error status
     const isNotEditable = computed(() => {
         // V2 status checks
@@ -60,6 +61,20 @@
         }
 
         return false;
+    });
+
+    // Check if this is an archived version (superseded by a newer release)
+    // Archived versions are read-only and should have gray styling
+    // Uses is_archived computed attribute from backend (released status + is_live=false)
+    const isArchivedVersion = computed(() => {
+        return props.submission.is_archived === true;
+    });
+
+    // Check if this submission has a pending draft version
+    // This is true when is_live=true but is_most_recent=false
+    // (meaning there's a newer draft version waiting to be released)
+    const hasPendingDraftVersion = computed(() => {
+        return props.submission.is_live === true && props.submission.is_most_recent === false;
     });
 
     // set up some models for the shared dialog component
@@ -760,24 +775,20 @@
         });
     };
 
-    const requireCancelConfirmation = () => {
-        // Build message with origin job ID if available
-        let message = 'This will discard all your recent edits and restore the submission to its previously published state.';
-
-        if (props.submission.origin_job) {
-            message += ` The submission will be moved back to its origin job (${props.submission.origin_job.slug}).`;
-        } else {
-            message += ' The submission will be moved back to its origin job.';
-        }
+    const requireDeleteDraftConfirmation = () => {
+        // Build message based on submission status
+        const isRepublish = props.submission.status === 'draft_republish';
+        const actionType = isRepublish ? 'republish' : 'unpublish';
+        let message = `This will permanently delete this draft ${actionType} version. The original published submission will remain unchanged.`;
 
         confirm.require({
             group: 'headless',
-            header: 'Restore Submission?',
+            header: 'Delete Draft?',
             message: message,
-            acceptLabel: 'Restore',
+            acceptLabel: 'Delete',
             rejectLabel: 'Cancel',
             accept: () => {
-                restoreSubmission();
+                deleteDraftSubmission();
             },
             reject: () => {
                 //
@@ -785,7 +796,7 @@
         });
     };
 
-    async function restoreSubmission() {
+    async function deleteDraftSubmission() {
         try {
             const response = await axios.post('/api/submissions/' + props.submission.sid + '/cancel', {}, {
                 headers: {
@@ -794,14 +805,11 @@
             });
 
             if (response.data.status_code == 200) {
-                // Show success message
-                toast.add({ severity: 'success', summary: 'Submission Restored', detail: 'Changes discarded and submission restored', life: 3000 });
-
-                // Redirect to the restored job's view
+                // Redirect to the job's view
                 const jobIdent = response.data.job_ident || props.submission.job.ident;
                 router.visit('/jobs/' + jobIdent);
             } else {
-                toast.add({ severity: 'error', summary: 'Error', detail: response.data.message || 'Failed to restore submission', life: 5000 });
+                toast.add({ severity: 'error', summary: 'Error', detail: response.data.message || 'Failed to delete draft', life: 5000 });
             }
         } catch (error) {
             console.error(error);
@@ -901,6 +909,90 @@
         return 'DEPRECATED: This disease term is deprecated';
     }
 
+    // V2 status display for submissions
+    function displayStatusV2(status) {
+        const statusMap = {
+            'draft_new': 'New',
+            'submitted_new': 'New',
+            'published': 'Published',
+            'draft_republish': 'Republish',
+            'submitted_republish': 'Republish',
+            'draft_unpublish': 'Unpublish',
+            'submitted_unpublish': 'Unpublish',
+            'unpublished': 'Unpublished'
+        };
+        return statusMap[status] || status;
+    }
+
+    // Get severity for status badge
+    function getStatusSeverity(status) {
+        const severityMap = {
+            'draft_new': 'warning',
+            'submitted_new': 'info',
+            'published': 'success',
+            'draft_republish': 'warning',
+            'submitted_republish': 'info',
+            'draft_unpublish': 'amber',
+            'submitted_unpublish': 'orange',
+            'unpublished': 'danger'
+        };
+        return severityMap[status] || 'secondary';
+    }
+
+    // Get custom CSS class for status badges
+    function getStatusClass(status, isMostRecent = true) {
+        if (!isMostRecent && (status === 'published' || status === 'unpublished')) {
+            return 'status-not-current';
+        }
+
+        const classMap = {
+            'draft_new': 'status-draft-new',
+            'submitted_new': 'status-submitted-new',
+            'published': 'status-published',
+            'draft_republish': 'status-draft-republish',
+            'submitted_republish': 'status-submitted-republish',
+            'draft_unpublish': 'status-draft-unpublish',
+            'submitted_unpublish': 'status-submitted-unpublish',
+            'unpublished': 'status-unpublished'
+        };
+        return classMap[status] || '';
+    }
+
+    // Get the status date based on submission status
+    function getStatusDate(submission) {
+        if (!submission.status) return submission.created_at;
+
+        let dateStr = null;
+        switch (submission.status) {
+            case 'draft_new':
+            case 'draft_republish':
+            case 'draft_unpublish':
+                dateStr = submission.created_at;
+                break;
+            case 'submitted_new':
+            case 'submitted_republish':
+            case 'submitted_unpublish':
+                dateStr = submission.submitted_at || submission.created_at;
+                break;
+            case 'published':
+                dateStr = submission.released_at || submission.submitted_at || submission.created_at;
+                break;
+            case 'unpublished':
+                dateStr = submission.unpublished_at || submission.released_at || submission.submitted_at || submission.created_at;
+                break;
+            default:
+                dateStr = submission.created_at;
+        }
+
+        return dateStr;
+    }
+
+    // Format date as YYYY-MM-DD
+    function formatDateTimestamp(dateStr) {
+        if (!dateStr) return '';
+        const date = new Date(Date.parse(dateStr));
+        return date.toISOString().split('T')[0];
+    }
 
 console.log(props.submission)
 </script>
@@ -910,7 +1002,7 @@ console.log(props.submission)
         <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
 
             <!-- header -->
-            <div v-if="hasAnyErrors()" class="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mt-2" role="alert">
+            <div v-if="hasAnyErrors()" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">This submission has errors</p>
                 <p>
                     Fields with errors are highlighted below in red.  Click on the field edit button to correct.
@@ -919,7 +1011,7 @@ console.log(props.submission)
                 </p>
             </div>
             <!-- Unpublished duplicate warning banner -->
-            <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-4 mt-2" role="alert">
+            <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold flex items-center gap-2">
                     <i class="pi pi-info-circle"></i>
                     Unpublished Duplicate Exists
@@ -936,50 +1028,67 @@ console.log(props.submission)
                     Consider republishing the existing unpublished submission instead of creating a new one.
                 </p>
             </div>
-            <div v-if="hasSubmittedJob && submission.status === 'published'" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mt-2 mb-2" role="alert">
+            <!-- Archived version banner - shown before all other status banners -->
+            <div v-if="isArchivedVersion" class="bg-gray-100 border-l-4 border-gray-700 text-gray-800 p-4 mt-2 mb-2" role="alert">
+                <p class="font-bold flex items-center gap-2">
+                    <i class="pi pi-history"></i>
+                    Archived Version (Read Only)
+                </p>
+                <p class="mt-1">
+                    This version (Version {{ submission.version_number || 1 }}) has been superseded by a newer release.
+                    It is preserved for historical reference. No actions can be performed on archived versions.
+                </p>
+            </div>
+            <div v-if="hasSubmittedJob && submission.status === 'published' && !isArchivedVersion" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mt-2 mb-2" role="alert">
                 <p class="font-bold">A submitted job exists.</p>
                 <p>
                     The submitted job is awaiting processing. This published submission cannot be edited or unpublished until the current job is processed.
                 </p>
             </div>
-            <div v-if="(submission.status === 'published')" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'published') && !isArchivedVersion" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Submission has been Published.
-                    <span v-if="!hasSubmittedJob" class="float-right">
+                    <span v-if="hasPendingDraftVersion" class="float-right text-sm font-normal text-green-700">
+                        <i class="pi pi-info-circle mr-1"></i>A draft version is pending
+                    </span>
+                    <span v-else-if="!hasSubmittedJob" class="float-right">
                         <Button @click="requireConfirmation()" icon="pi pi-refresh" severity="secondary" text raised rounded v-tooltip.top="'Republish'" class="mr-2"></Button>
                         <Button @click="requireUnpublishConfirmation()" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
                     </span>
                 </p>
             </div>
-            <div v-if="(submission.status === 'submitted_new')" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'submitted_new')" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
                 <p class="font-bold">New submission has been Submitted.</p>
             </div>
-            <div v-if="(submission.status === 'submitted_republish')" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'submitted_republish')" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Republished submission has been Submitted.</p>
             </div>
-            <div v-if="(submission.status === 'submitted_unpublish')" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'submitted_unpublish')" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Unpublish submission has been Submitted.</p>
             </div>
-            <div v-if="(submission.status === 'draft_republish')" class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'draft_republish')" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Draft Submission (Republishing).
-                    <Button label="Restore" severity="warning" class="float-right align-middle ml-2" @click="requireCancelConfirmation()"/>
-                    <span class="float-right text-sm font-normal pt-2">Make edits below or restore to previous state.</span>
+                    <Button icon="pi pi-trash" severity="danger" class="float-right align-middle ml-2" @click="requireDeleteDraftConfirmation()" v-tooltip.top="'Delete draft'"/>
+                    <span class="float-right text-sm font-normal pt-2">Make edits below or delete this draft.</span>
                 </p>
             </div>
-            <div v-if="(submission.status === 'draft_unpublish')" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'draft_unpublish')" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Draft Submission (Unpublishing) - Read Only.
-                    <Button label="Restore" severity="warning" class="float-right align-middle ml-2" @click="requireCancelConfirmation()"/>
-                    <span class="float-right text-sm font-normal pt-2">This submission is read-only. Restore to published state to make edits.</span>
+                    <Button icon="pi pi-trash" severity="danger" class="float-right align-middle ml-2" @click="requireDeleteDraftConfirmation()" v-tooltip.top="'Delete draft'"/>
+                    <span class="float-right text-sm font-normal pt-2">This submission is read-only. Delete this draft to cancel the unpublish.</span>
                 </p>
             </div>
-            <div v-if="hasSubmittedJob && submission.status === 'unpublished'" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mt-2 mb-2" role="alert">
+            <div v-if="hasSubmittedJob && submission.status === 'unpublished' && !isArchivedVersion" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mt-2 mb-2" role="alert">
                 <p class="font-bold">A submitted job exists.</p>
                 <p>
                     The submitted job is awaiting processing. This unpublished submission cannot be republished until the current job is processed.
                 </p>
             </div>
-            <div v-if="(submission.status === 'unpublished')" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-2" role="alert">
+            <div v-if="(submission.status === 'unpublished') && !isArchivedVersion" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Submission has been Unpublished.
-                    <span v-if="!hasSubmittedJob" class="float-right">
+                    <span v-if="hasPendingDraftVersion" class="float-right text-sm font-normal text-red-700">
+                        <i class="pi pi-info-circle mr-1"></i>A draft version is pending
+                    </span>
+                    <span v-else-if="!hasSubmittedJob" class="float-right">
                         <Button @click="requireRepublishConfirmation()" icon="pi pi-refresh" severity="secondary" text raised rounded v-tooltip.top="'Republish'"></Button>
                     </span>
                 </p>
@@ -988,18 +1097,18 @@ console.log(props.submission)
             <ConfirmDialog group="headless">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <!-- Red theme for Unpublish, Blue theme for Edit/Republish/Restore -->
-                        <div v-if="message.header && message.header.includes('Unpublish')" class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <!-- Red theme for Unpublish and Delete, Blue theme for Edit/Republish -->
+                        <div v-if="message.header && (message.header.includes('Unpublish') || message.header.includes('Delete'))" class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-exclamation-triangle text-5xl"></i>
                         </div>
-                        <div v-else class="rounded-full bg-blue-500 dark:bg-blue-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div v-else class="rounded-full bg-blue-700 dark:bg-blue-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-pencil text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0">{{ message.message }}</p>
                         <div class="flex items-center gap-2 mt-4">
-                            <Button v-if="message.header && message.header.includes('Unpublish')" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-red-500 !ring-red-500 hover:!bg-red-600"></Button>
-                            <Button v-else :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-blue-500 !ring-blue-500 hover:!bg-blue-600"></Button>
+                            <Button v-if="message.header && (message.header.includes('Unpublish') || message.header.includes('Delete'))" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-red-700 !ring-red-700 hover:!bg-red-800"></Button>
+                            <Button v-else :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-blue-700 !ring-blue-700 hover:!bg-blue-800"></Button>
                             <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
@@ -1011,19 +1120,7 @@ console.log(props.submission)
                 <div class="col-span-12">
                     <div class="grid grid-cols-12 gap-0">
 
-                        <div class="col-span-2 pt-3 text-right pr-3">Submission ID:</div>
-                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <div class="font-normal font-bold flex items-center gap-2">
-                                {{ submission.display_id || submission.sid }}
-                                <i v-if="submission.submission_errors && Object.keys(submission.submission_errors).length > 0"
-                                   class="pi pi-exclamation-triangle text-red-500 text-xl"
-                                   title="Submission has errors"></i>
-                            </div>
-                        </div>
-                        <div class="col-span-2 pt-3 text-right pr-3">Submitted Date:</div>
-                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <div class="font-normal font-bold">{{ new Date(Date.parse(submission.submission_date)).toISOString().split('T')[0] }}</div>
-                        </div>
+                        <!-- Row 1: Submitter, Submitted by -->
                         <div class="col-span-2 pt-3 text-right pr-3">Submitter:</div>
                         <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
                             <div class="font-normal font-bold">{{ submission.submitter.name }}</div>
@@ -1035,17 +1132,14 @@ console.log(props.submission)
                             <div class="text-xs">{{ submission.user.email }}</div>
                         </div>
 
-                        <div class="col-span-2 pt-3 text-right pr-3">Job ID:</div>
+                        <!-- Row 2: Status Date, Status -->
+                        <div class="col-span-2 pt-3 text-right pr-3">Status Date:</div>
                         <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <a :href="'/jobs/' + submission.job.ident" class="font-normal font-bold text-blue-600 hover:text-blue-800 hover:underline">{{ submission.job.slug }}</a>
+                            <div class="font-normal font-bold">{{ formatDateTimestamp(getStatusDate(submission)) }}</div>
                         </div>
-
-                        <div v-if="submission.last_edited_by_user" class="col-span-2 pt-3 text-right pr-3">Last edited by:</div>
-                        <div v-if="submission.last_edited_by_user" class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <div v-if="submission.last_edited_by_admin" class="font-normal font-bold">
-                                GenCC Admin Team
-                            </div>
-                            <div v-else class="font-normal font-bold">{{ submission.last_edited_by_user.name }}</div>
+                        <div class="col-span-2 pt-3 text-right pr-3">Status:</div>
+                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
+                            <Tag v-if="submission.status" :value="displayStatusV2(submission.status)" :severity="getStatusSeverity(submission.status)" :class="['status-tag', getStatusClass(submission.status, submission.is_most_recent !== false)]" />
                         </div>
 
                         <hr class="col-span-12 my-4" />
@@ -1114,7 +1208,7 @@ console.log(props.submission)
                                         {{ submission.disease.curie }}
                                     </a>
                                     <span v-else>{{ !submission.disease || submission.disease?.curie == "MONDO:0000001" ? '-' : submission.disease?.curie }}</span>
-                                    <span v-if="submission.disease?.status === 8" class="text-orange-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)">⚠</span>
+                                    <span v-if="submission.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)">⚠</span>
                                 </div>
                             </div>
                             <!-- Secondary Display: Show original disease if different from MONDO -->
@@ -1131,7 +1225,7 @@ console.log(props.submission)
                                         {{ submission.original_disease.curie }}
                                     </a>
                                     <span v-else>{{ submission.original_disease.curie }}</span>
-                                    <span v-if="submission.original_disease.status === 8" class="text-orange-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)">⚠</span>
+                                    <span v-if="submission.original_disease.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)">⚠</span>
                                 </div>
                             </div>
                         </div>

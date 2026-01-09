@@ -30,6 +30,16 @@
         return Object.values(props.favorites);
     })
 
+    // Transform submissions to include a sortable status_date field
+    // This allows PrimeVue DataTable to sort on the computed status date
+    const submissionsWithStatusDate = computed(() => {
+        if (!props.submissions) return [];
+        return props.submissions.map(submission => ({
+            ...submission,
+            status_date: getStatusDateRaw(submission)
+        }));
+    })
+
     const confirm = useConfirm();
     const toast = useToast();
 
@@ -40,7 +50,7 @@
         'gene.symbol': { value: null, matchMode: FilterMatchMode.CONTAINS },
         'disease.name': { value: null, matchMode: FilterMatchMode.CONTAINS },
         'inheritance.name': { value: null, matchMode: FilterMatchMode.CONTAINS },
-        submission_date: { value: null, matchMode: FilterMatchMode.CONTAINS }
+        created_at: { value: null, matchMode: FilterMatchMode.CONTAINS }
     })
 
     const options = [
@@ -89,43 +99,92 @@
     const selectedSubmissions = ref([]);
     const isLoadingBulkAction = ref(false); // Loading state for bulk action reload
 
+    // Bulk action progress tracking
+    const bulkActionProgress = ref({
+        current: 0,
+        total: 0,
+        action: '',
+        successCount: 0,
+        errorCount: 0
+    });
+
+    // Cancellation flag for bulk operations
+    const bulkActionCancelled = ref(false);
+
+    // Cancel bulk action handler
+    function cancelBulkAction() {
+        bulkActionCancelled.value = true;
+    }
+
     // Computed properties for bulk actions
-    const bulkActionAvailable = computed(() => {
-        if (selectedSubmissions.value.length === 0) return null;
+    // These determine which batch operations are available based on selected submissions
 
-        // Get unique statuses from selected submissions
-        const statuses = [...new Set(selectedSubmissions.value.map(s => s.status))];
+    // Delete: Only available when ALL selected are draft submissions (draft_new, draft_republish, draft_unpublish)
+    const bulkDeleteAvailable = computed(() => {
+        if (selectedSubmissions.value.length === 0) return false;
 
-        // Special case: draft_republish and draft_unpublish can both be restored together
-        const allDraftForRestore = statuses.every(s => s === 'draft_republish' || s === 'draft_unpublish');
-        if (allDraftForRestore) {
-            return { action: 'restore', status: 'draft' }; // Can restore both types
-        }
+        const draftStatuses = ['draft_new', 'draft_republish', 'draft_unpublish'];
+        return selectedSubmissions.value.every(s => draftStatuses.includes(s.status));
+    });
 
-        // For all other cases, require exact same status
-        if (statuses.length !== 1) return null;
+    // Unpublish: Only available when ALL selected are live published versions with no pending draft
+    // is_live=true means the submission is currently publicly accessible
+    // is_most_recent must be true (no pending draft version)
+    // Cannot unpublish if there's a submitted job pending
+    const bulkUnpublishAvailable = computed(() => {
+        if (selectedSubmissions.value.length === 0) return false;
+        if (props.hasSubmittedJob) return false;
 
-        const status = statuses[0];
+        return selectedSubmissions.value.every(s =>
+            s.status === 'published' && s.is_live === true && s.is_most_recent !== false
+        );
+    });
 
-        // Determine available action based on status
-        if (status === 'published' && !props.hasSubmittedJob) {
-            return { action: 'multiple', status: 'published' }; // Can republish or unpublish
-        } else if (status === 'draft_new') {
-            return { action: 'delete', status: status }; // Can delete
-        } else if (status === 'unpublished') {
-            return { action: 'republish', status: status }; // Can republish
-        }
+    // Republish: Only available when ALL selected are live published OR unpublished versions with no pending draft
+    // Live published can be republished, unpublished (which are always is_most_recent but not is_live) can also be republished
+    // Both must also have is_most_recent=true (no pending draft version)
+    // Cannot republish if there's a submitted job pending
+    const bulkRepublishAvailable = computed(() => {
+        if (selectedSubmissions.value.length === 0) return false;
+        if (props.hasSubmittedJob) return false;
 
-        return null;
+        return selectedSubmissions.value.every(s => {
+            // Published submissions must be live (not archived) AND most recent (no pending draft)
+            if (s.status === 'published') {
+                return s.is_live === true && s.is_most_recent !== false;
+            }
+            // Unpublished submissions can be republished if they are the most recent version (no pending draft)
+            if (s.status === 'unpublished') {
+                return s.is_most_recent !== false;
+            }
+            return false;
+        });
+    });
+
+    // Favorite: Only available when ALL selected are NOT already favorited
+    // Works for both current and historical submissions
+    const bulkFavoriteAvailable = computed(() => {
+        if (selectedSubmissions.value.length === 0) return false;
+
+        const noneFavorited = selectedSubmissions.value.every(s => !favorites.value.includes(s.ident));
+        return noneFavorited;
+    });
+
+    // Unfavorite: Only available when ALL selected ARE already favorited
+    // Works for both current and historical submissions
+    const bulkUnfavoriteAvailable = computed(() => {
+        if (selectedSubmissions.value.length === 0) return false;
+
+        const allFavorited = selectedSubmissions.value.every(s => favorites.value.includes(s.ident));
+        return allFavorited;
     });
 
     // Determine if we should show "Favorite" or "Unfavorite" for bulk action
-    // If ALL selected submissions are already favorited, show "Unfavorite", otherwise "Favorite"
+    // Returns null if neither action is available (mixed favorite state)
     const bulkFavoriteAction = computed(() => {
-        if (selectedSubmissions.value.length === 0) return null;
-
-        const allFavorited = selectedSubmissions.value.every(s => favorites.value.includes(s.ident));
-        return allFavorited ? 'unfavorite' : 'favorite';
+        if (bulkFavoriteAvailable.value) return 'favorite';
+        if (bulkUnfavoriteAvailable.value) return 'unfavorite';
+        return null;
     });
 
     // Calculate filtered submission count
@@ -143,7 +202,7 @@
 
         // Apply global filter manually to match PrimeVue's behavior
         const searchTerm = filters.value.global.value.toLowerCase();
-        const globalFilterFields = ['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date'];
+        const globalFilterFields = ['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'created_at'];
 
         return rowFiltered.filter(item => {
             return globalFilterFields.some(field => {
@@ -182,9 +241,9 @@
     });
 
     function removeSubmission(sid) {
-    
+
         if (sid != '') {
-                
+
             axios.delete('/api/submissions/' + sid)
                 .then(response => {
 
@@ -192,7 +251,6 @@
                     {
                         // reload the server data
                         router.reload();
-                        toast.add({ severity: 'success', summary: 'Confirmed', detail: 'Submission Removed', life: 3000 });
                         return true;
                     }
                     else
@@ -202,7 +260,7 @@
                 })
                 .catch(error => {
                     console.error(error);
-                });  
+                });
         }
 
         return false;
@@ -269,66 +327,6 @@
         });
     };
 
-    const requireCancelUpdateConfirmation = (sid) => {
-        // Find the submission to get original job info
-        const submission = props.submissions.find(s => s.sid === sid);
-
-        // Build message with origin job ID if available
-        let message = 'This will discard all your recent edits and restore the submission to its previously published state.';
-
-        if (submission?.origin_job) {
-            message += ` The submission will be moved back to its origin job (${submission.origin_job.slug}).`;
-        } else {
-            message += ' The submission will be moved back to its origin job.';
-        }
-
-        confirm.require({
-            group: 'headless',
-            header: 'Restore Submission?',
-            message: message,
-            acceptLabel: 'Restore',
-            rejectLabel: 'Cancel',
-            accept: () => {
-                cancelUpdateSubmission(sid);
-            },
-            reject: () => {
-                //
-            }
-        });
-    };
-
-    function cancelUpdateSubmission(sid) {
-        if (sid != '') {
-            axios.post('/api/submissions/' + sid, {
-                type: 'cancel_update',
-                value: true
-            }, {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
-            })
-            .then(response => {
-                if ( response.data.hasOwnProperty('status_code') &&  response.data.status_code == 200 )
-                {
-                    router.reload();
-                    toast.add({ severity: 'success', summary: 'Updates Canceled', detail: 'Submission restored to ' + response.data.origin_job, life: 5000 });
-                    return true;
-                }
-                else
-                {
-                    console.log(response);
-                    toast.add({ severity: 'error', summary: 'Error', detail: response.data.message, life: 3000 });
-                }
-            })
-            .catch(error => {
-                console.error(error);
-                toast.add({ severity: 'error', summary: 'Error', detail: 'Failed to cancel updates', life: 3000 });
-            });
-        }
-
-        return false;
-    }
-
     // V2 State Transition Functions
     function republishSubmission(sid) {
         if (sid != '') {
@@ -387,7 +385,6 @@
             .then(response => {
                 if (response.data.hasOwnProperty('status_code') && response.data.status_code == 200) {
                     router.reload();
-                    toast.add({ severity: 'success', summary: 'Operation Canceled', detail: 'Submission restored to ' + response.data.status, life: 3000 });
                     return true;
                 }
                 else {
@@ -435,24 +432,19 @@
         });
     };
 
-    const requireCancelConfirmation = (sid) => {
-        // Find the submission to get original job info
+    const requireDeleteDraftConfirmation = (sid) => {
+        // Find the submission to determine type
         const submission = props.submissions.find(s => s.sid === sid);
+        const isRepublish = submission?.status === 'draft_republish';
+        const actionType = isRepublish ? 'republish' : 'unpublish';
 
-        // Build message with origin job ID if available
-        let message = 'This will discard all your recent edits and restore the submission to its previously published state.';
-
-        if (submission?.origin_job) {
-            message += ` The submission will be moved back to its origin job (${submission.origin_job.slug}).`;
-        } else {
-            message += ' The submission will be moved back to its origin job.';
-        }
+        let message = `This will permanently delete this draft ${actionType} version. The original published submission will remain unchanged.`;
 
         confirm.require({
             group: 'headless',
-            header: 'Restore Submission?',
+            header: 'Delete Draft?',
             message: message,
-            acceptLabel: 'Restore',
+            acceptLabel: 'Delete',
             rejectLabel: 'Cancel',
             accept: () => {
                 cancelSubmission(sid);
@@ -465,15 +457,16 @@
 
     // Bulk Action Functions
     function bulkRepublishSubmissions() {
-        const sids = selectedSubmissions.value.map(s => s.sid);
+        // Use idents to target specific versions of submissions
+        const idents = selectedSubmissions.value.map(s => s.ident);
         confirm.require({
             group: 'headless',
             header: 'Edit Multiple Submissions?',
-            message: `This will create draft copies for editing ${sids.length} submission(s). The current published versions will remain visible until changes are submitted and published.`,
+            message: `This will create draft copies for editing ${idents.length} submission(s). The current published versions will remain visible until changes are submitted and published.`,
             acceptLabel: 'Continue',
             rejectLabel: 'Cancel',
             accept: () => {
-                executeBulkAction('republish', sids);
+                executeBulkAction('republish', idents, true);
             },
             reject: () => {
                 //
@@ -482,32 +475,16 @@
     }
 
     function bulkUnpublishSubmissions() {
-        const sids = selectedSubmissions.value.map(s => s.sid);
+        // Use idents to target specific versions of submissions
+        const idents = selectedSubmissions.value.map(s => s.ident);
         confirm.require({
             group: 'headless',
             header: 'Unpublish Multiple Submissions?',
-            message: `${sids.length} submission(s) will be added to a draft job as requests to remove them from public view. The submissions will be removed once the job is submitted and processed.`,
+            message: `${idents.length} submission(s) will be added to a draft job as requests to remove them from public view. The submissions will be removed once the job is submitted and processed.`,
             acceptLabel: 'Unpublish',
             rejectLabel: 'Cancel',
             accept: () => {
-                executeBulkAction('unpublish', sids);
-            },
-            reject: () => {
-                //
-            }
-        });
-    }
-
-    function bulkRestoreSubmissions() {
-        const sids = selectedSubmissions.value.map(s => s.sid);
-        confirm.require({
-            group: 'headless',
-            header: 'Restore Multiple Submissions?',
-            message: `This will discard all recent edits and restore ${sids.length} submission(s) to their previously published state.`,
-            acceptLabel: 'Restore',
-            rejectLabel: 'Cancel',
-            accept: () => {
-                executeBulkAction('restore', sids);
+                executeBulkAction('unpublish', idents, true);
             },
             reject: () => {
                 //
@@ -516,15 +493,18 @@
     }
 
     function bulkDeleteSubmissions() {
-        const sids = selectedSubmissions.value.map(s => s.sid);
+        // Use idents instead of sids to identify specific versions for deletion
+        // This ensures we delete the exact version selected (e.g., draft_republish)
+        // rather than finding a different version with the same sid
+        const idents = selectedSubmissions.value.map(s => s.ident);
         confirm.require({
             group: 'headless',
             header: 'Delete Multiple Submissions?',
-            message: `Are you sure you want to delete ${sids.length} submission(s)?`,
+            message: `Are you sure you want to delete ${idents.length} submission(s)?`,
             acceptLabel: 'Delete',
             rejectLabel: 'Cancel',
             accept: () => {
-                executeBulkAction('delete', sids);
+                executeBulkAction('delete', idents, true);
             },
             reject: () => {
                 //
@@ -534,14 +514,15 @@
 
     function bulkToggleFavorites() {
         const action = bulkFavoriteAction.value; // 'favorite' or 'unfavorite'
-        const sids = selectedSubmissions.value.map(s => s.sid);
+        // Use idents to target specific versions of submissions
+        const idents = selectedSubmissions.value.map(s => s.ident);
 
-        console.log('bulkToggleFavorites called', { action, count: sids.length, sids });
+        console.log('bulkToggleFavorites called', { action, count: idents.length, idents });
 
         // Show confirmation dialog
         confirm.require({
             group: 'headless',
-            message: `Are you sure you want to ${action} ${sids.length} submission(s)?`,
+            message: `Are you sure you want to ${action} ${idents.length} submission(s)?`,
             header: `Confirm ${action === 'favorite' ? 'Favorite' : 'Unfavorite'}`,
             icon: 'pi pi-exclamation-triangle',
             rejectClass: 'p-button-secondary p-button-outlined',
@@ -550,70 +531,99 @@
             accept: async () => {
                 console.log('Confirm accept callback triggered');
 
-                // Show loading overlay only if operation takes longer than 2 seconds
-                const loadingTimeout = setTimeout(() => {
+                // Show loading overlay for large operations
+                const isLargeOperation = idents.length > 50;
+                if (isLargeOperation) {
                     isLoadingBulkAction.value = true;
-                }, 2000);
+                } else {
+                    // Show loading overlay only if operation takes longer than 2 seconds
+                    const loadingTimeout = setTimeout(() => {
+                        isLoadingBulkAction.value = true;
+                    }, 2000);
+                    window.bulkActionLoadingTimeout = loadingTimeout;
+                }
 
-                window.bulkActionLoadingTimeout = loadingTimeout;
+                console.log('Starting bulk favorites API call for', idents.length, 'submissions');
 
-                console.log('Starting API calls for', sids.length, 'submissions');
-
-                // Call the individual favorite endpoint for each submission
-                const promises = sids.map(sid =>
-                    axios.post(`/api/submissions/${sid}`, {
-                        type: 'favorites',
-                        value: action === 'favorite' ? 'true' : 'false'
+                try {
+                    // Use the new bulk favorites endpoint - single request for all submissions
+                    const response = await axios.post('/api/submissions/bulk-favorites', {
+                        action: action,
+                        idents: idents
                     }, {
                         headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded'
+                            'Content-Type': 'application/json'
                         }
-                    }).catch(err => ({ error: true, sid, message: err.message }))
-                );
-
-                const results = await Promise.all(promises);
-
-                // Count successes and failures
-                const failures = results.filter(r => r && r.error);
-                const successes = results.length - failures.length;
-
-                console.log(`Completed: ${successes} succeeded, ${failures.length} failed`);
-
-                // Reload only the favorites prop
-                selectedSubmissions.value = []; // Clear selection
-                router.reload({
-                    only: ['favorites'],
-                    preserveScroll: true
-                });
-
-                // Show appropriate message
-                if (failures.length === 0) {
-                    toast.add({
-                        severity: 'success',
-                        summary: 'Success',
-                        detail: `${successes} submission(s) ${action === 'favorite' ? 'favorited' : 'unfavorited'}`,
-                        life: 3000
                     });
-                } else if (successes > 0) {
-                    toast.add({
-                        severity: 'warn',
-                        summary: 'Partially Complete',
-                        detail: `${successes} submission(s) updated, ${failures.length} failed`,
-                        life: 5000
+
+                    console.log('Bulk favorites response:', response.data);
+
+                    // Clear loading timeout if it was set
+                    if (window.bulkActionLoadingTimeout) {
+                        clearTimeout(window.bulkActionLoadingTimeout);
+                    }
+                    isLoadingBulkAction.value = false;
+
+                    // Reload only the favorites prop
+                    selectedSubmissions.value = []; // Clear selection
+                    router.reload({
+                        only: ['favorites'],
+                        preserveScroll: true
                     });
-                } else {
+
+                    // Check response and show appropriate message
+                    if (response.data.success === 'true') {
+                        toast.add({
+                            severity: 'success',
+                            summary: 'Success',
+                            detail: `${response.data.success_count} submission(s) ${action === 'favorite' ? 'favorited' : 'unfavorited'}`,
+                            life: 3000
+                        });
+                    } else if (response.data.success === 'partial') {
+                        toast.add({
+                            severity: 'warn',
+                            summary: 'Partially Complete',
+                            detail: `${response.data.success_count} submission(s) updated, ${response.data.error_count} not found`,
+                            life: 5000
+                        });
+                    } else {
+                        toast.add({
+                            severity: 'error',
+                            summary: 'Error',
+                            detail: response.data.message || 'Failed to update favorites',
+                            life: 5000
+                        });
+                    }
+                } catch (err) {
+                    console.error('Bulk favorites error:', err);
+
+                    // Clear loading timeout if it was set
+                    if (window.bulkActionLoadingTimeout) {
+                        clearTimeout(window.bulkActionLoadingTimeout);
+                    }
+                    isLoadingBulkAction.value = false;
+
                     toast.add({
                         severity: 'error',
                         summary: 'Error',
-                        detail: 'Failed to update favorites',
-                        life: 3000
+                        detail: `Failed to update favorites: ${err.message}`,
+                        life: 5000
                     });
                 }
             }
         });
     }
 
-    async function executeBulkAction(action, sids) {
+    async function executeBulkAction(action, ids, useIdents = false) {
+        const BATCH_SIZE = 50; // Process in batches for progress tracking
+        const isLargeOperation = ids.length > BATCH_SIZE;
+
+        // For large republish/unpublish operations, process in batches with progress
+        if (isLargeOperation && (action === 'republish' || action === 'unpublish')) {
+            return executeBulkActionWithProgress(action, ids, useIdents, BATCH_SIZE);
+        }
+
+        // For delete and small operations, use the optimized single-request approach
         // Show loading overlay only if operation takes longer than 2 seconds
         const loadingTimeout = setTimeout(() => {
             isLoadingBulkAction.value = true;
@@ -622,10 +632,15 @@
         window.bulkActionLoadingTimeout = loadingTimeout;
 
         try {
-            const response = await axios.post('/api/submissions/bulk-action', {
-                action: action,
-                sids: sids
-            }, {
+            // Build request payload - use idents for delete to target specific versions
+            const payload = { action: action };
+            if (useIdents) {
+                payload.idents = ids;
+            } else {
+                payload.sids = ids;
+            }
+
+            const response = await axios.post('/api/submissions/bulk-action', payload, {
                 headers: {
                     'Content-Type': 'application/json'
                 }
@@ -662,6 +677,150 @@
                 clearTimeout(window.bulkActionLoadingTimeout);
                 window.bulkActionLoadingTimeout = null;
             }
+            isLoadingBulkAction.value = false;
+
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: 'Failed to execute bulk action',
+                life: 3000
+            });
+        }
+    }
+
+    /**
+     * Execute bulk action in batches with progress tracking
+     * Used for large republish/unpublish operations
+     */
+    async function executeBulkActionWithProgress(action, ids, useIdents, batchSize) {
+        // Reset cancellation flag
+        bulkActionCancelled.value = false;
+
+        // Initialize progress tracking
+        bulkActionProgress.value = {
+            current: 0,
+            total: ids.length,
+            action: action,
+            successCount: 0,
+            errorCount: 0
+        };
+
+        // Show loading overlay immediately for large operations
+        isLoadingBulkAction.value = true;
+
+        let totalSuccessCount = 0;
+        let totalErrorCount = 0;
+        const allErrors = [];
+        let wasCancelled = false;
+
+        try {
+            // Process in batches
+            for (let i = 0; i < ids.length; i += batchSize) {
+                // Check for cancellation before processing each batch
+                if (bulkActionCancelled.value) {
+                    wasCancelled = true;
+                    console.log('Bulk action cancelled by user');
+                    break;
+                }
+
+                const batch = ids.slice(i, i + batchSize);
+                const batchNumber = Math.floor(i / batchSize) + 1;
+                const totalBatches = Math.ceil(ids.length / batchSize);
+
+                console.log(`Processing ${action} batch ${batchNumber}/${totalBatches} (${batch.length} items)`);
+
+                // Build request payload
+                const payload = { action: action };
+                if (useIdents) {
+                    payload.idents = batch;
+                } else {
+                    payload.sids = batch;
+                }
+
+                try {
+                    const response = await axios.post('/api/submissions/bulk-action', payload, {
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.data.hasOwnProperty('status_code') && response.data.status_code == 200) {
+                        totalSuccessCount += response.data.success_count || batch.length;
+                        totalErrorCount += response.data.error_count || 0;
+                        if (response.data.errors) {
+                            allErrors.push(...response.data.errors);
+                        }
+                    } else {
+                        // API returned an error
+                        totalErrorCount += batch.length;
+                        allErrors.push(response.data.message || 'Batch failed');
+                    }
+                } catch (batchError) {
+                    console.error(`Batch ${batchNumber} failed:`, batchError);
+                    totalErrorCount += batch.length;
+                    allErrors.push(`Batch ${batchNumber} failed: ${batchError.message}`);
+                }
+
+                // Update progress
+                bulkActionProgress.value.current = Math.min(i + batchSize, ids.length);
+                bulkActionProgress.value.successCount = totalSuccessCount;
+                bulkActionProgress.value.errorCount = totalErrorCount;
+
+                // Small delay between batches to prevent overwhelming the server
+                if (i + batchSize < ids.length) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            // Clear selection and reload
+            selectedSubmissions.value = [];
+
+            // Reset progress tracking
+            bulkActionProgress.value = {
+                current: 0,
+                total: 0,
+                action: '',
+                successCount: 0,
+                errorCount: 0
+            };
+
+            // Hide loading overlay
+            isLoadingBulkAction.value = false;
+
+            // Show appropriate completion message
+            if (wasCancelled) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'Operation Cancelled',
+                    detail: `Cancelled after processing ${totalSuccessCount} of ${ids.length} submissions`,
+                    life: 5000
+                });
+            } else if (totalErrorCount > 0) {
+                toast.add({
+                    severity: 'warn',
+                    summary: 'Partially Complete',
+                    detail: `${totalSuccessCount} succeeded, ${totalErrorCount} failed`,
+                    life: 5000
+                });
+            }
+
+            // Reload page data
+            setTimeout(() => {
+                router.reload();
+            }, 500);
+
+        } catch (error) {
+            console.error('Bulk action with progress failed:', error);
+
+            // Reset progress tracking
+            bulkActionProgress.value = {
+                current: 0,
+                total: 0,
+                action: '',
+                successCount: 0,
+                errorCount: 0
+            };
+
             isLoadingBulkAction.value = false;
 
             toast.add({
@@ -829,7 +988,7 @@
                     row.inheritance?.name,
                     row.inheritance?.curie,
                     row.classification?.name,
-                    row.submission_date
+                    row.created_at
                 ].filter(Boolean).join(' ').toLowerCase();
 
                 return searchableText.includes(searchLower);
@@ -939,7 +1098,11 @@
 
     function rowStyle(data)
     {
-        // No background colors on submission rows
+        // Gray background for archived submissions (released but superseded by a newer release)
+        // is_archived is computed by the backend: released status + is_live=false
+        if (data.is_archived === true) {
+            return { class: 'row-not-current' };
+        }
         return null;
     }
 
@@ -991,7 +1154,13 @@
     }
 
     // Get custom CSS class for status badges with shades
-    function getStatusClass(status) {
+    // Archived submissions (is_archived=true) get gray styling
+    function getStatusClass(status, isArchived = false) {
+        // Archived submissions get gray styling (released but superseded by newer release)
+        if (isArchived) {
+            return 'status-not-current';
+        }
+
         const classMap = {
             'draft_new': 'status-draft-new',
             'submitted_new': 'status-submitted-new',
@@ -1003,6 +1172,50 @@
             'unpublished': 'status-unpublished'
         };
         return classMap[status] || '';
+    }
+
+    // Get the status date based on submission status
+    // Draft states: created_at, Submitted states: submitted_at, Published/Unpublished: released_at
+    function getStatusDate(submission) {
+        if (!submission.status) return submission.created_at;
+
+        let dateStr = null;
+        switch (submission.status) {
+            case 'draft_new':
+            case 'draft_republish':
+            case 'draft_unpublish':
+                dateStr = submission.created_at;
+                break;
+            case 'submitted_new':
+            case 'submitted_republish':
+            case 'submitted_unpublish':
+                dateStr = submission.submitted_at || submission.created_at;
+                break;
+            case 'published':
+                dateStr = submission.released_at || submission.submitted_at || submission.created_at;
+                break;
+            case 'unpublished':
+                dateStr = submission.unpublished_at || submission.released_at || submission.submitted_at || submission.created_at;
+                break;
+            default:
+                dateStr = submission.created_at;
+        }
+
+        return dateStr;
+    }
+
+    // Format date as YYYY-MM-DD
+    function formatDateTimestamp(dateStr) {
+        if (!dateStr) return '';
+        const date = new Date(Date.parse(dateStr));
+        return date.toISOString().split('T')[0];
+    }
+
+    // Get raw status date for sorting (returns Date object or null)
+    function getStatusDateRaw(submission) {
+        const dateStr = getStatusDate(submission);
+        if (!dateStr) return null;
+        return new Date(Date.parse(dateStr));
     }
 
     function getDiseaseDeprecationTooltip(disease) {
@@ -1089,6 +1302,38 @@ table tbody tr:hover {
     color: #7F1D1D !important;             /* Tailwind red-950 */
     border-color: #F87171 !important;      /* Tailwind red-400 */
 }
+
+/* Non-most-recent versions - Gray (historical versions) */
+.status-not-current {
+    background-color: #E5E7EB !important;  /* Tailwind gray-200 */
+    color: #4B5563 !important;             /* Tailwind gray-600 */
+    border-color: #9CA3AF !important;      /* Tailwind gray-400 */
+}
+
+/* Row styling for non-most-recent (historical) versions */
+.row-not-current {
+    background-color: #F9FAFB !important;  /* Tailwind gray-50 */
+}
+
+.row-not-current td {
+    color: #6B7280 !important;             /* Tailwind gray-500 */
+}
+
+/* Reduce DataTable cell padding for more compact layout */
+:deep(.p-datatable .p-datatable-tbody > tr > td) {
+    padding: 0.5rem 0.5rem !important;     /* Reduced from default 1rem */
+}
+
+:deep(.p-datatable .p-datatable-thead > tr > th) {
+    padding: 0.5rem 0.5rem !important;     /* Reduced from default 1rem */
+}
+
+/* Prevent status date from wrapping */
+:deep(.p-datatable .p-datatable-tbody > tr > td:last-child),
+:deep(.p-datatable .p-datatable-tbody > tr > td:nth-last-child(2)) {
+    white-space: nowrap;
+}
+
 </style>
 
 <template>
@@ -1097,16 +1342,64 @@ table tbody tr:hover {
         <div v-if="isLoadingBulkAction" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div class="bg-white rounded-lg p-8 max-w-md text-center shadow-2xl">
                 <i class="pi pi-spin pi-spinner text-blue-500 text-6xl mb-4"></i>
-                <h3 class="text-xl font-bold text-gray-900 mb-2">Processing Action</h3>
-                <p class="text-gray-600">
-                    Please wait while we update the submissions. This may take a moment for larger sets of submissions.
-                </p>
+                <h3 class="text-xl font-bold text-gray-900 mb-2">
+                    {{ bulkActionProgress.total > 0 ? `Processing ${bulkActionProgress.action === 'republish' ? 'Republish' : bulkActionProgress.action === 'unpublish' ? 'Unpublish' : 'Action'}` : 'Processing Action' }}
+                </h3>
+
+                <!-- Progress display for large operations -->
+                <template v-if="bulkActionProgress.total > 0">
+                    <div class="mb-4">
+                        <div class="text-2xl font-bold text-blue-600 mb-1">
+                            {{ bulkActionProgress.current }} / {{ bulkActionProgress.total }}
+                        </div>
+                        <div class="text-sm text-gray-500">
+                            submissions processed
+                        </div>
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="w-full bg-gray-200 rounded-full h-3 mb-4">
+                        <div
+                            class="bg-blue-500 h-3 rounded-full transition-all duration-300"
+                            :style="{ width: `${Math.round((bulkActionProgress.current / bulkActionProgress.total) * 100)}%` }">
+                        </div>
+                    </div>
+
+                    <!-- Success/Error counts -->
+                    <div v-if="bulkActionProgress.successCount > 0 || bulkActionProgress.errorCount > 0" class="flex justify-center gap-4 text-sm mb-4">
+                        <span class="text-green-600">
+                            <i class="pi pi-check-circle mr-1"></i>{{ bulkActionProgress.successCount }} succeeded
+                        </span>
+                        <span v-if="bulkActionProgress.errorCount > 0" class="text-red-600">
+                            <i class="pi pi-times-circle mr-1"></i>{{ bulkActionProgress.errorCount }} failed
+                        </span>
+                    </div>
+
+                    <!-- Cancel button -->
+                    <Button
+                        label="Cancel Operation"
+                        icon="pi pi-times"
+                        severity="secondary"
+                        outlined
+                        @click="cancelBulkAction"
+                        class="mt-2" />
+                    <p class="text-xs text-gray-400 mt-2">
+                        Canceling will stop processing. Items already processed will remain changed.
+                    </p>
+                </template>
+
+                <!-- Simple message for small/fast operations -->
+                <template v-else>
+                    <p class="text-gray-600">
+                        Please wait while we update the submissions. This may take a moment for larger sets of submissions.
+                    </p>
+                </template>
             </div>
         </div>
 
         <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
 
-            <div v-if="errors" class="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mt-2" role="alert">
+            <div v-if="errors" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">There are submission errors present</p>
                 <p>
                     Submissions with errors are marked with a red warning icon.  Click on the edit link to resolve any errors.
@@ -1114,7 +1407,7 @@ table tbody tr:hover {
                 </p>
             </div>
 
-            <div v-if="props.hasSubmittedJob" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mt-2" role="alert">
+            <div v-if="props.hasSubmittedJob" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mt-2" role="alert">
                 <p class="font-bold">A submitted job exists.</p>
                 <p>
                     The submitted job is awaiting processing. Published submissions cannot be edited or unpublished until the current job is processed.
@@ -1124,22 +1417,22 @@ table tbody tr:hover {
             <ConfirmDialog group="headless">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <!-- Red theme for Unpublish and Delete, Amber theme for Restore, Blue theme for others -->
-                        <div v-if="message.header && (message.header.includes('Unpublish') || message.acceptLabel?.includes('Delete'))" class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <!-- Red theme for Unpublish and Delete, Purple for Favorite/Unfavorite, Blue for others -->
+                        <div v-if="message.header && (message.header.includes('Unpublish') || message.header.includes('Delete') || message.acceptLabel?.includes('Delete'))" class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-exclamation-triangle text-5xl"></i>
                         </div>
-                        <div v-else-if="message.header && message.header.includes('Restore')" class="rounded-full bg-amber-500 dark:bg-amber-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
-                            <i class="pi pi-history text-5xl"></i>
+                        <div v-else-if="message.header && (message.header.includes('Favorite') || message.header.includes('Unfavorite'))" class="rounded-full bg-purple-700 dark:bg-purple-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                            <i class="pi pi-star text-5xl"></i>
                         </div>
-                        <div v-else class="rounded-full bg-blue-500 dark:bg-blue-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div v-else class="rounded-full bg-blue-700 dark:bg-blue-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-pencil text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0">{{ message.message }}</p>
                         <div class="flex items-center gap-2 mt-4">
-                            <Button v-if="message.header && (message.header.includes('Unpublish') || message.acceptLabel?.includes('Delete'))" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-red-500 !ring-red-500 hover:!bg-red-600"></Button>
-                            <Button v-else-if="message.header && message.header.includes('Restore')" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-amber-500 !ring-amber-500 hover:!bg-amber-600"></Button>
-                            <Button v-else :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-blue-500 !ring-blue-500 hover:!bg-blue-600"></Button>
+                            <Button v-if="message.header && (message.header.includes('Unpublish') || message.header.includes('Delete') || message.acceptLabel?.includes('Delete'))" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-red-700 !ring-red-700 hover:!bg-red-800"></Button>
+                            <Button v-else-if="message.header && (message.header.includes('Favorite') || message.header.includes('Unfavorite'))" :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-purple-700 !ring-purple-700 hover:!bg-purple-800"></Button>
+                            <Button v-else :label="message.acceptLabel || 'Confirm'" @click="acceptCallback" class="!bg-blue-700 !ring-blue-700 hover:!bg-blue-800"></Button>
                             <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
@@ -1147,36 +1440,48 @@ table tbody tr:hover {
             </ConfirmDialog>
             <Toast />
 
-            <DataTable v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissions?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="submission_date" :sortOrder="-1"
-                    :rowStyle="rowStyle" :globalFilterFields="['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'submission_date']" tableStyle="min-width: 20rem; width: auto;"
-                    dataKey="sid">
+            <DataTable v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissionsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="status_date" :sortOrder="-1"
+                    :rowStyle="rowStyle" :globalFilterFields="['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'created_at']" tableStyle="min-width: 20rem; width: auto;"
+                    dataKey="ident">
                 <template #header>
                     <!-- Bulk Action Toolbar -->
-                    <div v-if="!props.hasSubmittedJob && selectedSubmissions.length > 0" class="bg-blue-50 border border-blue-200 rounded-md p-4 mb-4">
+                    <div v-if="selectedSubmissions.length > 0" class="bg-yellow-100 border border-yellow-500 rounded-md p-4 mb-4">
                         <div class="flex items-center justify-between">
-                            <span class="font-semibold text-blue-900">
+                            <span class="font-semibold text-yellow-700">
                                 {{ selectedSubmissions.length }} submission(s) selected
                             </span>
                             <div class="flex gap-2">
-                                <!-- Show appropriate buttons based on status -->
-                                <template v-if="bulkActionAvailable && bulkActionAvailable.action === 'multiple'">
-                                    <Button label="Republish Selected" icon="pi pi-refresh" @click="bulkRepublishSubmissions" severity="info" outlined raised />
-                                    <Button label="Unpublish Selected" icon="pi pi-eye-slash" @click="bulkUnpublishSubmissions" severity="warning" outlined raised />
-                                </template>
-                                <template v-else-if="bulkActionAvailable && bulkActionAvailable.action === 'restore'">
-                                    <Button label="Restore Selected" icon="pi pi-history" @click="bulkRestoreSubmissions" severity="secondary" outlined raised />
-                                </template>
-                                <template v-else-if="bulkActionAvailable && bulkActionAvailable.action === 'delete'">
-                                    <Button label="Delete Selected" icon="pi pi-trash" @click="bulkDeleteSubmissions" severity="danger" outlined raised />
-                                </template>
-                                <template v-else-if="bulkActionAvailable && bulkActionAvailable.action === 'republish'">
-                                    <Button label="Republish Selected" icon="pi pi-refresh" @click="bulkRepublishSubmissions" severity="success" outlined raised />
-                                </template>
-                                <template v-else>
-                                    <span class="text-orange-600 italic">Selected submissions have different statuses - bulk actions unavailable</span>
-                                </template>
+                                <!-- Republish: Available when all selected are most-recent published AND/OR unpublished -->
+                                <Button
+                                    v-if="bulkRepublishAvailable"
+                                    label="Republish Selected"
+                                    icon="pi pi-refresh"
+                                    @click="bulkRepublishSubmissions"
+                                    severity="info"
+                                    outlined
+                                    raised />
 
-                                <!-- Favorite/Unfavorite button - always available -->
+                                <!-- Unpublish: Available when all selected are most-recent published only -->
+                                <Button
+                                    v-if="bulkUnpublishAvailable"
+                                    label="Unpublish Selected"
+                                    icon="pi pi-eye-slash"
+                                    @click="bulkUnpublishSubmissions"
+                                    severity="warning"
+                                    outlined
+                                    raised />
+
+                                <!-- Delete: Only available when all selected are draft submissions -->
+                                <Button
+                                    v-if="bulkDeleteAvailable"
+                                    label="Delete Selected"
+                                    icon="pi pi-trash"
+                                    @click="bulkDeleteSubmissions"
+                                    severity="danger"
+                                    outlined
+                                    raised />
+
+                                <!-- Favorite: Only available when ALL selected are NOT already favorited -->
                                 <Button
                                     v-if="bulkFavoriteAction === 'favorite'"
                                     label="Favorite Selected"
@@ -1185,8 +1490,10 @@ table tbody tr:hover {
                                     severity="help"
                                     outlined
                                     raised />
+
+                                <!-- Unfavorite: Only available when ALL selected ARE already favorited -->
                                 <Button
-                                    v-else-if="bulkFavoriteAction === 'unfavorite'"
+                                    v-if="bulkFavoriteAction === 'unfavorite'"
                                     label="Unfavorite Selected"
                                     icon="pi pi-star-fill"
                                     @click="bulkToggleFavorites"
@@ -1204,8 +1511,7 @@ table tbody tr:hover {
                             <Button icon="pi pi-download"
                                     label="Download"
                                     @click="exportCSV($event)"
-                                    severity="info"
-                                    outlined
+                                    severity="success"
                                     raised
                                     :disabled="filteredSubmissionsCount === 0" />
                             <span class="ml-3">
@@ -1242,6 +1548,12 @@ table tbody tr:hover {
                      </template>-->
                      <template #body="{ data }">
                         <div class="font-medium">{{ data.display_id || data.sid }}</div>
+                        <div v-if="data.job?.ident" class="text-xs">
+                            <a :href="'/jobs/' + data.job.ident"
+                               class="text-blue-600 hover:text-blue-800 hover:underline">
+                                {{ data.job.slug }}
+                            </a>
+                        </div>
                     </template>
                 </Column>
                 <Column field="gene.symbol" header="Gene" sortable>
@@ -1277,7 +1589,7 @@ table tbody tr:hover {
                                 {{ data.disease.curie }}
                             </a>
                             <span v-else>{{ data.disease?.curie || '' }}</span>
-                            <span v-if="data.disease?.status === 8" class="text-orange-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.disease)">⚠</span>
+                            <span v-if="data.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.disease)">⚠</span>
                         </div>
                         <div v-if="data.submission_data?.disease?.id && data.disease?.curie !== data.submission_data.disease.id"
                              class="text-xs text-gray-500">
@@ -1290,7 +1602,7 @@ table tbody tr:hover {
                                 {{ data.submission_data.disease.id }}
                             </a>
                             <span v-else>{{ data.submission_data.disease.id }}</span>
-                            <span v-if="data.original_disease?.status === 8" class="text-orange-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.original_disease)">⚠</span>
+                            <span v-if="data.original_disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.original_disease)">⚠</span>
                         </div>
                     </template>
                 </Column>
@@ -1318,70 +1630,89 @@ table tbody tr:hover {
                         <div class="text-xs">{{ data.classification?.curie || '' }}</div>
                     </template>
                 </Column>
-                <Column field="submission_date" header="Submitted" sortable>
-                    <!--<template #filter="{ filterModel, filterCallback }">
-                        <InputText v-model="filterModel.value" type="text" @input="filterCallback()" class="p-column-filter" placeholder="Search by name" />
-                     </template>-->
+                <Column field="status_date" header="Status Date" sortable style="min-width: 6rem; white-space: nowrap;">
                      <template #body="{ data }">
-                        {{ new Date(Date.parse(data.submission_date)).toISOString().split('T')[0] }}
+                        {{ formatDateTimestamp(getStatusDate(data)) }}
                      </template>
                 </Column>
                 <Column field="status" header="Status" sortable>
                      <template #body="{ data }">
                         <div class="flex items-center gap-2">
-                            <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getStatusClass(data.status)]" />
+                            <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getStatusClass(data.status, data.is_archived)]" />
                             <span v-else>{{ displayStatus(data.status) }}</span>
                             <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
                                class="pi pi-exclamation-triangle text-red-500 text-xl"
                                title="Submission has errors"></i>
+                            <!-- Indicator for archived versions (superseded by newer release) -->
+                            <i v-if="data.is_archived"
+                               class="pi pi-history text-gray-400"
+                               v-tooltip.top="'Archived (superseded by newer release)'"></i>
                         </div>
                      </template>
                 </Column>
                 <Column header="Action" style="width: 10%; min-width: 8rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
                     <template #body="slotProps">
-                        <!-- V2 Status Actions -->
-                        <template v-if="slotProps.data.status">
-                            <!-- Published: Show Republish (Edit) and Unpublish buttons (only if no submitted job exists) -->
-                            <span v-if="slotProps.data.status === 'published' && !props.hasSubmittedJob" class="mr-3">
-                                <Button @click="requireRepublishConfirmation(slotProps.data.sid)" icon="pi pi-refresh" severity="info" text raised rounded v-tooltip.top="'Republish'"></Button>
-                            </span>
-                            <span v-if="slotProps.data.status === 'published' && !props.hasSubmittedJob" class="mr-3">
-                                <Button @click="requireUnpublishConfirmationV2(slotProps.data.sid)" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
-                            </span>
-
-                            <!-- Draft states: Show Restore button -->
-                            <span v-if="slotProps.data.status === 'draft_republish' || slotProps.data.status === 'draft_unpublish'" class="mr-3">
-                                <Button @click="requireCancelConfirmation(slotProps.data.sid)" icon="pi pi-times-circle" severity="secondary" text raised rounded v-tooltip.top="'Restore'"></Button>
-                            </span>
-
-                            <!-- Draft new: Show Delete button -->
-                            <span v-if="slotProps.data.status === 'draft_new'" class="mr-3">
-                                <Button @click="requireConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete'"></Button>
-                            </span>
-
-                            <!-- Unpublished: Show Republish button -->
-                            <span v-if="slotProps.data.status === 'unpublished'" class="mr-3">
-                                <Button @click="requireRepublishConfirmation(slotProps.data.sid)" icon="pi pi-refresh" severity="success" text raised rounded v-tooltip.top="'Republish'"></Button>
-                            </span>
+                        <!-- Archived versions (superseded by newer release): Only show View button (no other actions) -->
+                        <template v-if="slotProps.data.is_archived">
+                            <Button type="button" icon="pi pi-arrow-right" text raised rounded
+                                    v-tooltip.top="'View (archived version)'"
+                                    @click="router.visit('/submissions/' + slotProps.data.ident)" />
                         </template>
 
-                        <!-- Legacy Status Actions (fallback) -->
+                        <!-- Active versions: Show all applicable actions -->
                         <template v-else>
-                            <span v-if="(slotProps.data.job.status == 2 || slotProps.data.job.status == 4) && slotProps.data.status != 20 && !slotProps.data.publish_date" class="mr-3">
-                                <Button @click="requireConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded></Button>
-                            </span>
-                            <span v-if="(slotProps.data.job.status == 2 || slotProps.data.job.status == 3 || slotProps.data.job.status == 4) && slotProps.data.status == 20" class="mr-3">
-                                <Button @click="requireUnpublishConfirmation(slotProps.data.sid)" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
-                            </span>
-                            <span v-if="slotProps.data.status == 3 && slotProps.data.origin_job_id !== null" class="mr-3">
-                                <Button @click="requireCancelUpdateConfirmation(slotProps.data.sid)" icon="pi pi-times-circle" severity="secondary" text raised rounded v-tooltip.top="'Restore'"></Button>
-                            </span>
-                        </template>
+                            <!-- V2 Status Actions -->
+                            <template v-if="slotProps.data.status">
+                                <!-- Published: Show Republish (Edit) and Unpublish buttons
+                                     Only if:
+                                     - No submitted job exists
+                                     - Submission is live (is_live=true)
+                                     - Submission is most recent (is_most_recent=true) meaning no pending draft version
+                                -->
+                                <span v-if="slotProps.data.status === 'published' && !props.hasSubmittedJob && slotProps.data.is_live === true && slotProps.data.is_most_recent !== false" class="mr-3">
+                                    <Button @click="requireRepublishConfirmation(slotProps.data.sid)" icon="pi pi-refresh" severity="info" text raised rounded v-tooltip.top="'Republish'"></Button>
+                                </span>
+                                <span v-if="slotProps.data.status === 'published' && !props.hasSubmittedJob && slotProps.data.is_live === true && slotProps.data.is_most_recent !== false" class="mr-3">
+                                    <Button @click="requireUnpublishConfirmationV2(slotProps.data.sid)" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
+                                </span>
 
-                        <!-- View/Edit button (always shown) -->
-                        <Button type="button" icon="pi pi-arrow-right" text raised rounded
-                                v-tooltip.top="slotProps.data.status === 'draft_new' || slotProps.data.status === 'draft_republish' ? 'View/Edit' : 'View'"
-                                @click="router.visit('/submissions/' + slotProps.data.ident)" />
+                                <!-- Draft states: Show Delete button -->
+                                <span v-if="slotProps.data.status === 'draft_republish' || slotProps.data.status === 'draft_unpublish'" class="mr-3">
+                                    <Button @click="requireDeleteDraftConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete draft'"></Button>
+                                </span>
+
+                                <!-- Draft new: Show Delete button -->
+                                <span v-if="slotProps.data.status === 'draft_new'" class="mr-3">
+                                    <Button @click="requireConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete'"></Button>
+                                </span>
+
+                                <!-- Unpublished: Show Republish button
+                                     Only if:
+                                     - Submission is most recent (is_most_recent=true) meaning no pending draft version
+                                -->
+                                <span v-if="slotProps.data.status === 'unpublished' && slotProps.data.is_most_recent !== false" class="mr-3">
+                                    <Button @click="requireRepublishConfirmation(slotProps.data.sid)" icon="pi pi-refresh" severity="success" text raised rounded v-tooltip.top="'Republish'"></Button>
+                                </span>
+                            </template>
+
+                            <!-- Legacy Status Actions (fallback) -->
+                            <template v-else>
+                                <span v-if="(slotProps.data.job.status == 2 || slotProps.data.job.status == 4) && slotProps.data.status != 20 && !slotProps.data.publish_date" class="mr-3">
+                                    <Button @click="requireConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded></Button>
+                                </span>
+                                <span v-if="(slotProps.data.job.status == 2 || slotProps.data.job.status == 3 || slotProps.data.job.status == 4) && slotProps.data.status == 20" class="mr-3">
+                                    <Button @click="requireUnpublishConfirmation(slotProps.data.sid)" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
+                                </span>
+                                <span v-if="slotProps.data.status == 3 && slotProps.data.origin_state !== null" class="mr-3">
+                                    <Button @click="requireDeleteDraftConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete draft'"></Button>
+                                </span>
+                            </template>
+
+                            <!-- View/Edit button (always shown for current versions) -->
+                            <Button type="button" icon="pi pi-arrow-right" text raised rounded
+                                    v-tooltip.top="slotProps.data.status === 'draft_new' || slotProps.data.status === 'draft_republish' ? 'View/Edit' : 'View'"
+                                    @click="router.visit('/submissions/' + slotProps.data.ident)" />
+                        </template>
                     </template>
                  </Column>
                  <template #footer>
