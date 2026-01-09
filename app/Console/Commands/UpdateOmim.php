@@ -153,7 +153,7 @@ class UpdateOmim extends Command
                 'type' => Job::TYPE_GENCC_IMPORT,
                 'user_id' => $user->id ?? 1,
                 'submitter_id' => $submitter->id,
-                'submission_date' => Carbon::now(),
+                // created_at is auto-set by Laravel
                 'status' => Job::STATUS_PROCESSED,
         ]);
         $job->save();
@@ -224,7 +224,7 @@ class UpdateOmim extends Command
                             'classification_id' => $classification->id,
                             'mechanism_id' => null,
                             'evidence' => [],
-                            'submission_date' => Carbon::now(),
+                            // created_at is auto-set by Laravel
                             'publish_date' => Carbon::now(),
                             'report_date' => Carbon::now(),
                             'report_url' => "https://www.omim.org/entry/" . $phenotype['mim'],
@@ -245,7 +245,7 @@ class UpdateOmim extends Command
                             "version" => ["display" => "1.0", "reasons" => ["PARTNER_IMPORT"], "internal" => "1.0.0.0", "description" => "OMIM Import"],
                             "criteria" => ["url" => "", "name" => ""],
                             "evidence" => [],
-                            "workflow"=> ["submission_date" => Carbon::now(), "publish_date" => Carbon::now()],
+                            "workflow"=> ["created_at" => Carbon::now(), "publish_date" => Carbon::now()],
                             "contributors"=> ["primary" => ["id" => "", "name" => ""]],
                             "classification" => ["id" => $classification->curie, "name" => $classification->name],
                             "mechanism" => ["id" => "", "name" => "", "comment" => ""],
