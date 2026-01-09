@@ -38,7 +38,7 @@ class SubmissionFactory extends Factory
             'original_disease_id' => $disease?->id ?? 1,  // Usually same as disease_id for new submissions
             'classification_id' => $classification?->id ?? 1,
             'local_key' => 'TEST-' . fake()->unique()->numberBetween(1000, 9999),
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Submission::STATUS_DRAFT_NEW,
             'submission_data' => [],
             'original_submission_data' => [],
@@ -46,6 +46,7 @@ class SubmissionFactory extends Factory
             'history' => null,
             'evidence' => null,
             'tags' => null,
+            'is_live' => false,  // Default for new submissions (only true when published and current)
         ];
     }
 }

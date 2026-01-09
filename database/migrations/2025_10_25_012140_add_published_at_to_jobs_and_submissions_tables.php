@@ -12,11 +12,11 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('jobs', function (Blueprint $table) {
-            $table->timestamp('published_at')->nullable()->after('updated_at');
+            $table->timestamp('released_at')->nullable()->after('updated_at');
         });
 
         Schema::table('submissions', function (Blueprint $table) {
-            $table->timestamp('published_at')->nullable()->after('updated_at');
+            $table->timestamp('released_at')->nullable()->after('updated_at');
         });
     }
 
@@ -26,11 +26,11 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('jobs', function (Blueprint $table) {
-            $table->dropColumn('published_at');
+            $table->dropColumn('released_at');
         });
 
         Schema::table('submissions', function (Blueprint $table) {
-            $table->dropColumn('published_at');
+            $table->dropColumn('released_at');
         });
     }
 };
