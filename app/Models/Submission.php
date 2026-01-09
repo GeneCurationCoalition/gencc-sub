@@ -48,9 +48,12 @@ class Submission extends Model
         'evidence' => 'object',
         'history' => 'array',
         'tags' => 'array',
-        'published_at' => 'datetime',
-        'origin_snapshot' => 'array',
-        'version_number' => 'integer'
+        'submitted_at' => 'datetime',
+        'released_at' => 'datetime',
+        'unpublished_at' => 'datetime',
+        'version_number' => 'integer',
+        'is_most_recent' => 'boolean',
+        'is_live' => 'boolean'
     ];
 
     /**
@@ -60,17 +63,17 @@ class Submission extends Model
      */
 	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
-                            'uuid', 'sid', 'version_number', 'job_id', 'user_id', 'evidence', 'original_submission_data',
-                            'submission_date', 'submission_data', 'submission_errors', 'history', 'tags',
-                            'status', 'origin_state', 'origin_job_id', 'local_key', 'last_edited_by',
-                            'document_id'];
+                            'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'original_submission_data',
+                            'submission_data', 'submission_errors', 'history', 'tags',
+                            'status', 'origin_state', 'local_key', 'last_edited_by',
+                            'document_id', 'submitted_at', 'released_at', 'unpublished_at'];
 
 	/**
      * Non-persistent storage model attributes.
      *
      * @var array
      */
-    protected $appends = ['last_edited_by_admin', 'display_id'];
+    protected $appends = ['last_edited_by_admin', 'display_id', 'is_archived'];
 
     /**
      * String-based status constants for submission workflow
@@ -190,25 +193,25 @@ class Submission extends Model
             }
         });
 
-        // Set published_at when submission status changes to PUBLISHED (for non-import workflows)
+        // Set released_at when submission status changes to PUBLISHED (for non-import workflows)
         // Only set if:
         // - status is changing to PUBLISHED
-        // - published_at is not already set
-        // - we're not just updating published_at (backfill scenario)
+        // - released_at is not already set
+        // - we're not just updating released_at (backfill scenario)
         static::updating(function (Model $model) {
             $dirty = $model->getDirty();
 
-            // Skip if we're updating published_at (backfill scenario)
-            if ($model->isDirty('published_at')) {
-                \Log::info("Skipping published_at auto-set for submission {$model->id} - published_at is dirty (backfill)");
+            // Skip if we're updating released_at (backfill scenario)
+            if ($model->isDirty('released_at')) {
+                \Log::info("Skipping released_at auto-set for submission {$model->id} - released_at is dirty (backfill)");
                 return;
             }
 
             if ($model->isDirty('status') &&
                 $model->status == self::STATUS_PUBLISHED &&
-                $model->published_at === null) {
-                \Log::info("Setting published_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
-                $model->published_at = Carbon::now();
+                $model->released_at === null) {
+                \Log::info("Setting released_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
+                $model->released_at = Carbon::now();
             }
         });
     }
@@ -253,13 +256,6 @@ class Submission extends Model
     }
 
 
-    /**
-     * Get the origin job this submission can be restored to (V2 state model)
-     */
-    public function originJob()
-    {
-       return $this->belongsTo('App\Models\Job', 'origin_job_id');
-    }
 
 
     /**
@@ -425,6 +421,29 @@ class Submission extends Model
 
 
     /**
+     * Query scope for live submissions (publicly accessible)
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeLive($query)
+    {
+		return $query->where('is_live', true);
+    }
+
+
+    /**
+     * Query scope for archived submissions (released but superseded by newer release)
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeArchived($query)
+    {
+		return $query->whereIn('status', [self::STATUS_PUBLISHED, self::STATUS_UNPUBLISHED])
+                     ->where('is_live', false);
+    }
+
+
+    /**
      * Query scope by specific status
      *
      * @param string $status
@@ -449,9 +468,9 @@ class Submission extends Model
 	public function scopeForListing($query)
     {
 		return $query->select('id', 'gene_id', 'user_id', 'disease_id', 'original_disease_id', 'inheritance_id',
-                              'classification_id', 'submitter_id', 'job_id', 'origin_job_id', 'ident', 'sid',
-                              'version_number', // Required for display_id accessor
-                              'local_key', 'friendly', 'submission_date', 'publish_date',
+                              'classification_id', 'submitter_id', 'job_id', 'ident', 'sid',
+                              'version_number', 'is_most_recent', 'is_live', // Required for display_id accessor and historical/archived version styling
+                              'local_key', 'friendly', 'created_at', 'submitted_at', 'released_at', 'unpublished_at', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
                               // Removed: 'original_submission_data', 'evidence' - too large for listing
                               'submission_data', 'submission_errors', 'status', 'origin_state')
@@ -461,8 +480,7 @@ class Submission extends Model
                      ->with('inheritance:id,curie,name')
                      ->with('classification:id,curie,name')
                      ->with('submitter:id,curie,name')
-                     ->with('job:id,status')
-                     ->with('originJob:id,slug');
+                     ->with('job:id,ident,slug,status');
     }
 
 
@@ -537,6 +555,52 @@ class Submission extends Model
     public function getDisplayIdAttribute(): string
     {
         return $this->sid . '.' . ($this->version_number ?? 1);
+    }
+
+
+    /**
+     * Check if this submission is archived (superseded by a newer released version).
+     *
+     * A submission is archived if:
+     * - It has been released (published or unpublished status)
+     * - It is not currently live (is_live = false)
+     *
+     * Note: Archived is different from "historical" - a published submission
+     * with a pending draft_republish is NOT archived because it's still the
+     * publicly accessible version.
+     *
+     * @return bool
+     */
+    public function isArchived(): bool
+    {
+        // Only released submissions can be archived
+        if (!in_array($this->status, [self::STATUS_PUBLISHED, self::STATUS_UNPUBLISHED])) {
+            return false;
+        }
+
+        return !$this->is_live;
+    }
+
+
+    /**
+     * Check if this submission is currently live (publicly accessible).
+     *
+     * @return bool
+     */
+    public function isLive(): bool
+    {
+        return (bool) $this->is_live;
+    }
+
+
+    /**
+     * Accessor for is_archived to allow use in Blade templates and Vue components
+     *
+     * @return bool
+     */
+    public function getIsArchivedAttribute(): bool
+    {
+        return $this->isArchived();
     }
 
     /**
@@ -1022,46 +1086,5 @@ class Submission extends Model
         }
 
         return true;
-    }
-
-    /**
-     * Restore submission fields from origin_snapshot
-     * Used when cancelling a republish/unpublish operation
-     *
-     * @return void
-     */
-    public function restoreFromSnapshot(): void
-    {
-        if (!$this->origin_snapshot) {
-            return;
-        }
-
-        $snapshot = is_object($this->origin_snapshot) ? (array) $this->origin_snapshot : $this->origin_snapshot;
-
-        // Restore basic fields
-        if (isset($snapshot['local_key'])) {
-            $this->local_key = $snapshot['local_key'];
-        }
-        if (isset($snapshot['gene_id'])) {
-            $this->gene_id = $snapshot['gene_id'];
-        }
-        if (isset($snapshot['disease_id'])) {
-            $this->disease_id = $snapshot['disease_id'];
-        }
-        if (isset($snapshot['inheritance_id'])) {
-            $this->inheritance_id = $snapshot['inheritance_id'];
-        }
-        if (isset($snapshot['classification_id'])) {
-            $this->classification_id = $snapshot['classification_id'];
-        }
-        if (isset($snapshot['report_date'])) {
-            $this->report_date = $snapshot['report_date'];
-        }
-        if (isset($snapshot['report_url'])) {
-            $this->report_url = $snapshot['report_url'];
-        }
-        if (isset($snapshot['submission_data'])) {
-            $this->submission_data = $snapshot['submission_data'];
-        }
     }
 }

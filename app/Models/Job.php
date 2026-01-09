@@ -38,12 +38,13 @@ class Job extends Model
      * @var array
      */
     protected $casts = [
-        'submission_date' => 'datetime',
         'submission_data' => 'object',
         'activity' => 'object',
-        'published_at' => 'datetime',
+        'released_at' => 'datetime',
+        'submitted_at' => 'datetime',
         'processed_submission_ids' => 'array',
-        'is_publishing' => 'boolean'
+        'is_publishing' => 'boolean',
+        'is_most_recent' => 'boolean'
     ];
 
     /**
@@ -52,9 +53,9 @@ class Job extends Model
      * @var array
      */
 	protected $fillable = [	'ident', 'type', 'user_id', 'activity', 'activity->errors',
-                            'submitter_id', 'submission_date', 'submission_data',
+                            'submitter_id', 'submission_data',
                             'slug', 'friendly',
-                            'status', 'is_publishing', 'is_processing' ];
+                            'status', 'is_publishing', 'is_processing', 'is_most_recent' ];
 
 	/**
      * Non-persistent storage model attributes.
@@ -127,11 +128,15 @@ class Job extends Model
                     . str_pad($model->id ,5, '0', STR_PAD_LEFT)])
         );
 
-        // Set published_at when job status changes to PROCESSED
+        // Set submitted_at when job status changes to SUBMITTED
+        // Set released_at when job status changes to PROCESSED
         // Only set if not already set (to preserve historical dates during imports)
         static::updating(function (Model $model) {
-            if ($model->isDirty('status') && $model->status === self::STATUS_PROCESSED && $model->published_at === null) {
-                $model->published_at = Carbon::now();
+            if ($model->isDirty('status') && $model->status === self::STATUS_SUBMITTED && $model->submitted_at === null) {
+                $model->submitted_at = Carbon::now();
+            }
+            if ($model->isDirty('status') && $model->status === self::STATUS_PROCESSED && $model->released_at === null) {
+                $model->released_at = Carbon::now();
             }
         });
     }

@@ -193,25 +193,31 @@ class JobStateMachine
 
         // Transition all submissions to their submitted states using batch updates for performance
         // This is much faster than individual saves (3 queries vs N queries)
+        // Also set submitted_at timestamp when transitioning from draft to submitted
+        $now = now();
+
         \App\Models\Submission::where('job_id', $job->id)
             ->where('status', \App\Models\Submission::STATUS_DRAFT_NEW)
             ->update([
                 'status' => \App\Models\Submission::STATUS_SUBMITTED_NEW,
-                'updated_at' => now()
+                'submitted_at' => $now,
+                'updated_at' => $now
             ]);
 
         \App\Models\Submission::where('job_id', $job->id)
             ->where('status', \App\Models\Submission::STATUS_DRAFT_REPUBLISH)
             ->update([
                 'status' => \App\Models\Submission::STATUS_SUBMITTED_REPUBLISH,
-                'updated_at' => now()
+                'submitted_at' => $now,
+                'updated_at' => $now
             ]);
 
         \App\Models\Submission::where('job_id', $job->id)
             ->where('status', \App\Models\Submission::STATUS_DRAFT_UNPUBLISH)
             ->update([
                 'status' => \App\Models\Submission::STATUS_SUBMITTED_UNPUBLISH,
-                'updated_at' => now()
+                'submitted_at' => $now,
+                'updated_at' => $now
             ]);
 
         return $job;
@@ -236,8 +242,8 @@ class JobStateMachine
         // Transition to processed
         self::transition($job, Job::STATUS_PROCESSED);
 
-        // Set published_at timestamp when job is processed
-        $job->published_at = now();
+        // Set released_at timestamp when job is processed
+        $job->released_at = now();
 
         return $job;
     }
@@ -263,7 +269,7 @@ class JobStateMachine
             'user_id' => $job->user_id,
             'submitter_id' => $job->submitter_id,
             'status' => Job::STATUS_DRAFT,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'type' => $job->type
         ]);
 

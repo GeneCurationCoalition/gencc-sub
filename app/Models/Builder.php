@@ -32,14 +32,14 @@ class Builder extends Model
     use HasFactory;
 
     /**
-     * Automatically assign an ident and submission date on instantiation
+     * Automatically assign an ident and created_at timestamp on instantiation
      *
      * @param	array	$attributes
      * @return 	void
      */
     public function __construct(array $attributes = array())
     {
-      $attributes['submission_date'] = Carbon::now();
+      $attributes['created_at'] = Carbon::now();
       $attributes['data'] = collect();
       parent::__construct($attributes);
     }

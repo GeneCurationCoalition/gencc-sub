@@ -259,11 +259,10 @@ class SubmissionStateMachine
      *
      * @param Submission $submission
      * @param string $toState
-     * @param string|null $originState Optional origin state to store for cancel operations
      * @return Submission
      * @throws Exception if transition is invalid
      */
-    public static function transition(Submission $submission, string $toState, ?string $originState = null): Submission
+    public static function transition(Submission $submission, string $toState): Submission
     {
         // Capture the current state before transition
         $fromState = $submission->status;
@@ -271,185 +270,14 @@ class SubmissionStateMachine
         // Validate transition
         self::validateTransition($fromState, $toState);
 
-        // Store origin job_id and snapshot when entering draft_republish or draft_unpublish
-        if (($toState === Submission::STATUS_DRAFT_REPUBLISH || $toState === Submission::STATUS_DRAFT_UNPUBLISH)
-            && $submission->origin_job_id === null) {
-            // Use the original job_id before it was changed (dirty value)
-            // If job_id was just changed, getOriginal() returns the old value
-            $submission->origin_job_id = $submission->getOriginal('job_id') ?? $submission->job_id;
-            $submission->origin_state = $originState ?? $fromState;
-
-            // Create snapshot of current editable fields as array
-            $submission->origin_snapshot = [
-                'local_key' => $submission->local_key,
-                'gene_id' => $submission->gene_id,
-                'disease_id' => $submission->disease_id,
-                'inheritance_id' => $submission->inheritance_id,
-                'classification_id' => $submission->classification_id,
-                'report_date' => $submission->report_date,
-                'report_url' => $submission->report_url,
-                'submission_data' => $submission->submission_data,
-                'pubmed_ids' => $submission->pubmeds()->pluck('pubmeds.id')->toArray(), // Store PubMed IDs
-            ];
-        }
-
         // Update state
         $submission->status = $toState;
 
-        // When transitioning FROM draft_republish/draft_unpublish TO a non-draft/non-submitted state,
-        // restore job_id and clear origin tracking fields
-        if (in_array($fromState, [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_DRAFT_UNPUBLISH])
-            && !in_array($toState, [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_DRAFT_UNPUBLISH,
-                                    Submission::STATUS_SUBMITTED_REPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])) {
-
-            // Restore original job_id if it was stored
-            if ($submission->origin_job_id !== null) {
-                $submission->job_id = $submission->origin_job_id;
-                $submission->origin_job_id = null;
-            }
-
-            // Clear origin state and snapshot
-            $submission->origin_state = null;
-            $submission->origin_snapshot = null;
-        }
-
-        // When transitioning FROM submitted_republish/submitted_unpublish TO terminal states,
-        // clear origin tracking fields (but don't restore job_id since we're completing the operation)
-        if (in_array($fromState, [Submission::STATUS_SUBMITTED_REPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
-            && in_array($toState, [Submission::STATUS_PUBLISHED, Submission::STATUS_UNPUBLISHED])) {
-
-            // Clear origin tracking - the operation is complete
-            $submission->origin_state = null;
-            $submission->origin_job_id = null;
-            $submission->origin_snapshot = null;
-        }
+        // Note: origin_state is no longer needed since we now create new version records
+        // when republishing/unpublishing. The previous state can be determined by looking
+        // at the previous version record (version_number - 1).
 
         return $submission;
-    }
-
-    /**
-     * Cancel a draft operation and return to origin state
-     * Only works for draft_republish and draft_unpublish states
-     *
-     * @param Submission $submission
-     * @return Submission
-     * @throws Exception if not in a cancellable state
-     */
-    public static function cancel(Submission $submission): Submission
-    {
-        $state = $submission->status;
-
-        if ($state === Submission::STATUS_DRAFT_REPUBLISH) {
-            // Revert to origin state (published or unpublished)
-            if (!$submission->origin_state) {
-                throw new Exception("Cannot cancel draft_republish: origin_state not set");
-            }
-
-            $targetState = $submission->origin_state;
-            self::validateTransition($state, $targetState);
-
-            $submission->status = $targetState;
-            $submission->origin_state = null;
-
-            // Restore original job_id if it was stored
-            if ($submission->origin_job_id !== null) {
-                $submission->job_id = $submission->origin_job_id;
-                $submission->origin_job_id = null;
-            }
-
-            // Restore original field values from snapshot
-            self::restoreFromSnapshot($submission);
-
-        } elseif ($state === Submission::STATUS_DRAFT_UNPUBLISH) {
-            // Always returns to published
-            self::validateTransition($state, Submission::STATUS_PUBLISHED);
-            $submission->status = Submission::STATUS_PUBLISHED;
-
-            // Restore original job_id if it was stored
-            if ($submission->origin_job_id !== null) {
-                $submission->job_id = $submission->origin_job_id;
-                $submission->origin_job_id = null;
-            }
-
-            // Restore original field values from snapshot
-            self::restoreFromSnapshot($submission);
-
-        } else {
-            throw new Exception("Cannot cancel from state '{$state}'");
-        }
-
-        return $submission;
-    }
-
-    /**
-     * Check if a submission is in a state that can be cancelled
-     *
-     * @param string $state
-     * @return bool
-     */
-    public static function isCancellable(string $state): bool
-    {
-        return in_array($state, [
-            Submission::STATUS_DRAFT_REPUBLISH,
-            Submission::STATUS_DRAFT_UNPUBLISH,
-        ]);
-    }
-
-    /**
-     * Restore submission fields from origin_snapshot
-     * Used when cancelling draft_republish or draft_unpublish operations
-     *
-     * @param Submission $submission
-     * @return void
-     */
-    protected static function restoreFromSnapshot(Submission $submission): void
-    {
-        if ($submission->origin_snapshot === null) {
-            // No snapshot to restore from - this is okay for backwards compatibility
-            return;
-        }
-
-        $snapshot = $submission->origin_snapshot;
-
-        // Restore database fields
-        if (isset($snapshot->local_key)) {
-            $submission->local_key = $snapshot->local_key;
-        }
-        if (isset($snapshot->gene_id)) {
-            $submission->gene_id = $snapshot->gene_id;
-        }
-        if (isset($snapshot->disease_id)) {
-            $submission->disease_id = $snapshot->disease_id;
-        }
-        if (isset($snapshot->inheritance_id)) {
-            $submission->inheritance_id = $snapshot->inheritance_id;
-        }
-        if (isset($snapshot->classification_id)) {
-            $submission->classification_id = $snapshot->classification_id;
-        }
-        if (isset($snapshot->report_date)) {
-            // Convert to Carbon if it's a string, then format for MySQL
-            $submission->report_date = $snapshot->report_date instanceof Carbon
-                ? $snapshot->report_date
-                : Carbon::parse($snapshot->report_date);
-        }
-        if (isset($snapshot->report_url)) {
-            $submission->report_url = $snapshot->report_url;
-        }
-
-        // Restore submission_data JSON
-        if (isset($snapshot->submission_data)) {
-            $submission->submission_data = $snapshot->submission_data;
-        }
-
-        // Restore PubMed IDs (many-to-many relationship)
-        if (isset($snapshot->pubmed_ids)) {
-            // Sync will remove all current associations and add only the ones in the snapshot
-            $submission->pubmeds()->sync($snapshot->pubmed_ids);
-        }
-
-        // Clear the snapshot after restoring
-        $submission->origin_snapshot = null;
     }
 
     /**
