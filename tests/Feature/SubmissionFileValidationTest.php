@@ -252,7 +252,8 @@ class SubmissionFileValidationTest extends TestCase
         $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
 
         $this->assertNotEmpty($errors);
-        $this->assertEquals('minimum_rows_requirement', $errors[0]['error_type']);
+        $this->assertEquals('invalid_file_format', $errors[0]['error_type']);
+        $this->assertTrue($errors[0]['is_file_format_error']);
     }
 
     /**
@@ -270,6 +271,7 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_header_columns', $errors[0]['error_type']);
+        $this->assertTrue($errors[0]['is_file_format_error']);
     }
 
     /**

@@ -31,7 +31,7 @@ use App\Services\SubmissionStateMachine;
  * SubmissionController supplies the submissions data to Inertia/Vue.
  *
  * */
-class PublishController extends Controller
+class ReleaseController extends Controller
 {
 
     /**
@@ -84,7 +84,7 @@ class PublishController extends Controller
     public function init(Request $request)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -100,9 +100,16 @@ class PublishController extends Controller
         // echo "\nIn init: " . $template->render();
 
         // post packet TODO:  Need a new key assignment
+        \Log::info('ReleaseController::init sending request', [
+            'server' => $server,
+            'headers' => ['GEN-API-KEY' => '***', 'X-GENCC-ACTION' => 'INIT'],
+            'body' => $template->render()
+        ]);
+
         try {
             $response = Http::withHeaders([
-                'GEN-API-KEY' => $token
+                'GEN-API-KEY' => $token,
+                'X-GENCC-ACTION' => 'INIT'
             ])->withBody(
                 $template->render(), 'application/json; charset=UTF-8'
             )->post($server);
@@ -132,7 +139,7 @@ class PublishController extends Controller
     public function send_job(Request $request, $job)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -158,20 +165,17 @@ class PublishController extends Controller
                 continue;
             }
 
-            // Determine action_type for gencc-search API based on submission state
-            // Both new and republish use "publish", unpublish uses "unpublish"
+            // Determine action for HTTP header based on submission state
+            // Both new and republish use "PUBLISH", unpublish uses "UNPUBLISH"
             // With simplified status model: new/republish/unpublish are pending statuses
-            $action_type = match($submission->status) {
-                Submission::STATUS_NEW => 'publish',
-                Submission::STATUS_REPUBLISH => 'publish',
-                Submission::STATUS_UNPUBLISH => 'unpublish',
-                default => 'publish' // fallback for legacy
+            $action = match($submission->status) {
+                Submission::STATUS_NEW => 'PUBLISH',
+                Submission::STATUS_REPUBLISH => 'PUBLISH',
+                Submission::STATUS_UNPUBLISH => 'UNPUBLISH',
+                default => 'PUBLISH' // fallback for legacy
             };
 
-            // Add action_type to data array for template
-            $submissionData = array_merge($data, ['action_type' => $action_type]);
-
-            $response = $this->_publish_submission($submission, 'json.Publish.submission', $submissionData, $token, $server);
+            $response = $this->_publish_submission($submission, 'json.Publish.submission', $data, $token, $server, $action);
 
             if (isset($response['status_code']) && $response['status_code'] == 200) {
                 // Determine target state and action based on current state
@@ -357,27 +361,29 @@ class PublishController extends Controller
     public function send_action(Request $request, $action)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
-        // send init handshake
+        // Prepare data for template
         $data = [
             'token' => $token,
             'timestamp' => Carbon::now(),
             'action' => $action
         ];
 
-        $success = true;
-
         $template = view('json.Publish.unpublish')->with($data);
 
-        // Verbose logging removed to prevent memory issues
-        // var_dump($template->render());
+        // Log the request for debugging
+        \Log::info('Sending unpublish action', [
+            'action_id' => $action->id,
+            'payload' => $template->render()
+        ]);
 
-        // post packet TODO:  Need a new key assignment
+        // Post with X-GENCC-ACTION header set to UNPUBLISH
         $response = Http::withHeaders([
-            'GEN-API-KEY' => $token
+            'GEN-API-KEY' => $token,
+            'X-GENCC-ACTION' => 'UNPUBLISH'
         ])->withBody(
             $template->render(), 'application/json; charset=UTF-8'
         )->post($server);
@@ -397,7 +403,7 @@ class PublishController extends Controller
                 200);
         }
 
-        // return with the proper rstatus code.
+        // return with the proper status code.
         Log::info("Unsuccessful send action!");
 
         return response()->json(['success' => 'false',
@@ -409,7 +415,7 @@ class PublishController extends Controller
     public function send_sgc_id(Request $request, $submission)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -433,7 +439,7 @@ class PublishController extends Controller
     public function end(Request $request)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -466,7 +472,7 @@ class PublishController extends Controller
      */
     public function updateCounts(Request $request)
     {
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -477,9 +483,15 @@ class PublishController extends Controller
 
         $template = view('json.Publish.update_counts')->with($data);
 
+        \Log::info('ReleaseController::updateCounts sending request', [
+            'server' => $server,
+            'body' => $template->render()
+        ]);
+
         try {
             $response = Http::withHeaders([
-                'GEN-API-KEY' => $token
+                'GEN-API-KEY' => $token,
+                'X-GENCC-ACTION' => 'UPDATE_COUNTS'
             ])->withBody(
                 $template->render(), 'application/json; charset=UTF-8'
             )->post($server);
@@ -499,7 +511,7 @@ class PublishController extends Controller
         }
     }
 
-    private function _publish_submission($submission, $template, $header_data, $token, $server) {
+    private function _publish_submission($submission, $template, $header_data, $token, $server, $action = 'PUBLISH') {
 
         $template = view($template)->with($header_data)
             ->with('submission', $submission);
@@ -509,11 +521,13 @@ class PublishController extends Controller
         // Log the request payload for debugging
         \Log::info('Publishing submission', [
             'sid' => $submission->sid,
+            'action' => $action,
             'payload' => $rendered
         ]);
 
         $response = Http::withHeaders([
-            'GEN-API-KEY' => $token
+            'GEN-API-KEY' => $token,
+            'X-GENCC-ACTION' => $action
         ])->withBody(
             $rendered, 'application/json; charset=UTF-8'
         )->post($server);

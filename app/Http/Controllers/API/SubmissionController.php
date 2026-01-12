@@ -27,6 +27,8 @@ use App\Jobs\ProcessPubmed;
 use App\Services\SubmissionStateMachine;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionDuplicateDetection;
+use App\Exports\SubmissionsTemplateExport;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class SubmissionController extends Controller
 {
@@ -510,13 +512,23 @@ class SubmissionController extends Controller
                     $preferences->sub_favorites = [];
                 }
 
-                if ($request->input('value') === "false"){
-                    if (($key = array_search($submission->ident, $preferences->sub_favorites)) !== false)
+                // Handle various representations of true/false from JavaScript
+                // Boolean false can be sent as: false, "false", "0", "", 0
+                $value = $request->input('value');
+                $isFalse = $value === false || $value === "false" || $value === "0" || $value === "" || $value === 0 || $value === null;
+
+                if ($isFalse) {
+                    // Remove from favorites
+                    if (($key = array_search($submission->ident, $preferences->sub_favorites)) !== false) {
                         unset($preferences->sub_favorites[$key]);
-                }
-                else
-                {
-                    $preferences->sub_favorites[] = $submission->ident;
+                        // Re-index array after removal
+                        $preferences->sub_favorites = array_values($preferences->sub_favorites);
+                    }
+                } else {
+                    // Add to favorites (avoid duplicates)
+                    if (!in_array($submission->ident, $preferences->sub_favorites)) {
+                        $preferences->sub_favorites[] = $submission->ident;
+                    }
                 }
                 Auth::user()->preferences = $preferences;
                 Auth::user()->save();
@@ -1495,5 +1507,65 @@ class SubmissionController extends Controller
         $newSubmission->pubmeds()->sync($pubmedIds);
 
         Log::info("Created new version {$newVersionNumber} of submission {$submission->sid} for bulk unpublishing (new id: {$newSubmission->id}), marked original as not most recent");
+    }
+
+    /**
+     * Export submissions to Excel using the template file
+     * Preserves template formatting and appends data starting at row 13
+     */
+    public function exportToTemplate(Request $request)
+    {
+        Log::info('exportToTemplate called');
+
+        $user = Auth::user();
+
+        if ($user === null) {
+            Log::warning('exportToTemplate: No authenticated user');
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3001,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        Log::info('exportToTemplate: User authenticated: ' . $user->email);
+
+        $submissions = $request->input('submissions');
+        Log::info('exportToTemplate: Received ' . (is_array($submissions) ? count($submissions) : 0) . ' submissions');
+
+        if (empty($submissions) || !is_array($submissions)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3002,
+                'message' => 'No submissions provided'
+            ], 400);
+        }
+
+        try {
+            $export = new SubmissionsTemplateExport($submissions);
+            $spreadsheet = $export->generate();
+
+            // Create writer and output
+            $writer = new Xlsx($spreadsheet);
+
+            // Create response with proper headers
+            $filename = 'submissions_export_' . date('Y-m-d_His') . '.xlsx';
+
+            return response()->streamDownload(function() use ($writer) {
+                $writer->save('php://output');
+            }, $filename, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Cache-Control' => 'max-age=0',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Export to template failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 500,
+                'message' => 'Export failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

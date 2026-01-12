@@ -23,6 +23,7 @@ class SubmissionFileValidation
     const SPREADSHEET_VALIDATION = 'spreadsheet';
     const HEADER_VALIDATION = 'header_row';
     const DATA_VALIDATION = 'data_row';
+    const FILE_FORMAT_VALIDATION = 'file_format';  // For file structure/template errors
     const SEVERITY_FATAL = 'fatal';
     const SEVERITY_ERROR = 'error';
 
@@ -397,12 +398,16 @@ class SubmissionFileValidation
         $total_rows = count($worksheet);
         if ($total_rows < self::FIRST_DATA_ROW) {
             $validation_results[] = [
-                'error_type' => 'minimum_rows_requirement',
+                'error_type' => 'invalid_file_format',
                 'severity' => self::SEVERITY_FATAL,
-                'validation_type' => self::SPREADSHEET_VALIDATION,
+                'validation_type' => self::FILE_FORMAT_VALIDATION,
+                'is_file_format_error' => true,
+                'user_title' => 'Invalid File Format',
+                'user_message' => 'The uploaded file does not appear to be a valid GenCC submission template. ' .
+                    'Please download the official template from the GenCC website and ensure your data starts on row 13.',
                 'message' => "The spreadsheet contains " . $total_rows .
-                        " rows, but there must be a minimum of " . self::FIRST_DATA_ROW . ". " .
-                        self::FATAL_ERROR_MESSAGE
+                        " rows, but data must start on row " . self::FIRST_DATA_ROW . " (found only " . $total_rows . " rows). " .
+                        "This usually means the file is not using the correct GenCC submission template."
             ];
             return $validation_results;
         }
@@ -555,12 +560,14 @@ class SubmissionFileValidation
         // no header row - show-stopper
         if (empty($header_row)) {
             return [
-                'error_type' => 'no_header_row_found',
+                'error_type' => 'missing_header_row',
                 'severity' => self::SEVERITY_FATAL,
-                'validation_type' => self::HEADER_VALIDATION,
-                'row' => self::HEADER_ROW_NUM,
-                'message' => 'Could not find header row in row 6 of the spreadsheet. Headers must be in row 6. ' .
-                    self::FATAL_ERROR_MESSAGE,
+                'validation_type' => self::FILE_FORMAT_VALIDATION,
+                'is_file_format_error' => true,
+                'user_title' => 'Missing Header Row',
+                'user_message' => 'The uploaded file is missing the required header row. ' .
+                    'Headers must be in row 6 of the spreadsheet. Please use the official GenCC submission template.',
+                'message' => 'Could not find header row in row 6 of the spreadsheet. Headers must be in row 6.',
             ];
         }
 
@@ -581,20 +588,31 @@ class SubmissionFileValidation
 
             $message = sprintf(
                 'Header validation failed in row 6. Found %d fields, missing %d required fields, %d extra fields. ' .
-                    'Required: %d fields total. Missing fields: %s. Extra fields: %s. ' .
-                    self::FATAL_ERROR_MESSAGE,
+                    'Missing fields: %s. Extra fields: %s.',
                 $validation['total_found'],
                 count($validation['missing_columns']),
                 count($validation['extra_columns']),
-                $validation['total_required'],
                 $missingStr,
                 $extraStr
             );
+
+            // Determine user message based on what's wrong
+            $userMessage = 'The file headers do not match the expected GenCC submission template. ';
+            if (!empty($validation['missing_columns'])) {
+                $userMessage .= 'Missing columns: ' . $missingStr . '. ';
+            }
+            if (!empty($validation['extra_columns'])) {
+                $userMessage .= 'Unexpected columns: ' . $extraStr . '. ';
+            }
+            $userMessage .= 'Please download and use the official template from the GenCC website.';
+
             return [
                 'error_type' => 'invalid_header_columns',
                 'severity' => self::SEVERITY_FATAL,
-                'validation_type' => self::HEADER_VALIDATION,
-                'row' => self::HEADER_ROW_NUM,
+                'validation_type' => self::FILE_FORMAT_VALIDATION,
+                'is_file_format_error' => true,
+                'user_title' => 'Invalid Column Headers',
+                'user_message' => $userMessage,
                 'message' => $message,
             ];
         }

@@ -1,0 +1,133 @@
+<?php
+
+namespace App\Exports;
+
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+
+class SubmissionsTemplateExport
+{
+    protected array $submissions;
+
+    public function __construct(array $submissions)
+    {
+        $this->submissions = $submissions;
+    }
+
+    /**
+     * Generate the Excel file with submissions appended to the template
+     */
+    public function generate(): Spreadsheet
+    {
+        Log::info('SubmissionsTemplateExport::generate called with ' . count($this->submissions) . ' submissions');
+
+        // Load the template file
+        $templatePath = storage_path('app/templates/GenCC Submission Spreadsheet.xlsx');
+
+        Log::info('Template path: ' . $templatePath);
+
+        if (!file_exists($templatePath)) {
+            Log::error('Template file not found at: ' . $templatePath);
+            throw new \Exception('Template file not found');
+        }
+
+        Log::info('Loading template...');
+        $spreadsheet = IOFactory::load($templatePath);
+        Log::info('Template loaded successfully');
+        $worksheet = $spreadsheet->getActiveSheet();
+
+        // Start writing data at row 13
+        $startRow = 13;
+
+        foreach ($this->submissions as $index => $submission) {
+            $rowNum = $startRow + $index;
+
+            // Column A: SGC ID
+            $worksheet->setCellValue("A{$rowNum}", $submission['sid'] ?? '');
+
+            // Column B: Action (default to R for Republish)
+            $worksheet->setCellValue("B{$rowNum}", 'R');
+
+            // Column C: Local Key
+            $worksheet->setCellValue("C{$rowNum}", $submission['local_key'] ?? '');
+
+            // Column D: HGNC ID
+            $hgncId = $submission['submission_data']['gene']['id'] ?? null;
+            if (!$hgncId || $hgncId === '-') {
+                $hgncId = $submission['gene']['hgnc_id'] ?? '';
+            }
+            $worksheet->setCellValue("D{$rowNum}", $hgncId);
+
+            // Column E: Gene Symbol
+            $geneSymbol = $submission['submission_data']['gene']['symbol'] ?? null;
+            if (!$geneSymbol || $geneSymbol === '-') {
+                $geneSymbol = $submission['gene']['symbol'] ?? '';
+            }
+            $worksheet->setCellValue("E{$rowNum}", $geneSymbol);
+
+            // Column F: Disease ID
+            $diseaseId = $submission['submission_data']['disease']['id'] ?? ($submission['disease']['curie'] ?? '');
+            $worksheet->setCellValue("F{$rowNum}", $diseaseId);
+
+            // Column G: Disease Name
+            $diseaseName = $submission['submission_data']['disease']['name'] ?? ($submission['disease']['name'] ?? '');
+            $worksheet->setCellValue("G{$rowNum}", $diseaseName);
+
+            // Column H: MOI ID
+            $moiId = $submission['submission_data']['moi']['id'] ?? ($submission['inheritance']['curie'] ?? '');
+            $worksheet->setCellValue("H{$rowNum}", $moiId);
+
+            // Column I: MOI Name
+            $moiName = $submission['submission_data']['moi']['name'] ?? ($submission['inheritance']['name'] ?? '');
+            $worksheet->setCellValue("I{$rowNum}", $moiName);
+
+            // Column J: Submitter ID
+            $submitterId = $submission['submitter']['curie'] ?? ($submission['submission_data']['additional_information']['submitter_curie'] ?? '');
+            $worksheet->setCellValue("J{$rowNum}", $submitterId);
+
+            // Column K: Submitter Name
+            $submitterName = $submission['submitter']['name'] ?? ($submission['submission_data']['additional_information']['submitter_title'] ?? '');
+            $worksheet->setCellValue("K{$rowNum}", $submitterName);
+
+            // Column L: Classification ID
+            $classificationId = $submission['submission_data']['classification']['id'] ?? ($submission['classification']['curie'] ?? '');
+            $worksheet->setCellValue("L{$rowNum}", $classificationId);
+
+            // Column M: Classification Name
+            $classificationName = $submission['submission_data']['classification']['name'] ?? ($submission['classification']['name'] ?? '');
+            $worksheet->setCellValue("M{$rowNum}", $classificationName);
+
+            // Column N: Report Date (ISO8601)
+            $reportDate = $submission['submission_data']['report']['display_date'] ?? '';
+            if ($reportDate) {
+                try {
+                    $date = new \DateTime($reportDate);
+                    $reportDate = $date->format('c'); // ISO8601 format
+                } catch (\Exception $e) {
+                    // Keep original value if parsing fails
+                }
+            }
+            $worksheet->setCellValue("N{$rowNum}", $reportDate);
+
+            // Column O: Report URL
+            $reportUrl = $submission['submission_data']['report']['ext_url'] ?? '';
+            $worksheet->setCellValue("O{$rowNum}", $reportUrl);
+
+            // Column P: Notes (preserves whitespace)
+            $notes = $submission['submission_data']['notes']['display'] ?? '';
+            $worksheet->setCellValue("P{$rowNum}", $notes);
+
+            // Column Q: PMIDs
+            $pmids = $submission['evidence'] ?? [];
+            $worksheet->setCellValue("Q{$rowNum}", implode(', ', $pmids));
+
+            // Column R: Assertion Criteria URL
+            $criteriaUrl = $submission['submission_data']['criteria']['url'] ?? '';
+            $worksheet->setCellValue("R{$rowNum}", $criteriaUrl);
+        }
+
+        return $spreadsheet;
+    }
+}

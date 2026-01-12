@@ -445,11 +445,86 @@
 
     function exportCSV(event)
     {
-        // PrimeVue DataTable exportCSV() automatically exports only the filtered data:
-        // - Respects :value="jobs?.filter(rowFilter)" for display option filters (Show All, Show Pending, etc.)
-        // - Respects v-model:filters for keyword search via globalFilterFields
-        // Result: Export includes only rows visible in the current table view
-        dt.value.exportCSV();
+        // Helper function to format date as full ISO datetime format
+        const formatDateISO = (dateString) => {
+            if (!dateString) return '';
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return '';
+                return date.toISOString();
+            } catch (e) {
+                return '';
+            }
+        };
+
+        // Get the filtered data - apply rowFilter first
+        let filteredData = jobsWithStatusDate.value?.filter(rowFilter) || [];
+
+        // Apply global keyword search filter if present
+        const globalFilter = filters.value.global?.value;
+        if (globalFilter) {
+            const searchLower = globalFilter.toLowerCase();
+            filteredData = filteredData.filter(job => {
+                const searchableText = [
+                    job.slug,
+                    job.friendly,
+                    getStatusDate(job),
+                    job.status,
+                    displayStatusV2(job.status)
+                ].filter(Boolean).join(' ').toLowerCase();
+                return searchableText.includes(searchLower);
+            });
+        }
+
+        // Define columns matching the table display
+        const columnHeaders = [
+            'Job ID',
+            'Name',
+            '# Submissions',
+            'Created By',
+            'Created',
+            'Submitted',
+            'Released',
+            'Status'
+        ];
+
+        // Build CSV content
+        let csv = columnHeaders.join(',') + '\n';
+
+        filteredData.forEach(job => {
+            const values = [
+                job.slug || '',
+                job.friendly || '',
+                job.submissions_count || 0,
+                job.user?.name || '',
+                formatDateISO(job.created_at),
+                formatDateISO(job.submitted_at),
+                formatDateISO(job.released_at),
+                displayStatusV2(job.status) || ''
+            ];
+
+            // Escape values that contain commas, quotes, or newlines
+            const escapedValues = values.map((val) => {
+                const strVal = String(val);
+                if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
+                    return '"' + strVal.replace(/"/g, '""') + '"';
+                }
+                return strVal;
+            });
+
+            csv += escapedValues.join(',') + '\n';
+        });
+
+        // Download the CSV file
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'jobs_export.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     function rowStyle(data)
@@ -607,11 +682,6 @@ table tbody tr:hover {
                 <Column field="ident" header="# Submissions" sortable>
                      <template #body="{ data }">
                         <div class="font-medium">{{ data.submissions_count }}</div>
-                    </template>
-                </Column>
-                <Column field="processed_count" header="# Processed" sortable>
-                     <template #body="{ data }">
-                        <div class="font-medium">{{ data.processed_submission_ids?.length || 0 }}</div>
                     </template>
                 </Column>
                 <Column field="user.name" header="Created By" sortable>

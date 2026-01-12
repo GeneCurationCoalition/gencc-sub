@@ -12,7 +12,7 @@
     import { useToast } from 'primevue/usetoast';
 
     const props = defineProps(['total_jobs_processing', 'total_submissions_processing', 'active_new_count', 'active_republish_count', 'active_unpublish_count', 'token_expire_date', 'total_submissions_published',
-                               'token_days', 'job_labels', 'classifications', 'pending_classifications', 'has_pending_changes', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
+                               'token_days', 'job_labels', 'classifications', 'pending_classifications', 'delta_new_counts', 'delta_republish_unpublished_counts', 'delta_unpublish_counts', 'has_pending_changes', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
                                 'total_jobs_completed', 'total_submissions_unpublished',
                                 'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
                                 'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'unprocessed_new_error_count', 'unprocessed_republish_error_count', 'unprocessed_unpublish_error_count', 'has_submitter',
@@ -26,10 +26,7 @@
                                 'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
                                 'archived_unique_total', 'archived_total'])
 
-    // Visible in gencc-search = first version + republish (excludes hidden/unpublished)
-    const visibleInSearch = computed(() => props.released_first_version_count + props.released_republish_count);
-
-    const seriesColors = ['#22c55e', '#3b82f6', '#ef4444'];
+    const seriesColors = ['#3b82f6', '#ef4444']; // Published (blue), Unpublished (red)
 
     const options = {
             chart: {
@@ -143,16 +140,18 @@
             }
     };
 
-    const series = [{
-            name: 'New (v1)',
-            data: props.submissions_new
-    }, {
-            name: 'Republished',
-            data: props.submissions_republished
+    // Combine New and Republished into Published
+    const publishedData = computed(() => {
+        return props.submissions_new.map((val, idx) => val + (props.submissions_republished[idx] || 0));
+    });
+
+    const series = computed(() => [{
+            name: 'Published',
+            data: publishedData.value
     }, {
             name: 'Unpublished',
             data: props.submissions_unpublished_chart
-    }];
+    }]);
 
     // Classification chart colors - one for each classification type
     // These match the original distributed bar colors
@@ -239,17 +238,32 @@
                 y: {
                     formatter: function(val, opts) {
                         if (props.has_pending_changes && opts.seriesIndex === 1) {
-                            // For pending series, show the actual pending total and difference
-                            const currentVal = props.classifications[opts.dataPointIndex] || 0;
-                            const pendingVal = props.pending_classifications[opts.dataPointIndex] || 0;
+                            // For pending series, show the actual pending total and breakdown
+                            const idx = opts.dataPointIndex;
+                            const currentVal = props.classifications[idx] || 0;
+                            const pendingVal = props.pending_classifications[idx] || 0;
 
                             // If no change, don't show anything for this series
                             if (pendingVal === currentVal) {
                                 return null;
                             }
 
+                            // Build breakdown string
+                            const newCount = props.delta_new_counts?.[idx] || 0;
+                            const republishCount = props.delta_republish_unpublished_counts?.[idx] || 0;
+                            const unpublishCount = props.delta_unpublish_counts?.[idx] || 0;
+
+                            let parts = [];
+                            if (newCount > 0) parts.push(`+${newCount} new`);
+                            if (republishCount > 0) parts.push(`+${republishCount} republish`);
+                            if (unpublishCount > 0) parts.push(`-${unpublishCount} unpublish`);
+
                             const diff = pendingVal - currentVal;
                             const diffStr = diff > 0 ? `+${diff}` : diff.toString();
+
+                            if (parts.length > 0) {
+                                return `${pendingVal} (${parts.join(', ')} = ${diffStr})`;
+                            }
                             return `${pendingVal} (${diffStr})`;
                         }
                         return val;
@@ -260,6 +274,10 @@
 
     // Series data - show both current and pending if there are changes
     const classificationSeries = computed(() => {
+        // Calculate totals
+        const currentTotal = props.classifications?.reduce((sum, val) => sum + (val || 0), 0) || 0;
+        const pendingTotal = props.pending_classifications?.reduce((sum, val) => sum + (val || 0), 0) || 0;
+
         if (props.has_pending_changes) {
             // For "After Pending" series, only show bars where there's a difference
             const pendingData = props.pending_classifications.map((pending, index) => {
@@ -270,18 +288,18 @@
 
             return [
                 {
-                    name: 'Current Live',
+                    name: `Current Live (${currentTotal.toLocaleString()})`,
                     data: props.classifications
                 },
                 {
-                    name: 'After Pending',
+                    name: `After Pending (${pendingTotal.toLocaleString()})`,
                     data: pendingData
                 }
             ];
         }
         // No pending changes - show single series with distributed colors
         return [{
-            name: 'Live Submissions',
+            name: `Live Submissions (${currentTotal.toLocaleString()})`,
             data: props.classifications
         }];
     });
@@ -409,6 +427,58 @@
         }
     }
 
+    // Check if draft job can be submitted
+    const canSubmitJob = computed(() => {
+        if (props.unprocessed_job_status !== 'draft') return false;
+        if (!props.unprocessed_job_ident) return false;
+        // Has at least one submission
+        const totalSubmissions = (props.unprocessed_new_count || 0) +
+                                 (props.unprocessed_republish_count || 0) +
+                                 (props.unprocessed_unpublish_count || 0);
+        if (totalSubmissions === 0) return false;
+        // No errors
+        if ((props.unprocessed_error_count || 0) > 0) return false;
+        return true;
+    });
+
+    const isSubmittingJob = ref(false);
+
+    async function submitJob() {
+        if (!props.unprocessed_job_slug) return;
+
+        isSubmittingJob.value = true;
+        try {
+            const response = await axios.post('/api/jobs/submit/' + props.unprocessed_job_slug);
+
+            if (response.data.hasOwnProperty('status_code') && response.data.status_code == 200) {
+                toast.add({
+                    severity: 'success',
+                    summary: 'Job Submitted',
+                    detail: 'Job has been submitted successfully',
+                    life: 3000
+                });
+                router.reload();
+            } else {
+                toast.add({
+                    severity: 'error',
+                    summary: 'Submission Failed',
+                    detail: response.data.message || 'Failed to submit job',
+                    life: 5000
+                });
+            }
+        } catch (error) {
+            console.error(error);
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: error.response?.data?.message || 'An error occurred while submitting the job',
+                life: 5000
+            });
+        } finally {
+            isSubmittingJob.value = false;
+        }
+    }
+
 </script>
 
 <template>
@@ -428,27 +498,26 @@
 
             <div class="grid grid-cols-2 gap-4">
                 <div class="">
-                    <Fieldset legend="Submission Statistics">
+                    <Fieldset legend="Submission Statistics" :pt="{ content: { class: 'pt-0' } }">
                         <div class="m-0">
                             <!-- Header row with total unique SGCs -->
-                            <div class="text-center mb-3">
+                            <div class="text-center mb-2">
                                 <span class="font-semibold">Total Unique SGCs:</span>
                                 <span class="text-xl font-bold text-blue-600 ml-2">{{ total_unique_sids }}</span>
                             </div>
 
-                            <!-- Three-column table: Released | Awaiting | Archived -->
+                            <!-- Three-column table: Released | Pending | Historic -->
                             <table class="w-full border-collapse text-sm">
                                 <thead>
                                     <tr class="border-b-2 border-gray-300">
                                         <th class="text-left py-2 px-2 font-semibold text-green-700">
                                             Released ({{ released_total }})
-                                            <div class="text-xs font-normal text-gray-500">Visible: {{ visibleInSearch }}</div>
                                         </th>
                                         <th class="text-left py-2 px-2 font-semibold text-amber-700 border-l border-gray-200">
-                                            Awaiting ({{ awaiting_total }})
+                                            Pending ({{ awaiting_total }})
                                         </th>
                                         <th class="text-left py-2 px-2 font-semibold text-gray-600 border-l border-gray-200">
-                                            Archived ({{ archived_unique_total }})
+                                            Historic ({{ archived_unique_total }})
                                         </th>
                                     </tr>
                                 </thead>
@@ -458,12 +527,8 @@
                                         <td class="py-1 px-2 align-top">
                                             <div class="space-y-1">
                                                 <div class="flex justify-between">
-                                                    <span class="text-gray-600">New (v1):</span>
-                                                    <span>{{ released_first_version_count }}</span>
-                                                </div>
-                                                <div class="flex justify-between">
-                                                    <span class="text-gray-600">Republished:</span>
-                                                    <span>{{ released_republish_count }}</span>
+                                                    <span class="text-gray-600">Published:</span>
+                                                    <span>{{ released_first_version_count + released_republish_count }}</span>
                                                 </div>
                                                 <div class="flex justify-between">
                                                     <span class="text-gray-600">Unpublished:</span>
@@ -471,7 +536,7 @@
                                                 </div>
                                             </div>
                                         </td>
-                                        <!-- Awaiting Column -->
+                                        <!-- Pending Column -->
                                         <td class="py-1 px-2 align-top border-l border-gray-200">
                                             <div class="space-y-1">
                                                 <div class="flex justify-between">
@@ -488,26 +553,16 @@
                                                 </div>
                                             </div>
                                         </td>
-                                        <!-- Archived Column -->
+                                        <!-- Historic Column -->
                                         <td class="py-1 px-2 align-top border-l border-gray-200">
                                             <div class="space-y-1">
                                                 <div class="flex justify-between">
-                                                    <span class="text-gray-600">New (v1):</span>
-                                                    <span>{{ archived_first_version_unique }}</span>
-                                                </div>
-                                                <div class="flex justify-between">
-                                                    <span class="text-gray-600">Republished:</span>
-                                                    <span>
-                                                        {{ archived_republish_unique }}
-                                                        <span v-if="archived_republish_total !== archived_republish_unique" class="text-xs text-gray-400">({{ archived_republish_total }})</span>
-                                                    </span>
+                                                    <span class="text-gray-600">Published:</span>
+                                                    <span>{{ archived_first_version_unique + archived_republish_unique }}</span>
                                                 </div>
                                                 <div class="flex justify-between">
                                                     <span class="text-gray-600">Unpublished:</span>
-                                                    <span>
-                                                        {{ archived_unpublish_unique }}
-                                                        <span v-if="archived_unpublish_total !== archived_unpublish_unique" class="text-xs text-gray-400">({{ archived_unpublish_total }})</span>
-                                                    </span>
+                                                    <span>{{ archived_unpublish_unique }}</span>
                                                 </div>
                                             </div>
                                         </td>
@@ -518,8 +573,21 @@
                     </Fieldset>
                 </div>
                 <div class="">
-                    <Fieldset legend="Active Job">
-                        <div v-if="unprocessed_job_status" class="m-0 grid grid-cols-2 gap-6">
+                    <Fieldset legend="Pending Job">
+                        <div v-if="unprocessed_job_status" class="m-0 relative">
+                            <!-- Submit button in upper right -->
+                            <div v-if="canSubmitJob" class="absolute top-0 right-0 z-10">
+                                <Button
+                                    label="Submit"
+                                    icon="pi pi-send"
+                                    severity="info"
+                                    size="small"
+                                    :loading="isSubmittingJob"
+                                    @click="submitJob"
+                                    v-tooltip.top="'Submit job for processing'"
+                                />
+                            </div>
+                            <div class="grid grid-cols-2 gap-6">
                             <!-- First Column: Job Info -->
                             <div class="space-y-2">
                                 <div class="flex items-baseline gap-2">
@@ -556,11 +624,12 @@
                                     <i v-if="unprocessed_unpublish_count > 0 && unprocessed_unpublish_error_count > 0" class="pi pi-exclamation-circle text-red-600 ml-1" v-tooltip.top="`${unprocessed_unpublish_error_count} error(s)`"></i>
                                 </div>
                             </div>
+                            </div>
                         </div>
                         <div v-else class="m-0">
                             <div v-if="has_submitter">
                                 <div class="text-gray-600 mb-4">
-                                    No active job. Get started by creating a new draft job:
+                                    No pending job. Get started by creating a new draft job:
                                 </div>
                                 <div class="flex gap-3">
                                     <Button
@@ -584,7 +653,7 @@
                                 </div>
                             </div>
                             <div v-else class="text-gray-600">
-                                No active job.
+                                No pending job.
                             </div>
                         </div>
                     </Fieldset>

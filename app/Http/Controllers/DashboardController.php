@@ -529,11 +529,20 @@ class DashboardController extends Controller
             ->groupBy('classification_id')
             ->pluck('count', 'classification_id');
 
-        // Calculate pending (projected) counts
+        // Calculate pending (projected) counts and build delta breakdown arrays
+        $deltaNewCounts = array_fill(0, count($classificationOrder), 0);
+        $deltaRepublishUnpublishedCounts = array_fill(0, count($classificationOrder), 0);
+        $deltaUnpublishCounts = array_fill(0, count($classificationOrder), 0);
+
         foreach ($classificationOrder as $index => $classId) {
             $addFromNew = $pendingNewCounts->get($classId, 0);
             $addFromRepublishUnpublished = $pendingRepublishOfUnpublishedCounts->get($classId, 0);
             $subtractCount = $pendingUnpublishCounts->get($classId, 0);
+
+            $deltaNewCounts[$index] = $addFromNew;
+            $deltaRepublishUnpublishedCounts[$index] = $addFromRepublishUnpublished;
+            $deltaUnpublishCounts[$index] = $subtractCount;
+
             $pendingClassifications[$index] = max(0, $classifications[$index] + $addFromNew + $addFromRepublishUnpublished - $subtractCount);
         }
 
@@ -621,6 +630,9 @@ class DashboardController extends Controller
             'job_labels' => $jobLabels,
             'classifications' => $classifications,
             'pending_classifications' => $pendingClassifications,
+            'delta_new_counts' => $deltaNewCounts,
+            'delta_republish_unpublished_counts' => $deltaRepublishUnpublishedCounts,
+            'delta_unpublish_counts' => $deltaUnpublishCounts,
             'has_pending_changes' => $hasPendingChanges,
             'submissions_new' => $submissions_new,
             'submissions_republished' => $submissions_republished,

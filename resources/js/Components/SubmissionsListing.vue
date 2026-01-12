@@ -1,8 +1,7 @@
 <script setup>
 
 
-    import { ref, onMounted, onUnmounted } from 'vue'
-    import { computed } from 'vue'
+    import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
     import { router } from '@inertiajs/vue3'
     import { usePage } from '@inertiajs/vue3';
     import { FilterMatchMode, FilterOperator } from "primevue/api";
@@ -16,19 +15,27 @@
 
     const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus'])
 
-    console.log('SubmissionsListing hasSubmittedJob prop:', props.hasSubmittedJob, 'type:', typeof props.hasSubmittedJob)
-
     const page = usePage()
 
     const mine = computed(() => page.props.mine)
 
-    // Ensure favorites is always an array (handle case where it might be an empty object from DB)
-    const favorites = computed(() => {
-        if (!props.favorites) return [];
-        if (Array.isArray(props.favorites)) return props.favorites;
-        // If it's an object (like empty {}), convert to array
-        return Object.values(props.favorites);
-    })
+    // Local reactive copy of favorites for optimistic updates
+    // Initialize from props but can be updated locally for instant UI feedback
+    const localFavorites = ref([]);
+
+    // Sync localFavorites when props.favorites changes (e.g., after page reload)
+    watch(() => props.favorites, (newFavorites) => {
+        if (!newFavorites) {
+            localFavorites.value = [];
+        } else if (Array.isArray(newFavorites)) {
+            localFavorites.value = [...newFavorites];
+        } else {
+            localFavorites.value = Object.values(newFavorites);
+        }
+    }, { immediate: true });
+
+    // Use localFavorites for display (allows optimistic updates)
+    const favorites = computed(() => localFavorites.value)
 
     // Transform submissions to include a sortable status_date field
     // This allows PrimeVue DataTable to sort on the computed status date
@@ -587,8 +594,6 @@
         // Use idents to target specific versions of submissions
         const idents = selectedSubmissions.value.map(s => s.ident);
 
-        console.log('bulkToggleFavorites called', { action, count: idents.length, idents });
-
         // Show confirmation dialog
         confirm.require({
             group: 'headless',
@@ -599,21 +604,31 @@
             rejectLabel: 'Cancel',
             acceptLabel: 'Continue',
             accept: async () => {
-                console.log('Confirm accept callback triggered');
+                // Save previous state for rollback on error
+                const previousFavorites = [...localFavorites.value];
 
-                // Show loading overlay for large operations
-                const isLargeOperation = idents.length > 50;
-                if (isLargeOperation) {
-                    isLoadingBulkAction.value = true;
+                // Optimistic update - apply changes immediately
+                if (action === 'favorite') {
+                    // Add all idents that aren't already favorites
+                    const newFavorites = [...localFavorites.value];
+                    idents.forEach(ident => {
+                        if (!newFavorites.includes(ident)) {
+                            newFavorites.push(ident);
+                        }
+                    });
+                    localFavorites.value = newFavorites;
                 } else {
-                    // Show loading overlay only if operation takes longer than 2 seconds
-                    const loadingTimeout = setTimeout(() => {
-                        isLoadingBulkAction.value = true;
-                    }, 2000);
-                    window.bulkActionLoadingTimeout = loadingTimeout;
+                    // Remove all idents from favorites
+                    localFavorites.value = localFavorites.value.filter(fav => !idents.includes(fav));
+
+                    // If showing only favorites and all are removed, switch to Show All
+                    if (selectedDisplay.value === 'favorites' && localFavorites.value.length === 0) {
+                        selectedDisplay.value = 'all';
+                    }
                 }
 
-                console.log('Starting bulk favorites API call for', idents.length, 'submissions');
+                // Clear selection immediately for better UX
+                selectedSubmissions.value = [];
 
                 try {
                     // Use the new bulk favorites endpoint - single request for all submissions
@@ -626,21 +641,6 @@
                         }
                     });
 
-                    console.log('Bulk favorites response:', response.data);
-
-                    // Clear loading timeout if it was set
-                    if (window.bulkActionLoadingTimeout) {
-                        clearTimeout(window.bulkActionLoadingTimeout);
-                    }
-                    isLoadingBulkAction.value = false;
-
-                    // Reload only the favorites prop
-                    selectedSubmissions.value = []; // Clear selection
-                    router.reload({
-                        only: ['favorites'],
-                        preserveScroll: true
-                    });
-
                     // Check response and show appropriate message
                     if (response.data.success === 'true') {
                         toast.add({
@@ -650,6 +650,8 @@
                             life: 3000
                         });
                     } else if (response.data.success === 'partial') {
+                        // Partial success - reload to get accurate state
+                        router.reload({ only: ['favorites'], preserveScroll: true });
                         toast.add({
                             severity: 'warn',
                             summary: 'Partially Complete',
@@ -657,6 +659,8 @@
                             life: 5000
                         });
                     } else {
+                        // Failed - revert optimistic update
+                        localFavorites.value = previousFavorites;
                         toast.add({
                             severity: 'error',
                             summary: 'Error',
@@ -665,13 +669,9 @@
                         });
                     }
                 } catch (err) {
+                    // Error - revert optimistic update
+                    localFavorites.value = previousFavorites;
                     console.error('Bulk favorites error:', err);
-
-                    // Clear loading timeout if it was set
-                    if (window.bulkActionLoadingTimeout) {
-                        clearTimeout(window.bulkActionLoadingTimeout);
-                    }
-                    isLoadingBulkAction.value = false;
 
                     toast.add({
                         severity: 'error',
@@ -903,10 +903,29 @@
     }
 
 
-    async function updateFavorite(sid, toggle) {
+    async function updateFavorite(ident, toggle) {
+        // Optimistic update - update UI immediately for instant feedback
+        const previousFavorites = [...localFavorites.value];
+
+        if (toggle) {
+            // Adding to favorites
+            if (!localFavorites.value.includes(ident)) {
+                localFavorites.value = [...localFavorites.value, ident];
+            }
+        } else {
+            // Removing from favorites
+            localFavorites.value = localFavorites.value.filter(fav => fav !== ident);
+
+            // If we're removing a favorite and currently showing only favorites
+            // Check if this was the last favorite, and if so, reset to "Show All"
+            if (selectedDisplay.value === 'favorites' && localFavorites.value.length === 0) {
+                selectedDisplay.value = 'all';
+            }
+        }
 
         try {
-            const response = await axios.post('/api/submissions/' + sid, {
+            // Use ident (not sid) to target the specific version
+            const response = await axios.post('/api/submissions/' + ident, {
                 type: 'favorites',
                 value: toggle
             }, {
@@ -915,29 +934,27 @@
                 }
             });
 
-            if ( response.data.hasOwnProperty('status_code') &&  response.data.status_code == 200 )
-            {
-                // If we're removing a favorite (toggle is false) and currently showing only favorites
-                // Check if this was the last favorite, and if so, reset to "Show All"
-                if (toggle === false && selectedDisplay.value === 'favorites') {
-                    // Find the submission we're unfavoriting
-                    const submission = props.submissions?.find(s => s.sid === sid);
-                    if (submission) {
-                        // Count how many favorites will remain after this removal
-                        const remainingFavorites = props.favorites.filter(fav => fav !== submission.ident).length;
-                        if (remainingFavorites === 0) {
-                            // Reset to "Show All" before reload to prevent blank view
-                            selectedDisplay.value = 'all';
-                        }
-                    }
-                }
-
-                // reload the server data
-                router.reload();
-
+            if (!(response.data.hasOwnProperty('status_code') && response.data.status_code == 200)) {
+                // API didn't return success - revert optimistic update
+                localFavorites.value = previousFavorites;
+                toast.add({
+                    severity: 'error',
+                    summary: 'Error',
+                    detail: 'Failed to update favorite status',
+                    life: 3000
+                });
             }
+            // No reload needed - optimistic update already applied
         } catch (error) {
+            // Revert optimistic update on error
+            localFavorites.value = previousFavorites;
             console.error(error);
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: 'Failed to update favorite status',
+                life: 3000
+            });
         }
     }
 
@@ -1025,26 +1042,11 @@
     }
 
 
-    function exportCSV(event)
+    async function exportCSV(event)
     {
-        // Helper function to format date as YYYY/MM/DD
-        const formatDate = (dateString) => {
-            if (!dateString) return '';
-            try {
-                const date = new Date(dateString);
-                if (isNaN(date.getTime())) return '';
-
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-                return `${year}/${month}/${day}`;
-            } catch (e) {
-                return '';
-            }
-        };
-
         // Get the filtered data - apply rowFilter first
-        let filteredData = props.submissions?.filter(rowFilter) || [];
+        // Use submissionsWithStatusDate to match the DataTable source
+        let filteredData = submissionsWithStatusDate.value?.filter(rowFilter) || [];
 
         // Apply global keyword search filter if present
         const globalFilter = filters.value.global?.value;
@@ -1070,105 +1072,89 @@
             });
         }
 
-        // Define columns matching the submission worksheet format
-        const columns = [
-            'sgc_id',
-            'action',
-            'local_key',
-            'hgnc_id',
-            'hgnc_symbol',
-            'disease_id',
-            'disease_name',
-            'moi_id',
-            'moi_name',
-            'submitter_id',
-            'submitter_name',
-            'classification_id',
-            'classification_name',
-            'date',
-            'public_report_url',
-            'notes',
-            'pmids',
-            'assertion_criteria_url'
-        ];
+        if (filteredData.length === 0) {
+            toast.add({
+                severity: 'warn',
+                summary: 'No Data',
+                detail: 'No submissions to export.',
+                life: 3000
+            });
+            return;
+        }
 
-        const columnHeaders = [
-            'SGC ID',
-            'Action',
-            'Local Key',
-            'HGNC ID',
-            'Gene Symbol',
-            'Disease ID (MONDO)',
-            'Disease Name',
-            'Mode of Inheritance ID',
-            'Mode of Inheritance Name',
-            'Submitter ID',
-            'Submitter Name',
-            'Classification ID',
-            'Classification Name',
-            'Report Date',
-            'Public Report URL',
-            'Notes',
-            'PubMed IDs',
-            'Assertion Criteria URL'
-        ];
+        try {
+            // Call backend API to generate Excel file with template formatting preserved
+            // Get CSRF token from meta tag
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            // Get XSRF token from cookie (Laravel sets this)
+            const xsrfCookie = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='));
+            const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=')[1]) : '';
 
-        // Build CSV content
-        let csv = columnHeaders.join(',') + '\n';
-
-        filteredData.forEach(row => {
-            const rawDate = row.submission_data?.report?.display_date || '';
-            const formattedDate = formatDate(rawDate);
-
-            const values = [
-                row.sid || '',
-                'R',  // Action column - default to 'R' (Republish)
-                row.local_key || '',
-                (row.submission_data?.gene?.id && row.submission_data.gene.id !== '-') ? row.submission_data.gene.id : (row.gene?.hgnc_id || ''),
-                (row.submission_data?.gene?.symbol && row.submission_data.gene.symbol !== '-') ? row.submission_data.gene.symbol : (row.gene?.symbol || ''),
-                row.submission_data?.disease?.id || row.disease?.curie || '',
-                row.submission_data?.disease?.name || row.disease?.name || '',
-                row.submission_data?.moi?.id || row.inheritance?.curie || '',
-                row.submission_data?.moi?.name || row.inheritance?.name || '',
-                row.submitter?.curie || row.submission_data?.additional_information?.submitter_curie || '',
-                row.submitter?.name || row.submission_data?.additional_information?.submitter_title || '',
-                row.submission_data?.classification?.id || row.classification?.curie || '',
-                row.submission_data?.classification?.name || row.classification?.name || '',
-                formattedDate,  // Index 14 - formatted date (shifted from 13)
-                row.submission_data?.report?.ext_url || '',
-                row.submission_data?.notes?.display || '',
-                (row.evidence || []).join(', '),
-                row.submission_data?.criteria?.url || ''
-            ];
-
-            // Escape values that contain commas, quotes, or newlines
-            // Always wrap date field (index 13) and PubMed IDs (index 16) in double quotes
-            const escapedValues = values.map((val, index) => {
-                const strVal = String(val);
-                // Always wrap date column and PubMed IDs in quotes
-                if (index === 13 || index === 16) {
-                    return '"' + strVal.replace(/"/g, '""') + '"';
-                }
-                // Wrap other fields only if needed
-                if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
-                    return '"' + strVal.replace(/"/g, '""') + '"';
-                }
-                return strVal;
+            const response = await fetch('/api/submissions/export-template', {
+                method: 'POST',
+                credentials: 'same-origin',  // Include cookies for session auth
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-XSRF-TOKEN': xsrfToken
+                },
+                body: JSON.stringify({
+                    submissions: filteredData
+                })
             });
 
-            csv += escapedValues.join(',') + '\n';
-        });
+            console.log('Export response status:', response.status);
+            console.log('Export response ok:', response.ok);
+            console.log('Export response headers:', Object.fromEntries(response.headers.entries()));
 
-        // Download the CSV file
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.setAttribute('href', url);
-        link.setAttribute('download', 'submissions_export.csv');
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            if (!response.ok) {
+                // Try to get error message from response
+                const text = await response.text();
+                console.error('Export error response:', text);
+                let errorMessage = 'Export failed';
+                try {
+                    const errorData = JSON.parse(text);
+                    errorMessage = errorData.message || errorMessage;
+                } catch (e) {
+                    errorMessage = text || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
+            // Download the file
+            const blob = await response.blob();
+            console.log('Blob size:', blob.size, 'type:', blob.type);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+
+            // Get filename from Content-Disposition header or use default
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = 'submissions_export.xlsx';
+            if (contentDisposition) {
+                const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
+                if (matches && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, '');
+                }
+            }
+
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+        } catch (error) {
+            console.error('Error exporting to xlsx:', error);
+            toast.add({
+                severity: 'error',
+                summary: 'Export Failed',
+                detail: error.message || 'Failed to export submissions. Please try again.',
+                life: 5000
+            });
+        }
     }
 
     function rowStyle(data)
@@ -1656,11 +1642,11 @@ table tbody tr:hover {
                         </IconField>
                     </div>
                 </template>
-                <Column v-if="!props.hasSubmittedJob" selectionMode="multiple" headerStyle="width: 3rem" :exportable="false"></Column>
+                <Column selectionMode="multiple" headerStyle="width: 3rem" :exportable="false"></Column>
                 <Column field="ident" header="">
                      <template #body="{ data }">
-                        <div v-if="favorites.includes(data.ident)" class="text-orange-300 text-xl" @click="updateFavorite(data.sid, false)"><i class="pi pi-star-fill" ></i></div>
-                        <div v-else class="text-slate-300 text-xl" @click="updateFavorite(data.sid, true)"><i class="pi pi-star"></i></div>
+                        <div v-if="favorites.includes(data.ident)" class="text-orange-300 text-xl" @click="updateFavorite(data.ident, false)"><i class="pi pi-star-fill" ></i></div>
+                        <div v-else class="text-slate-300 text-xl" @click="updateFavorite(data.ident, true)"><i class="pi pi-star"></i></div>
                     </template>
                 </Column>
                 <Column field="sid" header="Submission" sortable>

@@ -12,7 +12,7 @@ use App\Models\Submission;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
 
-use App\Http\Controllers\PublishController as PublishController;
+use App\Http\Controllers\ReleaseController;
 use App\Events\PublishStatusUpdate;
 
 class GenccRelease extends Command
@@ -66,7 +66,7 @@ class GenccRelease extends Command
         print("TESTING REMOTE HANDSHAKE");
 
         // init handshake with gencc-search
-        $gencc_search = new PublishController();
+        $gencc_search = new ReleaseController();
 
         $response = $gencc_search->init(new Request);
 
@@ -107,7 +107,7 @@ class GenccRelease extends Command
         }
 
         // init handshake with gencc-search
-        $gencc_search = new PublishController();
+        $gencc_search = new ReleaseController();
 
         $this->info("Initializing handshake with gencc-search...");
         $response = $gencc_search->init(new Request);
@@ -209,7 +209,7 @@ class GenccRelease extends Command
         $actions = Action::status(Action::STATUS_PENDING)->get();
         
         // init handshake with gencc-search
-        $gencc_search = new PublishController();
+        $gencc_search = new ReleaseController();
 
         $response = $gencc_search->init(new Request);
 
@@ -252,7 +252,7 @@ class GenccRelease extends Command
         $this->info("Processing {$totalSubmissions} SGC IDs...");
 
         // init handshake with gencc-search
-        $gencc_search = new PublishController();
+        $gencc_search = new ReleaseController();
 
         $response = $gencc_search->init(new Request);
 
@@ -289,7 +289,7 @@ class GenccRelease extends Command
     {
         $this->info("Triggering update counts on gencc-search...");
 
-        $gencc_search = new PublishController();
+        $gencc_search = new ReleaseController();
 
         // Initialize session
         $initResponse = $gencc_search->init(new Request);
