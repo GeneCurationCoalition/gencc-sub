@@ -139,7 +139,7 @@ class DocumentRowCountTest extends TestCase
         $this->job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => $this->user->id,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_DRAFT,
             'type' => Job::TYPE_FILE_SUBMISSION
         ]);

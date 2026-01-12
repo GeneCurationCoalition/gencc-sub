@@ -38,12 +38,13 @@ class Job extends Model
      * @var array
      */
     protected $casts = [
-        'submission_date' => 'datetime',
         'submission_data' => 'object',
         'activity' => 'object',
-        'published_at' => 'datetime',
+        'released_at' => 'datetime',
+        'submitted_at' => 'datetime',
         'processed_submission_ids' => 'array',
-        'is_publishing' => 'boolean'
+        'is_publishing' => 'boolean',
+        'is_most_recent' => 'boolean'
     ];
 
     /**
@@ -52,9 +53,9 @@ class Job extends Model
      * @var array
      */
 	protected $fillable = [	'ident', 'type', 'user_id', 'activity', 'activity->errors',
-                            'submitter_id', 'submission_date', 'submission_data',
+                            'submitter_id', 'submission_data',
                             'slug', 'friendly',
-                            'status', 'is_publishing', 'is_processing' ];
+                            'status', 'is_publishing', 'is_processing', 'is_most_recent' ];
 
 	/**
      * Non-persistent storage model attributes.
@@ -69,7 +70,12 @@ class Job extends Model
      */
     public const STATUS_DRAFT = 'draft';
     public const STATUS_SUBMITTED = 'submitted';
-    public const STATUS_PROCESSED = 'processed';
+    public const STATUS_RELEASED = 'released';
+
+    /**
+     * @deprecated Use STATUS_RELEASED instead. Will be removed in a future release.
+     */
+    public const STATUS_PROCESSED = 'released';
 
     /**
      * @deprecated Legacy integer status constants - kept for migration commands only
@@ -91,7 +97,8 @@ class Job extends Model
     protected $status_strings = [
         'draft' => 'Draft',
         'submitted' => 'Submitted',
-        'processed' => 'Processed'
+        'released' => 'Released',
+        'processed' => 'Released' // Backwards compatibility
     ];
 
     /**
@@ -127,11 +134,15 @@ class Job extends Model
                     . str_pad($model->id ,5, '0', STR_PAD_LEFT)])
         );
 
-        // Set published_at when job status changes to PROCESSED
+        // Set submitted_at when job status changes to SUBMITTED
+        // Set released_at when job status changes to PROCESSED
         // Only set if not already set (to preserve historical dates during imports)
         static::updating(function (Model $model) {
-            if ($model->isDirty('status') && $model->status === self::STATUS_PROCESSED && $model->published_at === null) {
-                $model->published_at = Carbon::now();
+            if ($model->isDirty('status') && $model->status === self::STATUS_SUBMITTED && $model->submitted_at === null) {
+                $model->submitted_at = Carbon::now();
+            }
+            if ($model->isDirty('status') && $model->status === self::STATUS_PROCESSED && $model->released_at === null) {
+                $model->released_at = Carbon::now();
             }
         });
     }
@@ -230,24 +241,55 @@ class Job extends Model
 
 
     /**
+     * Query scope for released status
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeReleased($query)
+    {
+		return $query->where('status', self::STATUS_RELEASED);
+    }
+
+    /**
      * Query scope for processed status
+     * @deprecated Use scopeReleased() instead
      *
      * @return Illuminate\Database\Eloquent\Collection
      */
 	public function scopeProcessed($query)
     {
-		return $query->where('status', self::STATUS_PROCESSED);
+		return $this->scopeReleased($query);
     }
 
 
     /**
-     * Query scope for active (non-processed) jobs
+     * Query scope for active (non-released) jobs
      *
      * @return Illuminate\Database\Eloquent\Collection
      */
 	public function scopeActive($query)
     {
 		return $query->whereIn('status', [self::STATUS_DRAFT, self::STATUS_SUBMITTED]);
+    }
+
+    /**
+     * Check if this job is released
+     *
+     * @return bool
+     */
+    public function isReleased(): bool
+    {
+        return $this->status === self::STATUS_RELEASED;
+    }
+
+    /**
+     * Check if this job is active (draft or submitted)
+     *
+     * @return bool
+     */
+    public function isActive(): bool
+    {
+        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_SUBMITTED]);
     }
 
     /**

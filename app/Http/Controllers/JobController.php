@@ -112,7 +112,7 @@ class JobController extends Controller
      */
     public function show(Request $request, $id)
     {
-        $job = $this->getEffectiveSubmitterQuery($request, 'jobs')->select('id', 'ident', 'slug', 'friendly', 'type', 'user_id', 'submitter_id', 'submission_date', 'status', 'processed_submission_ids', 'is_publishing', 'is_processing')
+        $job = $this->getEffectiveSubmitterQuery($request, 'jobs')->select('id', 'ident', 'slug', 'friendly', 'type', 'user_id', 'submitter_id', 'status', 'processed_submission_ids', 'is_publishing', 'is_processing', 'created_at', 'submitted_at', 'released_at')
                         ->with('submitter:id,name,curie')->with('user:id,name,email')
                         ->with(['documents' => function ($query) {
                             // Include all documents, including those with partial upload warnings and upload state

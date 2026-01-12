@@ -409,7 +409,7 @@ The `run:publish` command executes once daily (typically overnight) and processe
    - POST to GenCC Search API /submit endpoint
    - If success:
      - Update submission: status = 'published'
-     - Set published_at = now()
+     - Set released_at = now()
      - Clear origin_state, origin_snapshot, origin_job_id
    - If failure:
      - Log error
@@ -423,7 +423,7 @@ The `run:publish` command executes once daily (typically overnight) and processe
    - POST to GenCC Search API /unpublish endpoint
    - If success:
      - Update submission: status = 'unpublished'
-     - Clear published_at
+     - Clear released_at
    - If failure:
      - Log error
      - Keep submission in submitted state

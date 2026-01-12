@@ -1,5 +1,4 @@
 {
-	"action": "unpublish", 
 	"date": "{{ $timestamp }}",
 	"token": "{{ $token }}",
 	"unpublish_date": "{{ $action->command->timestamp }}",

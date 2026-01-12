@@ -1,5 +1,5 @@
 <template>
-    <div class="ms-3 relative" v-if="$page.isGenccAdmin">
+    <div class="ms-3 relative" v-if="isGenccAdmin">
         <Dropdown align="right" width="60">
             <template #trigger>
                 <span class="inline-flex rounded-md">
@@ -18,16 +18,18 @@
             </template>
 
             <template #content>
-                <div class="w-60">
-                    <div class="block px-4 py-2 text-xs text-gray-400">
-                        Select Submitter to View
+                <div class="w-60 flex flex-col max-h-[50vh]">
+                    <!-- Fixed header -->
+                    <div class="flex-shrink-0">
+                        <div class="block px-4 py-2 text-xs text-gray-400">
+                            Select Submitter to View
+                        </div>
+                        <div class="border-t border-gray-200" />
                     </div>
 
-                    <div class="border-t border-gray-200" />
-
-                    <!-- Scrollable submitter list with max height -->
-                    <div class="max-h-96 overflow-y-auto">
-                        <template v-for="submitter in $page.submitters" :key="submitter.id">
+                    <!-- Scrollable submitter list -->
+                    <div class="flex-1 overflow-y-auto min-h-0">
+                        <template v-for="submitter in submitters" :key="submitter.id">
                             <button
                                 @click="selectSubmitter(submitter)"
                                 class="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition duration-150 ease-in-out"
@@ -54,16 +56,16 @@
                         </template>
                     </div>
 
-                    <div class="border-t border-gray-200 mt-2" />
-
-                    <button
-                        v-if="$page.selectedSubmitter"
-                        @click="clearSelection"
-                        class="block w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 transition duration-150 ease-in-out"
-                    >
-                        <i class="pi pi-times me-2"></i>
-                        Clear Selection
-                    </button>
+                    <!-- Fixed footer - Clear Selection pinned at bottom -->
+                    <div v-if="selectedSubmitter" class="flex-shrink-0 border-t border-gray-200">
+                        <button
+                            @click="clearSelection"
+                            class="block w-full text-left px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 transition duration-150 ease-in-out"
+                        >
+                            <i class="pi pi-times me-2"></i>
+                            Clear Selection
+                        </button>
+                    </div>
                 </div>
             </template>
         </Dropdown>
@@ -148,17 +150,21 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import SecondaryButton from '@/Components/SecondaryButton.vue';
 import DangerButton from '@/Components/DangerButton.vue';
 
-const { props: $page } = usePage();
+const page = usePage();
 
 const showConfirmation = ref(false);
 const confirmationSubmitter = ref(null);
 const showWarning = ref(false);
 const pendingSubmitter = ref(null);
 
+// Reactive computed properties for page props
+const isGenccAdmin = computed(() => page.props.isGenccAdmin);
+const submitters = computed(() => page.props.submitters);
+const selectedSubmitter = computed(() => page.props.selectedSubmitter);
+
 const selectedSubmitterName = computed(() => {
-    const selected = $page.selectedSubmitter;
-    if (selected) {
-        return selected.name;
+    if (selectedSubmitter.value) {
+        return selectedSubmitter.value.name;
     }
     return 'Select Submitter';
 });
@@ -214,7 +220,7 @@ const clearSelection = () => {
 };
 
 const isSelected = (submitter) => {
-    return $page.selectedSubmitter && $page.selectedSubmitter.id === submitter.id;
+    return selectedSubmitter.value && selectedSubmitter.value.id === submitter.id;
 };
 
 const closeConfirmation = () => {

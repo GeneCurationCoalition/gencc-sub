@@ -35,7 +35,7 @@ class JobFactory extends Factory
         return [
             'user_id' => $user->id,
             'submitter_id' => $submitter->id,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_DRAFT,
         ];
     }

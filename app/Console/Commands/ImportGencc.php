@@ -72,12 +72,12 @@ class ImportGencc extends Command
                     'type' => Job::TYPE_GENCC_IMPORT,
                     'user_id' => $coordinator->id ?? 1,
                     'submitter_id' => $submitter->id,
-                    'submission_date' => Carbon::now(),
+                    // created_at is auto-set by Laravel
                     'status' => Job::STATUS_PROCESSED,
             ]);
             $job->save();
 
-            // Track most recent evaluation date for the job (to use as published_at)
+            // Track most recent evaluation date for the job (to use as released_at)
             $most_recent_evaluation_date = null;
 
             // Track processed submissions for this import job
@@ -91,6 +91,9 @@ class ImportGencc extends Command
             {
                 try {
 
+                    // Get SGC ID and version number from separate columns
+                    $uuid = $row['sgc_id'];
+                    $versionNumber = (int) ($row['version_number'] ?? 1);
 
                     $gene = Gene::hgnc_id($row['gene_curie'])->first();
                     if (!$gene) {
@@ -131,12 +134,12 @@ class ImportGencc extends Command
 
                     // Validate and fix dates (handle typos like 3016 -> 2016)
                     // Use submitted_run_date as fallback for invalid report_date
-                    $publish_date = $this->validate_and_fix_date($row['submitted_run_date'], $row['uuid']);
-                    $report_date = $this->validate_and_fix_date($row['submitted_as_date'], $row['uuid'], $publish_date);
+                    $publish_date = $this->validate_and_fix_date($row['submitted_run_date'], $uuid);
+                    $report_date = $this->validate_and_fix_date($row['submitted_as_date'], $uuid, $publish_date);
 
                     $submission = new Submission([
                         'type' => Submission::TYPE_GENCC_IMPORT,
-                        'friendly' => $row['uuid'],
+                        'friendly' => $uuid,
                         'local_key' => $row['submitted_as_submission_id'],
                         'job_id' => $job->id,
                         'user_id' => $coordinator->id ?? 1,
@@ -148,7 +151,7 @@ class ImportGencc extends Command
                         'classification_id' => $classification->id,
                         'mechanism_id' => null,
                         'evidence' => (!empty($pmids) ? explode(',', $pmids) : []),
-                        'submission_date' => Carbon::now(),
+                        // created_at is auto-set by Laravel
                         'publish_date' => $publish_date,
                         'report_date' => $report_date,
                         'report_url' => $row['submitted_as_public_report_url'],
@@ -194,7 +197,7 @@ class ImportGencc extends Command
                     $submission->submission_data = [
                         "moi" => ["id" => $row['moi_curie'], "name" => $row['moi_title']],
                         "submission_id" => '',
-                        "submission_label" => $row['uuid'],
+                        "submission_label" => $uuid,
                         "local_key" => $row['submitted_as_submission_id'],
                         "gene" => ["id" => $row['gene_curie'], "symbol" => $row['gene_symbol']],
                         "type" => "Reserved",
@@ -239,7 +242,7 @@ class ImportGencc extends Command
                         'classification_id' => $classification->id
                     ];
 
-                    // Track most recent evaluation date (submitted_as_date) for published_at
+                    // Track most recent evaluation date (submitted_as_date) for released_at
                     $evaluation_date = $report_date;
                     if ($most_recent_evaluation_date === null || $evaluation_date->gt($most_recent_evaluation_date)) {
                         $most_recent_evaluation_date = $evaluation_date;
@@ -266,7 +269,7 @@ class ImportGencc extends Command
                     }
                 }
                 catch (\Exception $e) {
-                    $this->error("Error processing spreadsheet row with UUID: {$row['uuid']}");
+                    $this->error("Error processing spreadsheet row with SGC ID: {$row['sgc_id']}");
                     $this->error($e);
                 }
             }
@@ -274,14 +277,14 @@ class ImportGencc extends Command
             // Add newline after progress complete
             $this->getOutput()->write("\n");
 
-            // Set the job's published_at to the most recent submission evaluation date
+            // Set the job's released_at to the most recent submission evaluation date
             // NOTE: This is ONLY for the initial import job created during makeproddb
-            // All subsequent jobs processed through the normal workflow will have published_at
+            // All subsequent jobs processed through the normal workflow will have released_at
             // set to now() by the JobStateMachine when they are completed
             if ($most_recent_evaluation_date !== null) {
-                $job->published_at = $most_recent_evaluation_date;
+                $job->released_at = $most_recent_evaluation_date;
                 $job->save(['timestamps' => false]);
-                $this->info("  Set job {$job->slug} published_at to {$most_recent_evaluation_date->toDateString()} (initial import historical date)");
+                $this->info("  Set job {$job->slug} released_at to {$most_recent_evaluation_date->toDateString()} (initial import historical date)");
             }
 
             // Save the processed submissions list to the job for audit history
@@ -292,9 +295,9 @@ class ImportGencc extends Command
             }
         }
 
-        // Backfill published_at for all imported submissions based on their updated_at timestamps
-        $this->info("Backfilling published_at timestamps from updated_at...");
-        $this->call('backfill:published-at');
+        // Backfill released_at for all imported submissions based on their updated_at timestamps
+        $this->info("Backfilling released_at timestamps from updated_at...");
+        $this->call('backfill:released-at');
 
         // Report date corrections if any occurred
         if (!empty($this->dateCorrectionLog)) {
