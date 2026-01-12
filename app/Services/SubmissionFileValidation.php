@@ -1385,10 +1385,17 @@ class SubmissionFileValidation
         $moi_id_index = self::get_index('moi_id');
         $sgc_id_index = self::get_index('sgc_id');
 
-        // Collect all submissions to check
-        $submissions_to_check = [];
-        $row_num = 0;
+        // =====================================================================
+        // PHASE 1: Collect all unique IDs from the worksheet for batch lookup
+        // This replaces per-row database queries with a single batch query per type
+        // =====================================================================
+        $uniqueHgncIds = [];
+        $uniqueDiseaseIds = [];
+        $uniqueMoiIds = [];
+        $uniqueSgcIds = [];
+        $rowsToProcess = [];
 
+        $row_num = 0;
         foreach ($worksheet as $row) {
             $row_num++;
 
@@ -1420,10 +1427,100 @@ class SubmissionFileValidation
                 continue;
             }
 
-            // Look up database IDs
-            $gene = Gene::lookup_hgnc_id($hgnc_id_raw);
-            $disease = Disease::rosetta($disease_id_raw);  // Normalizes to MONDO for original_disease_id comparison
-            $inheritance = Inheritance::curie($moi_id_raw)->first();
+            // Collect unique IDs for batch loading
+            $uniqueHgncIds[$hgnc_id_raw] = true;
+            $uniqueDiseaseIds[$disease_id_raw] = true;
+            $uniqueMoiIds[$moi_id_raw] = true;
+            if (!empty($sgc_id) && $action === 'R') {
+                $uniqueSgcIds[$sgc_id] = true;
+            }
+
+            // Store row data for second pass
+            $rowsToProcess[] = [
+                'row_num' => $row_num,
+                'action' => $action,
+                'hgnc_id_raw' => $hgnc_id_raw,
+                'disease_id_raw' => $disease_id_raw,
+                'moi_id_raw' => $moi_id_raw,
+                'sgc_id' => $sgc_id,
+            ];
+        }
+
+        // If no rows to process, return empty results
+        if (empty($rowsToProcess)) {
+            return $validation_results;
+        }
+
+        // =====================================================================
+        // PHASE 2: Batch load all lookups with single queries per type
+        // =====================================================================
+
+        // Batch load genes by HGNC ID
+        $geneCache = Gene::whereIn('hgnc_id', array_keys($uniqueHgncIds))
+            ->get()
+            ->keyBy('hgnc_id');
+
+        // Batch load inheritances by curie
+        $inheritanceCache = Inheritance::whereIn('curie', array_keys($uniqueMoiIds))
+            ->get()
+            ->keyBy('curie');
+
+        // Batch load all diseases and build MONDO mapping cache (same approach as DocumentController)
+        $allDiseases = Disease::all();
+        $diseaseCache = $allDiseases->keyBy('curie');
+        $mondoMappingCache = collect();
+
+        foreach ($allDiseases as $disease) {
+            if ($disease->type == Disease::TYPE_MONDO) {
+                $mondoMappingCache->put($disease->curie, $disease);
+
+                // Map OMIM xrefs to this MONDO disease
+                if (isset($disease->xrefs->omim_id)) {
+                    $omimIds = is_array($disease->xrefs->omim_id) ? $disease->xrefs->omim_id : [$disease->xrefs->omim_id];
+                    foreach ($omimIds as $omimId) {
+                        $mondoMappingCache->put('OMIM:' . $omimId, $disease);
+                    }
+                }
+                // Map Orphanet xrefs to this MONDO disease
+                if (isset($disease->xrefs->orpha_id)) {
+                    $orphaIds = is_array($disease->xrefs->orpha_id) ? $disease->xrefs->orpha_id : [$disease->xrefs->orpha_id];
+                    foreach ($orphaIds as $orphaId) {
+                        $mondoMappingCache->put('ORPHA:' . $orphaId, $disease);
+                        $mondoMappingCache->put('ORPHANET:' . $orphaId, $disease);
+                    }
+                }
+            }
+        }
+
+        // Batch load existing submissions for republish SGC ID exclusion
+        $existingSubmissionsCache = collect();
+        if (!empty($uniqueSgcIds)) {
+            $existingSubmissionsCache = Submission::whereIn('sid', array_keys($uniqueSgcIds))
+                ->where('submitter_id', $submitter_id)
+                ->where('is_live', true)
+                ->get()
+                ->keyBy('sid');
+        }
+
+        // =====================================================================
+        // PHASE 3: Process rows using cached lookups (O(1) per lookup)
+        // =====================================================================
+        $submissions_to_check = [];
+
+        foreach ($rowsToProcess as $rowData) {
+            $row_num = $rowData['row_num'];
+            $action = $rowData['action'];
+            $hgnc_id_raw = $rowData['hgnc_id_raw'];
+            $disease_id_raw = $rowData['disease_id_raw'];
+            $moi_id_raw = $rowData['moi_id_raw'];
+            $sgc_id = $rowData['sgc_id'];
+
+            // Look up from caches (O(1) operations)
+            $gene = $geneCache->get($hgnc_id_raw);
+            $inheritance = $inheritanceCache->get($moi_id_raw);
+
+            // For disease, try MONDO mapping first (handles OMIM/Orphanet -> MONDO)
+            $disease = $mondoMappingCache->get($disease_id_raw) ?? $diseaseCache->get($disease_id_raw);
 
             // Skip if any lookup failed (other validators will catch these)
             if ($gene === null || $disease === null || $inheritance === null) {
@@ -1431,16 +1528,15 @@ class SubmissionFileValidation
             }
 
             // For republish, get the existing live submission ID to exclude from check
-            // Must filter by is_live=true to get the correct version when multiple versions exist
             $exclude_submission_id = null;
             if ($action === 'R' && !empty($sgc_id)) {
-                $existing = Submission::sid($sgc_id)->where('is_live', true)->first();
+                $existing = $existingSubmissionsCache->get($sgc_id);
                 $exclude_submission_id = $existing?->id;
             }
 
             // Look up the original_disease_id from the exact uploaded disease CURIE
             // This is the disease record for what was uploaded (OMIM, Orphanet, or MONDO)
-            $originalDisease = Disease::curie($disease_id_raw)->first();
+            $originalDisease = $diseaseCache->get($disease_id_raw);
             $original_disease_id = $originalDisease?->id ?? $disease->id;
 
             $submissions_to_check[] = [
