@@ -37,7 +37,7 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME}"  # Use branch name
           fi
-          IMAGE="ghcr.io/${{ github.repository }}"
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
 
           docker build \
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
