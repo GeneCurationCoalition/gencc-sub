@@ -14,8 +14,8 @@
             return 'bg-amber-700'; // Amber theme for Draft
         } else if (props.job.status === 'submitted') {
             return 'bg-blue-700'; // Blue theme for Submitted
-        } else if (props.job.status === 'processed') {
-            return 'bg-green-700'; // Green theme for Processed
+        } else if (props.job.status === 'released' || props.job.status === 'processed') {
+            return 'bg-green-700'; // Green theme for Released
         }
         return 'bg-sky-800'; // Default color for legacy statuses
     })

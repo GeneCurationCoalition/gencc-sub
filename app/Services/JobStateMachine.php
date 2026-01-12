@@ -25,11 +25,11 @@ class JobStateMachine
             'deleted' // Special case for deletion
         ],
         Job::STATUS_SUBMITTED => [
-            Job::STATUS_PROCESSED,
+            Job::STATUS_RELEASED,
             Job::STATUS_SUBMITTED, // Can stay submitted on complete failure
             Job::STATUS_DRAFT // Cancel before run:publish
         ],
-        Job::STATUS_PROCESSED => [
+        Job::STATUS_RELEASED => [
             // Terminal state - no transitions allowed
         ]
     ];
@@ -126,7 +126,7 @@ class JobStateMachine
     }
 
     /**
-     * Check if a job is in terminal state
+     * Check if a job is in terminal state (released)
      *
      * @param Job|string $stateOrJob Current state string OR Job object
      * @return bool
@@ -138,7 +138,7 @@ class JobStateMachine
             ? $stateOrJob->status
             : $stateOrJob;
 
-        return $state === Job::STATUS_PROCESSED;
+        return $state === Job::STATUS_RELEASED;
     }
 
     /**
@@ -191,31 +191,20 @@ class JobStateMachine
         // Transition job
         self::transition($job, Job::STATUS_SUBMITTED);
 
-        // Transition all submissions to their submitted states using batch updates for performance
-        // This is much faster than individual saves (3 queries vs N queries)
-        // Also set submitted_at timestamp when transitioning from draft to submitted
+        // With the simplified status model, submission status does NOT change when
+        // job transitions from draft to submitted. Stage (draft/submitted) is now
+        // derived from Job.status.
+        //
+        // We only need to set submitted_at timestamp on all pending submissions
         $now = now();
 
         \App\Models\Submission::where('job_id', $job->id)
-            ->where('status', \App\Models\Submission::STATUS_DRAFT_NEW)
+            ->whereIn('status', [
+                \App\Models\Submission::STATUS_NEW,
+                \App\Models\Submission::STATUS_REPUBLISH,
+                \App\Models\Submission::STATUS_UNPUBLISH,
+            ])
             ->update([
-                'status' => \App\Models\Submission::STATUS_SUBMITTED_NEW,
-                'submitted_at' => $now,
-                'updated_at' => $now
-            ]);
-
-        \App\Models\Submission::where('job_id', $job->id)
-            ->where('status', \App\Models\Submission::STATUS_DRAFT_REPUBLISH)
-            ->update([
-                'status' => \App\Models\Submission::STATUS_SUBMITTED_REPUBLISH,
-                'submitted_at' => $now,
-                'updated_at' => $now
-            ]);
-
-        \App\Models\Submission::where('job_id', $job->id)
-            ->where('status', \App\Models\Submission::STATUS_DRAFT_UNPUBLISH)
-            ->update([
-                'status' => \App\Models\Submission::STATUS_SUBMITTED_UNPUBLISH,
                 'submitted_at' => $now,
                 'updated_at' => $now
             ]);
@@ -226,7 +215,7 @@ class JobStateMachine
 
     /**
      * Complete a job after successful run:publish
-     * Marks job as processed
+     * Marks job as released
      *
      * @param Job $job
      * @return Job
@@ -236,13 +225,13 @@ class JobStateMachine
     {
         // Validate current state
         if ($job->status !== Job::STATUS_SUBMITTED) {
-            throw new Exception("Only submitted jobs can be marked as processed");
+            throw new Exception("Only submitted jobs can be marked as released");
         }
 
-        // Transition to processed
-        self::transition($job, Job::STATUS_PROCESSED);
+        // Transition to released
+        self::transition($job, Job::STATUS_RELEASED);
 
-        // Set released_at timestamp when job is processed
+        // Set released_at timestamp when job is released
         $job->released_at = now();
 
         return $job;
@@ -308,8 +297,8 @@ class JobStateMachine
     {
         $descriptions = [
             Job::STATUS_DRAFT => 'Draft - submissions can be added/edited/removed',
-            Job::STATUS_SUBMITTED => 'Submitted - awaiting publication processing',
-            Job::STATUS_PROCESSED => 'Processed - all submissions processed',
+            Job::STATUS_SUBMITTED => 'Submitted - awaiting release processing',
+            Job::STATUS_RELEASED => 'Released - all submissions released',
         ];
 
         return $descriptions[$state] ?? 'Unknown state';
@@ -325,7 +314,7 @@ class JobStateMachine
         return [
             'draft' => Job::where('status', Job::STATUS_DRAFT)->count(),
             'submitted' => Job::where('status', Job::STATUS_SUBMITTED)->count(),
-            'processed' => Job::where('status', Job::STATUS_PROCESSED)->count(),
+            'released' => Job::where('status', Job::STATUS_RELEASED)->count(),
         ];
     }
 
@@ -333,7 +322,7 @@ class JobStateMachine
      * Validate that job submissions match the job state
      * - Draft jobs must only contain draft_xxx submissions
      * - Submitted jobs must only contain submitted_xxx submissions
-     * - Processed jobs must only contain published or unpublished submissions
+     * - Released jobs must only contain published or unpublished submissions
      *
      * @param Job $job
      * @return bool
@@ -362,10 +351,10 @@ class JobStateMachine
                     }
                     break;
 
-                case Job::STATUS_PROCESSED:
-                    // Processed jobs must only contain published or unpublished submissions
+                case Job::STATUS_RELEASED:
+                    // Released jobs must only contain published or unpublished submissions
                     if (!in_array($submissionState, ['published', 'unpublished'])) {
-                        throw new Exception("Processed job {$job->slug} contains invalid submission {$submission->sid} (state: {$submissionState}). Processed jobs can only contain published or unpublished submissions.");
+                        throw new Exception("Released job {$job->slug} contains invalid submission {$submission->sid} (state: {$submissionState}). Released jobs can only contain published or unpublished submissions.");
                     }
                     break;
             }

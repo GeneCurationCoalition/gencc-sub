@@ -89,6 +89,9 @@ Route::group(['middleware' => ['web']], function () {
     // endpoint for bulk favorite/unfavorite operations (handles all in single request)
     Route::post('/submissions/bulk-favorites', [SubmissionController::class, 'bulkFavorites']);
 
+    // endpoint for exporting submissions to Excel template
+    Route::post('/submissions/export-template', [SubmissionController::class, 'exportToTemplate']);
+
     // endpoint for updating a submission
     Route::post('/submissions/{id}', [SubmissionController::class, 'update']);
 

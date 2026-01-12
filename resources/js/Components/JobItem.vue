@@ -82,7 +82,8 @@ function displayStatusV2(status) {
     const statusMap = {
         'draft': 'Draft',
         'submitted': 'Submitted',
-        'processed': 'Released'
+        'released': 'Released',
+        'processed': 'Released'  // Backwards compatibility
     };
     return statusMap[status] || status;
 }
@@ -93,7 +94,8 @@ function getStatusSeverity(status) {
     const severityMap = {
         'draft': 'warning',       // Yellow
         'submitted': 'info',       // Blue
-        'processed': 'success'     // Green
+        'released': 'success',     // Green
+        'processed': 'success'     // Green (backwards compatibility)
     };
     return severityMap[status] || 'secondary';
 }
@@ -103,13 +105,14 @@ function getJobStatusClass(status) {
     const classMap = {
         'draft': 'job-status-draft',
         'submitted': 'job-status-submitted',
-        'processed': 'job-status-processed'
+        'released': 'job-status-released',
+        'processed': 'job-status-released'  // Backwards compatibility
     };
     return classMap[status] || '';
 }
 
 // Get the status date based on job status
-// Draft: created_at, Submitted: submitted_at, Released/Processed: released_at
+// Draft: created_at, Submitted: submitted_at, Released: released_at
 function getStatusDate(job) {
     if (!job.status) return null;
 
@@ -121,7 +124,8 @@ function getStatusDate(job) {
         case 'submitted':
             dateStr = job.submitted_at || job.created_at;
             break;
-        case 'processed':
+        case 'released':
+        case 'processed':  // Backwards compatibility
             dateStr = job.released_at || job.submitted_at || job.created_at;
             break;
         default:
@@ -164,6 +168,44 @@ const hasPartialUpload = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
     const doc = props.job.documents[0];
     return doc.upload_state === 'upload_partial';
+});
+
+// Helper to detect file format errors (by flag or by error_type for backwards compatibility)
+const isFileFormatError = (err) => {
+    // Check the explicit flag first
+    if (err.is_file_format_error) return true;
+    // Fallback: check error_type for known file format error types
+    const fileFormatErrorTypes = [
+        'invalid_file_format',
+        'missing_header_row',
+        'invalid_header_columns',
+        'no_header_row_found',      // legacy
+        'minimum_rows_requirement'   // legacy
+    ];
+    return fileFormatErrorTypes.includes(err.error_type);
+};
+
+// Generate user-friendly message for file format errors (fallback for old errors without user_message)
+const getFileFormatUserMessage = (err) => {
+    // If user_message exists and differs from message, use it
+    if (err.user_message && err.user_message !== err.message) {
+        return err.user_message;
+    }
+    // Generate a friendly message based on error type
+    const defaultMessage = 'The uploaded file does not appear to be a valid GenCC submission template. ' +
+        'Please download the official template from the GenCC website and ensure your data is formatted correctly.';
+    return defaultMessage;
+};
+
+// Computed: Separate file format errors from data row errors
+// File format errors are displayed in a clean, user-friendly card
+const fileFormatErrors = computed(() => {
+    return uploadErrors.value.filter(err => isFileFormatError(err));
+});
+
+// Data row errors are displayed in the table format
+const dataRowErrors = computed(() => {
+    return uploadErrors.value.filter(err => !isFileFormatError(err));
 });
 
 // Computed: Check if document can be cleared (validation failed OR partial upload, but NOT during active processing)
@@ -831,8 +873,8 @@ const formatDate = (dateString) => {
                 <p class="font-bold">Job has been submitted and will be processed automatically.</p>
             </div>
 
-            <!-- Released/Processed status -->
-            <div v-if="job.status === 'processed'" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
+            <!-- Released status -->
+            <div v-if="job.status === 'released' || job.status === 'processed'" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Job has been released.</p>
             </div>
 
@@ -1070,7 +1112,7 @@ const formatDate = (dateString) => {
                         <!-- Show uploaded filename as download link if a document exists -->
                         <template v-if="job.documents && job.documents.length > 0">
                             <div class="col-span-2 pt-3 text-right pr-3">Uploaded File:</div>
-                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': job.status === 'draft' && hasValidationErrors, 'border-orange-400': job.status === 'draft' && hasPartialUpload && !hasValidationErrors, 'border-yellow-400': job.status === 'draft' && uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload, 'border-green-500': job.status === 'processed'}">
+                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': job.status === 'draft' && hasValidationErrors, 'border-orange-400': job.status === 'draft' && hasPartialUpload && !hasValidationErrors, 'border-yellow-400': job.status === 'draft' && uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload, 'border-green-500': job.status === 'released' || job.status === 'processed'}">
                                 <div class="flex items-center gap-2">
                                     <a :href="'/api/documents/' + job.documents[0].ident + '/download'" class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-2">
                                         <i class="pi pi-download text-sm"></i>
@@ -1154,8 +1196,46 @@ const formatDate = (dateString) => {
                 </div>
             </div>
 
-            <!-- Error Display Card - Always visible when errors exist, collapsible -->
-            <Card v-if="uploadErrors.length > 0"
+            <!-- File Format Error Display - Clean, user-friendly message for template/format issues -->
+            <div v-if="fileFormatErrors.length > 0" class="mt-4">
+                <div v-for="(error, index) in fileFormatErrors" :key="'format-' + index"
+                     class="bg-red-50 border-2 border-red-400 rounded-lg p-6 mb-4">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0">
+                            <i class="pi pi-file-excel text-4xl text-red-500"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-lg font-bold text-red-800 mb-2">
+                                {{ error.user_title || 'Invalid File Format' }}
+                            </h3>
+                            <p class="text-red-700 mb-4">
+                                {{ getFileFormatUserMessage(error) }}
+                            </p>
+                            <div class="flex flex-wrap gap-3">
+                                <a href="/download/template"
+                                   class="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
+                                    <i class="pi pi-download"></i>
+                                    Download GenCC Template
+                                </a>
+                                <a href="/submission-directions"
+                                   target="_blank"
+                                   class="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium">
+                                    <i class="pi pi-book"></i>
+                                    View Submission Guide
+                                </a>
+                            </div>
+                            <!-- Technical details (collapsed by default) - only show if different from user message -->
+                            <details class="mt-4 text-sm text-gray-600">
+                                <summary class="cursor-pointer hover:text-gray-800">Technical Details</summary>
+                                <div class="mt-2 p-3 bg-gray-100 rounded font-mono text-xs whitespace-pre-wrap">{{ error.message }}</div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Row Error Display Card - For row-level validation errors -->
+            <Card v-if="dataRowErrors.length > 0"
                   class="mt-4 border-2 border-red-500"
                   :class="{'collapsed-card': !showErrorCard}"
                   :pt="{
@@ -1170,8 +1250,8 @@ const formatDate = (dateString) => {
                         <div class="flex items-center gap-2">
                             <i class="pi pi-exclamation-triangle text-2xl"></i>
                             <div class="flex flex-col">
-                                <span>{{ uploadErrors.length }} Validation Error(s){{ uploadedFilename ? ` - ${uploadedFilename}` : '' }}</span>
-                                <span v-if="MAX_VALIDATION_RESULTS > 0 && uploadErrors.length === MAX_VALIDATION_RESULTS" class="text-sm font-semibold">Maximum errors reached</span>
+                                <span>{{ dataRowErrors.length }} Data Validation Error(s){{ uploadedFilename ? ` - ${uploadedFilename}` : '' }}</span>
+                                <span v-if="MAX_VALIDATION_RESULTS > 0 && dataRowErrors.length === MAX_VALIDATION_RESULTS" class="text-sm font-semibold">Maximum errors reached</span>
                             </div>
                         </div>
                         <div class="flex gap-2">
@@ -1205,7 +1285,7 @@ const formatDate = (dateString) => {
                                 </a>.
                             </p>
                         </div>
-                        <DataTable :value="uploadErrors"
+                        <DataTable :value="dataRowErrors"
                                    size="small"
                                    stripedRows
                                    scrollable
@@ -1251,7 +1331,7 @@ const formatDate = (dateString) => {
                 </template>
             </Card>
 
-            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" ></SubmissionsListing>
+            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />
         </div>
 
     </div>

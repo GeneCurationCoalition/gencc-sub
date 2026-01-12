@@ -1,8 +1,7 @@
 <script setup>
 
 
-    import { ref, onMounted, onUnmounted } from 'vue'
-    import { computed } from 'vue'
+    import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
     import { router } from '@inertiajs/vue3'
     import { usePage } from '@inertiajs/vue3';
     import { FilterMatchMode, FilterOperator } from "primevue/api";
@@ -14,21 +13,29 @@
     import { getDiseaseUrl, getGeneUrl } from '@/utils/externalLinks';
 
 
-    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob'])
-
-    console.log('SubmissionsListing hasSubmittedJob prop:', props.hasSubmittedJob, 'type:', typeof props.hasSubmittedJob)
+    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus'])
 
     const page = usePage()
 
     const mine = computed(() => page.props.mine)
 
-    // Ensure favorites is always an array (handle case where it might be an empty object from DB)
-    const favorites = computed(() => {
-        if (!props.favorites) return [];
-        if (Array.isArray(props.favorites)) return props.favorites;
-        // If it's an object (like empty {}), convert to array
-        return Object.values(props.favorites);
-    })
+    // Local reactive copy of favorites for optimistic updates
+    // Initialize from props but can be updated locally for instant UI feedback
+    const localFavorites = ref([]);
+
+    // Sync localFavorites when props.favorites changes (e.g., after page reload)
+    watch(() => props.favorites, (newFavorites) => {
+        if (!newFavorites) {
+            localFavorites.value = [];
+        } else if (Array.isArray(newFavorites)) {
+            localFavorites.value = [...newFavorites];
+        } else {
+            localFavorites.value = Object.values(newFavorites);
+        }
+    }, { immediate: true });
+
+    // Use localFavorites for display (allows optimistic updates)
+    const favorites = computed(() => localFavorites.value)
 
     // Transform submissions to include a sortable status_date field
     // This allows PrimeVue DataTable to sort on the computed status date
@@ -78,22 +85,87 @@
 
     ];
 
-    const displayOptions = ref([
-        { name: 'Show All', option: '1' },
-        { name: 'Show New', option: '2' },
-        { name: 'Show Errors', option: '3' },
-        { name: 'Show Published', option: '4' },
-        { name: 'Show Favorites', option: '6' },
-        { name: 'Show All Drafts', option: '7' },
-        { name: 'Show Unpublished', option: '8' },
-        { name: 'Show Republished', option: '9' }
-    ]);
+    // Filter display options - context-aware based on job status
+    // General submissions list: Full hierarchical structure with parent/child indentation
+    // Pending job (draft/submitted): Only pending subfilters, flat list
+    // Released job: Only released subfilters, flat list
+    // Show Errors: Only in draft jobs or general list (errors can be fixed in drafts)
+    const displayOptions = computed(() => {
+        // Determine job context
+        const isGeneralList = !props.jobStatus;
+        const isDraftJob = props.jobStatus === 'draft';
+        const isSubmittedJob = props.jobStatus === 'submitted';
+        const isReleasedJob = props.jobStatus === 'released' || props.jobStatus === 'processed';
+
+        // Base options always available
+        const baseOptions = [
+            { name: 'Show All', option: 'all', isParent: false },
+            { name: 'Show Favorites', option: 'favorites', isParent: false }
+        ];
+
+        // Show Errors only in draft jobs or general list (where draft jobs may exist)
+        if (isDraftJob || isGeneralList) {
+            baseOptions.push({ name: 'Show Errors', option: 'errors', isParent: false });
+        }
+
+        if (isGeneralList) {
+            // Full hierarchical structure for general submissions list
+            return [
+                ...baseOptions,
+                { name: 'Show Pending', option: 'pending', isParent: true },
+                { name: 'Show New', option: 'pending_new', isParent: false, isChild: true },
+                { name: 'Show Republish', option: 'pending_republish', isParent: false, isChild: true },
+                { name: 'Show Unpublish', option: 'pending_unpublish', isParent: false, isChild: true },
+                { name: 'Show Released', option: 'released', isParent: true },
+                { name: 'Show Published', option: 'released_published', isParent: false, isChild: true },
+                { name: 'Show Unpublished', option: 'released_unpublished', isParent: false, isChild: true }
+            ];
+        } else if (isDraftJob || isSubmittedJob) {
+            // Pending job: Only pending subfilters, flat list (no parent, no indentation)
+            return [
+                ...baseOptions,
+                { name: 'Show New', option: 'pending_new', isParent: false },
+                { name: 'Show Republish', option: 'pending_republish', isParent: false },
+                { name: 'Show Unpublish', option: 'pending_unpublish', isParent: false }
+            ];
+        } else if (isReleasedJob) {
+            // Released job: Only released subfilters, flat list (no parent, no indentation)
+            return [
+                ...baseOptions,
+                { name: 'Show Published', option: 'released_published', isParent: false },
+                { name: 'Show Unpublished', option: 'released_unpublished', isParent: false }
+            ];
+        }
+
+        // Fallback to base options
+        return baseOptions;
+    });
+
+    // Historic toggle: false = hide historic (live only), true = show historic
+    const showHistoric = ref(false);
+
+    // Tooltip for historic toggle - describes current state
+    const historicToggleTooltip = computed(() => {
+        return showHistoric.value
+            ? 'Include historic submissions'
+            : 'Hide historic submissions';
+    });
+
+    // Determine if historic toggle should be visible
+    // Show on: general submissions list (no jobStatus) or released jobs
+    // Hide on: pending jobs (draft or submitted)
+    const showHistoricToggle = computed(() => {
+        // If no jobStatus prop, we're on the general submissions list
+        if (!props.jobStatus) return true;
+        // Show toggle for released jobs only
+        return props.jobStatus === 'released' || props.jobStatus === 'processed';
+    });
 
     const filterUser = defineModel(false);
 
     filterUser.value = false;
 
-    const selectedDisplay = ref('1');
+    const selectedDisplay = ref('all');
 
     // Bulk selection state
     const selectedSubmissions = ref([]);
@@ -119,12 +191,17 @@
     // Computed properties for bulk actions
     // These determine which batch operations are available based on selected submissions
 
-    // Delete: Only available when ALL selected are draft submissions (draft_new, draft_republish, draft_unpublish)
+    // Delete: Only available when ALL selected are pending submissions in draft job
+    // With simplified model: pending statuses are 'new', 'republish', 'unpublish'
+    // Must also check job status is 'draft' (not submitted)
     const bulkDeleteAvailable = computed(() => {
         if (selectedSubmissions.value.length === 0) return false;
 
-        const draftStatuses = ['draft_new', 'draft_republish', 'draft_unpublish'];
-        return selectedSubmissions.value.every(s => draftStatuses.includes(s.status));
+        // Pending statuses (includes both new simplified and legacy compound)
+        const pendingStatuses = ['new', 'republish', 'unpublish', 'draft_new', 'draft_republish', 'draft_unpublish'];
+        return selectedSubmissions.value.every(s =>
+            pendingStatuses.includes(s.status) && s.job?.status !== 'submitted'
+        );
     });
 
     // Unpublish: Only available when ALL selected are live published versions with no pending draft
@@ -433,9 +510,9 @@
     };
 
     const requireDeleteDraftConfirmation = (sid) => {
-        // Find the submission to determine type
+        // Find the submission to determine type (using simplified status values)
         const submission = props.submissions.find(s => s.sid === sid);
-        const isRepublish = submission?.status === 'draft_republish';
+        const isRepublish = submission?.status === 'republish';
         const actionType = isRepublish ? 'republish' : 'unpublish';
 
         let message = `This will permanently delete this draft ${actionType} version. The original published submission will remain unchanged.`;
@@ -517,8 +594,6 @@
         // Use idents to target specific versions of submissions
         const idents = selectedSubmissions.value.map(s => s.ident);
 
-        console.log('bulkToggleFavorites called', { action, count: idents.length, idents });
-
         // Show confirmation dialog
         confirm.require({
             group: 'headless',
@@ -529,21 +604,31 @@
             rejectLabel: 'Cancel',
             acceptLabel: 'Continue',
             accept: async () => {
-                console.log('Confirm accept callback triggered');
+                // Save previous state for rollback on error
+                const previousFavorites = [...localFavorites.value];
 
-                // Show loading overlay for large operations
-                const isLargeOperation = idents.length > 50;
-                if (isLargeOperation) {
-                    isLoadingBulkAction.value = true;
+                // Optimistic update - apply changes immediately
+                if (action === 'favorite') {
+                    // Add all idents that aren't already favorites
+                    const newFavorites = [...localFavorites.value];
+                    idents.forEach(ident => {
+                        if (!newFavorites.includes(ident)) {
+                            newFavorites.push(ident);
+                        }
+                    });
+                    localFavorites.value = newFavorites;
                 } else {
-                    // Show loading overlay only if operation takes longer than 2 seconds
-                    const loadingTimeout = setTimeout(() => {
-                        isLoadingBulkAction.value = true;
-                    }, 2000);
-                    window.bulkActionLoadingTimeout = loadingTimeout;
+                    // Remove all idents from favorites
+                    localFavorites.value = localFavorites.value.filter(fav => !idents.includes(fav));
+
+                    // If showing only favorites and all are removed, switch to Show All
+                    if (selectedDisplay.value === 'favorites' && localFavorites.value.length === 0) {
+                        selectedDisplay.value = 'all';
+                    }
                 }
 
-                console.log('Starting bulk favorites API call for', idents.length, 'submissions');
+                // Clear selection immediately for better UX
+                selectedSubmissions.value = [];
 
                 try {
                     // Use the new bulk favorites endpoint - single request for all submissions
@@ -556,21 +641,6 @@
                         }
                     });
 
-                    console.log('Bulk favorites response:', response.data);
-
-                    // Clear loading timeout if it was set
-                    if (window.bulkActionLoadingTimeout) {
-                        clearTimeout(window.bulkActionLoadingTimeout);
-                    }
-                    isLoadingBulkAction.value = false;
-
-                    // Reload only the favorites prop
-                    selectedSubmissions.value = []; // Clear selection
-                    router.reload({
-                        only: ['favorites'],
-                        preserveScroll: true
-                    });
-
                     // Check response and show appropriate message
                     if (response.data.success === 'true') {
                         toast.add({
@@ -580,6 +650,8 @@
                             life: 3000
                         });
                     } else if (response.data.success === 'partial') {
+                        // Partial success - reload to get accurate state
+                        router.reload({ only: ['favorites'], preserveScroll: true });
                         toast.add({
                             severity: 'warn',
                             summary: 'Partially Complete',
@@ -587,6 +659,8 @@
                             life: 5000
                         });
                     } else {
+                        // Failed - revert optimistic update
+                        localFavorites.value = previousFavorites;
                         toast.add({
                             severity: 'error',
                             summary: 'Error',
@@ -595,13 +669,9 @@
                         });
                     }
                 } catch (err) {
+                    // Error - revert optimistic update
+                    localFavorites.value = previousFavorites;
                     console.error('Bulk favorites error:', err);
-
-                    // Clear loading timeout if it was set
-                    if (window.bulkActionLoadingTimeout) {
-                        clearTimeout(window.bulkActionLoadingTimeout);
-                    }
-                    isLoadingBulkAction.value = false;
 
                     toast.add({
                         severity: 'error',
@@ -833,10 +903,29 @@
     }
 
 
-    async function updateFavorite(sid, toggle) {
+    async function updateFavorite(ident, toggle) {
+        // Optimistic update - update UI immediately for instant feedback
+        const previousFavorites = [...localFavorites.value];
+
+        if (toggle) {
+            // Adding to favorites
+            if (!localFavorites.value.includes(ident)) {
+                localFavorites.value = [...localFavorites.value, ident];
+            }
+        } else {
+            // Removing from favorites
+            localFavorites.value = localFavorites.value.filter(fav => fav !== ident);
+
+            // If we're removing a favorite and currently showing only favorites
+            // Check if this was the last favorite, and if so, reset to "Show All"
+            if (selectedDisplay.value === 'favorites' && localFavorites.value.length === 0) {
+                selectedDisplay.value = 'all';
+            }
+        }
 
         try {
-            const response = await axios.post('/api/submissions/' + sid, {
+            // Use ident (not sid) to target the specific version
+            const response = await axios.post('/api/submissions/' + ident, {
                 type: 'favorites',
                 value: toggle
             }, {
@@ -845,29 +934,27 @@
                 }
             });
 
-            if ( response.data.hasOwnProperty('status_code') &&  response.data.status_code == 200 )
-            {
-                // If we're removing a favorite (toggle is false) and currently showing only favorites
-                // Check if this was the last favorite, and if so, reset to "Show All"
-                if (toggle === false && selectedDisplay.value == '6') {
-                    // Find the submission we're unfavoriting
-                    const submission = props.submissions?.find(s => s.sid === sid);
-                    if (submission) {
-                        // Count how many favorites will remain after this removal
-                        const remainingFavorites = props.favorites.filter(fav => fav !== submission.ident).length;
-                        if (remainingFavorites === 0) {
-                            // Reset to "Show All" before reload to prevent blank view
-                            selectedDisplay.value = '1';
-                        }
-                    }
-                }
-
-                // reload the server data
-                router.reload();
-
+            if (!(response.data.hasOwnProperty('status_code') && response.data.status_code == 200)) {
+                // API didn't return success - revert optimistic update
+                localFavorites.value = previousFavorites;
+                toast.add({
+                    severity: 'error',
+                    summary: 'Error',
+                    detail: 'Failed to update favorite status',
+                    life: 3000
+                });
             }
+            // No reload needed - optimistic update already applied
         } catch (error) {
+            // Revert optimistic update on error
+            localFavorites.value = previousFavorites;
             console.error(error);
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: 'Failed to update favorite status',
+                life: 3000
+            });
         }
     }
 
@@ -885,91 +972,81 @@
 
     function rowFilter(item)
     {
-        // Helper to check if using V2 status or legacy
-        const isPublished = item.status ? item.status === 'published' : item.status == 20;
-        const isPending = item.status ? item.status === 'submitted_new' || item.status === 'draft_new' : item.status == 1;
-        const isDraft = item.status ? ['draft_new', 'draft_republish', 'draft_unpublish'].includes(item.status) : false;
-        const isUnpublished = item.status ? item.status === 'unpublished' : false;
-        const isRepublished = item.status ? ['draft_republish', 'submitted_republish'].includes(item.status) : false;
+        // Status helpers using simplified statuses
+        // Pending statuses: new, republish, unpublish (action-based)
+        const pendingStatuses = ['new', 'republish', 'unpublish'];
+        // Released statuses: published, unpublished (visibility-based)
+        const releasedStatuses = ['published', 'unpublished'];
 
-        if (selectedDisplay.value == 2) {
-            // Show New (new submissions only, not editing existing)
-            if (filterUser.value)
-                return (item.user_id == mine.value && isPending);
-            else
-                return isPending;
-        }
-        else if (selectedDisplay.value == 3) {
-            // Show Errors
-            if (filterUser.value)
-                return (item.user_id == mine.value && !isEmpty(item.submission_errors));
-            else
-                return !isEmpty(item.submission_errors);
-        }
-        else if (selectedDisplay.value == 4) {
-            // Show Published
-            if (filterUser.value)
-                return (item.user_id == mine.value && isPublished);
-            else
-                return isPublished;
-        }
-        else if (selectedDisplay.value == 6) {
-            // Show Favorites
-            if (filterUser.value)
-                return (item.user_id == mine.value && favorites.value.includes(item.ident));
-            else
-                return (favorites.value.includes(item.ident));
-        }
-        else if (selectedDisplay.value == 7) {
-            // Show All Drafts (all work-in-progress: new, editing, unpublishing)
-            if (filterUser.value)
-                return (item.user_id == mine.value && isDraft);
-            else
-                return isDraft;
-        }
-        else if (selectedDisplay.value == 8) {
-            // Show Unpublished (removed from public view)
-            if (filterUser.value)
-                return (item.user_id == mine.value && isUnpublished);
-            else
-                return isUnpublished;
-        }
-        else if (selectedDisplay.value == 9) {
-            // Show Republished (republish in progress: draft or submitted)
-            if (filterUser.value)
-                return (item.user_id == mine.value && isRepublished);
-            else
-                return isRepublished;
-        }
+        const isPending = pendingStatuses.includes(item.status);
+        const isReleased = releasedStatuses.includes(item.status);
 
-        // Show All
-        if (filterUser.value)
-            return (item.user_id == mine.value);
+        // Apply historic filter for released submissions
+        // When showHistoric is false, only show live submissions (is_live=true)
+        // This affects all filter modes when viewing released submissions
+        const passesHistoricFilter = () => {
+            if (!isReleased) return true; // Pending submissions always pass
+            if (showHistoric.value) return true; // Show all when toggle is on
+            return item.is_live === true; // Only live submissions when toggle is off
+        };
 
-        return true;
+        // User filter helper
+        const passesUserFilter = () => {
+            if (!filterUser.value) return true;
+            return item.user_id == mine.value;
+        };
+
+        // Apply both user filter and historic filter
+        const baseFilter = () => passesUserFilter() && passesHistoricFilter();
+
+        switch (selectedDisplay.value) {
+            case 'favorites':
+                return baseFilter() && favorites.value.includes(item.ident);
+
+            case 'errors':
+                return baseFilter() && !isEmpty(item.submission_errors);
+
+            case 'pending':
+                // Show all pending submissions (new, republish, unpublish)
+                return baseFilter() && isPending;
+
+            case 'pending_new':
+                // Show only new submissions
+                return baseFilter() && item.status === 'new';
+
+            case 'pending_republish':
+                // Show only republish submissions
+                return baseFilter() && item.status === 'republish';
+
+            case 'pending_unpublish':
+                // Show only unpublish submissions
+                return baseFilter() && item.status === 'unpublish';
+
+            case 'released':
+                // Show all released submissions (published, unpublished)
+                return baseFilter() && isReleased;
+
+            case 'released_published':
+                // Show only published submissions
+                return baseFilter() && item.status === 'published';
+
+            case 'released_unpublished':
+                // Show only unpublished submissions
+                return baseFilter() && item.status === 'unpublished';
+
+            case 'all':
+            default:
+                // Show All
+                return baseFilter();
+        }
     }
 
 
-    function exportCSV(event)
+    async function exportCSV(event)
     {
-        // Helper function to format date as YYYY/MM/DD
-        const formatDate = (dateString) => {
-            if (!dateString) return '';
-            try {
-                const date = new Date(dateString);
-                if (isNaN(date.getTime())) return '';
-
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-                return `${year}/${month}/${day}`;
-            } catch (e) {
-                return '';
-            }
-        };
-
         // Get the filtered data - apply rowFilter first
-        let filteredData = props.submissions?.filter(rowFilter) || [];
+        // Use submissionsWithStatusDate to match the DataTable source
+        let filteredData = submissionsWithStatusDate.value?.filter(rowFilter) || [];
 
         // Apply global keyword search filter if present
         const globalFilter = filters.value.global?.value;
@@ -995,105 +1072,89 @@
             });
         }
 
-        // Define columns matching the submission worksheet format
-        const columns = [
-            'sgc_id',
-            'action',
-            'local_key',
-            'hgnc_id',
-            'hgnc_symbol',
-            'disease_id',
-            'disease_name',
-            'moi_id',
-            'moi_name',
-            'submitter_id',
-            'submitter_name',
-            'classification_id',
-            'classification_name',
-            'date',
-            'public_report_url',
-            'notes',
-            'pmids',
-            'assertion_criteria_url'
-        ];
+        if (filteredData.length === 0) {
+            toast.add({
+                severity: 'warn',
+                summary: 'No Data',
+                detail: 'No submissions to export.',
+                life: 3000
+            });
+            return;
+        }
 
-        const columnHeaders = [
-            'SGC ID',
-            'Action',
-            'Local Key',
-            'HGNC ID',
-            'Gene Symbol',
-            'Disease ID (MONDO)',
-            'Disease Name',
-            'Mode of Inheritance ID',
-            'Mode of Inheritance Name',
-            'Submitter ID',
-            'Submitter Name',
-            'Classification ID',
-            'Classification Name',
-            'Report Date',
-            'Public Report URL',
-            'Notes',
-            'PubMed IDs',
-            'Assertion Criteria URL'
-        ];
+        try {
+            // Call backend API to generate Excel file with template formatting preserved
+            // Get CSRF token from meta tag
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            // Get XSRF token from cookie (Laravel sets this)
+            const xsrfCookie = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='));
+            const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=')[1]) : '';
 
-        // Build CSV content
-        let csv = columnHeaders.join(',') + '\n';
-
-        filteredData.forEach(row => {
-            const rawDate = row.submission_data?.report?.display_date || '';
-            const formattedDate = formatDate(rawDate);
-
-            const values = [
-                row.sid || '',
-                'R',  // Action column - default to 'R' (Republish)
-                row.local_key || '',
-                (row.submission_data?.gene?.id && row.submission_data.gene.id !== '-') ? row.submission_data.gene.id : (row.gene?.hgnc_id || ''),
-                (row.submission_data?.gene?.symbol && row.submission_data.gene.symbol !== '-') ? row.submission_data.gene.symbol : (row.gene?.symbol || ''),
-                row.submission_data?.disease?.id || row.disease?.curie || '',
-                row.submission_data?.disease?.name || row.disease?.name || '',
-                row.submission_data?.moi?.id || row.inheritance?.curie || '',
-                row.submission_data?.moi?.name || row.inheritance?.name || '',
-                row.submitter?.curie || row.submission_data?.additional_information?.submitter_curie || '',
-                row.submitter?.name || row.submission_data?.additional_information?.submitter_title || '',
-                row.submission_data?.classification?.id || row.classification?.curie || '',
-                row.submission_data?.classification?.name || row.classification?.name || '',
-                formattedDate,  // Index 14 - formatted date (shifted from 13)
-                row.submission_data?.report?.ext_url || '',
-                row.submission_data?.notes?.display || '',
-                (row.evidence || []).join(', '),
-                row.submission_data?.criteria?.url || ''
-            ];
-
-            // Escape values that contain commas, quotes, or newlines
-            // Always wrap date field (index 13) and PubMed IDs (index 16) in double quotes
-            const escapedValues = values.map((val, index) => {
-                const strVal = String(val);
-                // Always wrap date column and PubMed IDs in quotes
-                if (index === 13 || index === 16) {
-                    return '"' + strVal.replace(/"/g, '""') + '"';
-                }
-                // Wrap other fields only if needed
-                if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
-                    return '"' + strVal.replace(/"/g, '""') + '"';
-                }
-                return strVal;
+            const response = await fetch('/api/submissions/export-template', {
+                method: 'POST',
+                credentials: 'same-origin',  // Include cookies for session auth
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-XSRF-TOKEN': xsrfToken
+                },
+                body: JSON.stringify({
+                    submissions: filteredData
+                })
             });
 
-            csv += escapedValues.join(',') + '\n';
-        });
+            console.log('Export response status:', response.status);
+            console.log('Export response ok:', response.ok);
+            console.log('Export response headers:', Object.fromEntries(response.headers.entries()));
 
-        // Download the CSV file
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.setAttribute('href', url);
-        link.setAttribute('download', 'submissions_export.csv');
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+            if (!response.ok) {
+                // Try to get error message from response
+                const text = await response.text();
+                console.error('Export error response:', text);
+                let errorMessage = 'Export failed';
+                try {
+                    const errorData = JSON.parse(text);
+                    errorMessage = errorData.message || errorMessage;
+                } catch (e) {
+                    errorMessage = text || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
+            // Download the file
+            const blob = await response.blob();
+            console.log('Blob size:', blob.size, 'type:', blob.type);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+
+            // Get filename from Content-Disposition header or use default
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = 'submissions_export.xlsx';
+            if (contentDisposition) {
+                const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition);
+                if (matches && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, '');
+                }
+            }
+
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+        } catch (error) {
+            console.error('Error exporting to xlsx:', error);
+            toast.add({
+                severity: 'error',
+                summary: 'Export Failed',
+                detail: error.message || 'Failed to export submissions. Please try again.',
+                life: 5000
+            });
+        }
     }
 
     function rowStyle(data)
@@ -1124,52 +1185,73 @@
     }
 
     // V2 status display with better terminology
+    // With simplified status model: new, republish, unpublish (pending) and published, unpublished (released)
     function displayStatusV2(status) {
         const statusMap = {
+            // New simplified statuses
+            'new': 'New',
+            'republish': 'Republish',
+            'unpublish': 'Unpublish',
+            'published': 'Published',
+            'unpublished': 'Unpublished',
+            // Legacy compound statuses (for backwards compatibility)
             'draft_new': 'New',
             'submitted_new': 'New',
-            'published': 'Published',
             'draft_republish': 'Republish',
             'submitted_republish': 'Republish',
             'draft_unpublish': 'Unpublish',
-            'submitted_unpublish': 'Unpublish',
-            'unpublished': 'Unpublished'
+            'submitted_unpublish': 'Unpublish'
         };
         return statusMap[status] || status;
     }
 
     // Get severity for status badge with custom classes for shades
-    function getStatusSeverity(status) {
+    // Stage (draft/submitted) is now derived from job.status
+    function getStatusSeverity(status, jobStatus = null) {
+        const isSubmittedJob = jobStatus === 'submitted';
+
         const severityMap = {
-            'draft_new': 'warning',             // Yellow
-            'submitted_new': 'info',            // Blue
-            'published': 'success',             // Green
-            'draft_republish': 'warning',       // Yellow
-            'submitted_republish': 'info',      // Blue
-            'draft_unpublish': 'amber',         // Amber
-            'submitted_unpublish': 'orange',    // Orange
-            'unpublished': 'danger'             // Red
+            // New simplified statuses - use job status for color
+            'new': isSubmittedJob ? 'info' : 'warning',
+            'republish': isSubmittedJob ? 'info' : 'warning',
+            'unpublish': isSubmittedJob ? 'orange' : 'amber',
+            'published': 'success',
+            'unpublished': 'danger',
+            // Legacy compound statuses
+            'draft_new': 'warning',
+            'submitted_new': 'info',
+            'draft_republish': 'warning',
+            'submitted_republish': 'info',
+            'draft_unpublish': 'amber',
+            'submitted_unpublish': 'orange'
         };
         return severityMap[status] || 'secondary';
     }
 
     // Get custom CSS class for status badges with shades
     // Archived submissions (is_archived=true) get gray styling
-    function getStatusClass(status, isArchived = false) {
+    function getStatusClass(status, isArchived = false, jobStatus = null) {
         // Archived submissions get gray styling (released but superseded by newer release)
         if (isArchived) {
             return 'status-not-current';
         }
 
+        const isSubmittedJob = jobStatus === 'submitted';
+
         const classMap = {
+            // New simplified statuses - class based on job status
+            'new': isSubmittedJob ? 'status-submitted-new' : 'status-draft-new',
+            'republish': isSubmittedJob ? 'status-submitted-republish' : 'status-draft-republish',
+            'unpublish': isSubmittedJob ? 'status-submitted-unpublish' : 'status-draft-unpublish',
+            'published': 'status-published',
+            'unpublished': 'status-unpublished',
+            // Legacy compound statuses
             'draft_new': 'status-draft-new',
             'submitted_new': 'status-submitted-new',
-            'published': 'status-published',
             'draft_republish': 'status-draft-republish',
             'submitted_republish': 'status-submitted-republish',
             'draft_unpublish': 'status-draft-unpublish',
-            'submitted_unpublish': 'status-submitted-unpublish',
-            'unpublished': 'status-unpublished'
+            'submitted_unpublish': 'status-submitted-unpublish'
         };
         return classMap[status] || '';
     }
@@ -1180,7 +1262,16 @@
         if (!submission.status) return submission.created_at;
 
         let dateStr = null;
+        const isSubmittedJob = submission.job?.status === 'submitted';
+
         switch (submission.status) {
+            // New simplified pending statuses
+            case 'new':
+            case 'republish':
+            case 'unpublish':
+                dateStr = isSubmittedJob ? (submission.submitted_at || submission.created_at) : submission.created_at;
+                break;
+            // Legacy compound statuses
             case 'draft_new':
             case 'draft_republish':
             case 'draft_unpublish':
@@ -1507,14 +1598,14 @@ table tbody tr:hover {
                     </div>
 
                     <div class="flex flex-wrap items-center justify-between gap-2">
-                        <span class="font-bold">
+                        <span>
                             <Button icon="pi pi-download"
                                     label="Download"
                                     @click="exportCSV($event)"
                                     severity="success"
                                     raised
                                     :disabled="filteredSubmissionsCount === 0" />
-                            <span class="ml-3">
+                            <span class="ml-3 text-sm text-gray-600">
                                 <template v-if="filteredSubmissionsCount < (submissions ? submissions.length : 0)">
                                     Showing {{ filteredSubmissionsCount }} of {{ submissions ? submissions.length : 0 }} submissions.
                                 </template>
@@ -1524,8 +1615,24 @@ table tbody tr:hover {
                             </span>
                         </span>
                         <div class="text-left flex gap-2">
-                            <Dropdown v-model="selectedDisplay" :options="displayOptions" optionLabel="name" optionValue="option" placeholder="Display" class="w-20rem" />
-                            <ToggleButton v-model="filterUser" onLabel="User Only" offLabel="Submitter" onIcon="pi pi-user" offIcon="pi pi-sitemap" class="w-12rem" aria-label="Do you confirm" />
+                            <Dropdown v-model="selectedDisplay" :options="displayOptions" optionLabel="name" optionValue="option" placeholder="Display" class="w-48">
+                                <template #option="slotProps">
+                                    <div :class="{ 'pl-4': slotProps.option.isChild, 'font-semibold': slotProps.option.isParent }">
+                                        {{ slotProps.option.name }}
+                                    </div>
+                                </template>
+                            </Dropdown>
+                            <ToggleButton
+                                v-if="showHistoricToggle"
+                                v-model="showHistoric"
+                                onLabel="Historic"
+                                offLabel="Historic"
+                                onIcon="pi pi-eye"
+                                offIcon="pi pi-eye-slash"
+                                class="w-32"
+                                v-tooltip.bottom="historicToggleTooltip"
+                                :aria-label="historicToggleTooltip" />
+                            <ToggleButton v-model="filterUser" onLabel="User Only" offLabel="Submitter" onIcon="pi pi-user" offIcon="pi pi-sitemap" class="w-32" aria-label="Do you confirm" />
                         </div>
                         <IconField iconPosition="left">
                             <InputIcon>
@@ -1535,11 +1642,11 @@ table tbody tr:hover {
                         </IconField>
                     </div>
                 </template>
-                <Column v-if="!props.hasSubmittedJob" selectionMode="multiple" headerStyle="width: 3rem" :exportable="false"></Column>
+                <Column selectionMode="multiple" headerStyle="width: 3rem" :exportable="false"></Column>
                 <Column field="ident" header="">
                      <template #body="{ data }">
-                        <div v-if="favorites.includes(data.ident)" class="text-orange-300 text-xl" @click="updateFavorite(data.sid, false)"><i class="pi pi-star-fill" ></i></div>
-                        <div v-else class="text-slate-300 text-xl" @click="updateFavorite(data.sid, true)"><i class="pi pi-star"></i></div>
+                        <div v-if="favorites.includes(data.ident)" class="text-orange-300 text-xl" @click="updateFavorite(data.ident, false)"><i class="pi pi-star-fill" ></i></div>
+                        <div v-else class="text-slate-300 text-xl" @click="updateFavorite(data.ident, true)"><i class="pi pi-star"></i></div>
                     </template>
                 </Column>
                 <Column field="sid" header="Submission" sortable>
@@ -1676,13 +1783,14 @@ table tbody tr:hover {
                                     <Button @click="requireUnpublishConfirmationV2(slotProps.data.sid)" icon="pi pi-eye-slash" severity="warning" text raised rounded v-tooltip.top="'Unpublish'"></Button>
                                 </span>
 
-                                <!-- Draft states: Show Delete button -->
-                                <span v-if="slotProps.data.status === 'draft_republish' || slotProps.data.status === 'draft_unpublish'" class="mr-3">
+                                <!-- Pending submissions in draft job: Show Delete button -->
+                                <!-- Republish/Unpublish drafts: Cancel the draft (original remains) -->
+                                <span v-if="(slotProps.data.status === 'republish' || slotProps.data.status === 'unpublish') && slotProps.data.job?.status === 'draft'" class="mr-3">
                                     <Button @click="requireDeleteDraftConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete draft'"></Button>
                                 </span>
 
-                                <!-- Draft new: Show Delete button -->
-                                <span v-if="slotProps.data.status === 'draft_new'" class="mr-3">
+                                <!-- New submissions in draft job: Delete the submission -->
+                                <span v-if="slotProps.data.status === 'new' && slotProps.data.job?.status === 'draft'" class="mr-3">
                                     <Button @click="requireConfirmation(slotProps.data.sid)" icon="pi pi-trash" severity="danger" text raised rounded v-tooltip.top="'Delete'"></Button>
                                 </span>
 
@@ -1710,7 +1818,7 @@ table tbody tr:hover {
 
                             <!-- View/Edit button (always shown for current versions) -->
                             <Button type="button" icon="pi pi-arrow-right" text raised rounded
-                                    v-tooltip.top="slotProps.data.status === 'draft_new' || slotProps.data.status === 'draft_republish' ? 'View/Edit' : 'View'"
+                                    v-tooltip.top="(slotProps.data.status === 'new' || slotProps.data.status === 'republish') && slotProps.data.job?.status === 'draft' ? 'View/Edit' : 'View'"
                                     @click="router.visit('/submissions/' + slotProps.data.ident)" />
                         </template>
                     </template>

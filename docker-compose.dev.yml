@@ -41,7 +41,7 @@ services:
       - CACHE_DRIVER=file
       - SESSION_DRIVER=file
       # Point to gencc-search on host machine
-      - PUBLISH_URL=http://host.docker.internal:8000/api/publish
+      - RELEASE_URL=http://host.docker.internal:8000/api/release
       - SUBMIT_URL=http://host.docker.internal:8001/api/submit
     # Install dependencies on startup, then run dev servers
     command: >

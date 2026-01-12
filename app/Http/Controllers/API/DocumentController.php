@@ -520,9 +520,10 @@ class DocumentController extends Controller
         set_time_limit(3600); // 1 hour for large files
         ini_set('max_execution_time', 3600);
 
-        // Wall-clock timeout for testing (measures real time, not just CPU time)
+        // Wall-clock timeout (measures real time, not just CPU time)
+        // Configurable via UPLOAD_TIMEOUT_SECONDS env variable, defaults to 10 minutes
         $startTime = microtime(true);
-        $wallClockTimeoutSeconds = 300; // 5 minutes - should be enough with caching optimizations
+        $wallClockTimeoutSeconds = (int) env('UPLOAD_TIMEOUT_SECONDS', 600);
 
         // Variables for shutdown handler
         $processedRows = 0;
@@ -680,6 +681,37 @@ class DocumentController extends Controller
             'pubmeds' => $lookupCaches['pubmeds']->count(),
         ]);
 
+        // Pre-load all SGC IDs from the worksheet for batch lookup
+        // This avoids N+1 queries when processing republish/unpublish actions
+        $sgcIdsInFile = [];
+        $preloadRowNum = 0;
+        foreach ($firstsheet as $row) {
+            if ($preloadRowNum++ < 6) continue; // Skip header rows
+            if (empty(implode('', $row->toArray()))) continue; // Skip blank rows
+
+            $sgcId = trim($row['sgc_id'] ?? '');
+            if (!empty($sgcId)) {
+                $sgcIdsInFile[] = $sgcId;
+            }
+        }
+        $sgcIdsInFile = array_unique($sgcIdsInFile);
+
+        // Batch query all existing submissions for these SGC IDs
+        // This single query replaces potentially thousands of individual queries
+        $existingSubmissionsCache = collect();
+        if (!empty($sgcIdsInFile)) {
+            $existingSubmissionsCache = Submission::where('submitter_id', $document->submitter_id)
+                ->whereIn('sid', $sgcIdsInFile)
+                ->where('is_live', true) // Only get live submissions for republish/unpublish
+                ->get()
+                ->keyBy('sid');
+
+            \Log::info('DocumentController@parser: Pre-loaded existing submissions', [
+                'sgc_ids_in_file' => count($sgcIdsInFile),
+                'submissions_found' => $existingSubmissionsCache->count(),
+            ]);
+        }
+
         // process the rows
         foreach ($firstsheet as $row)
         {
@@ -749,7 +781,8 @@ class DocumentController extends Controller
                 }
 
                 \Log::info('DocumentController@parser looking up submission sid by sgc_id: ' . $row['sgc_id']);
-                $originalSubmission = $submitter->submissions()->where('sid', $row['sgc_id'])->first();
+                // Use pre-loaded cache for O(1) lookup instead of per-row database query
+                $originalSubmission = $existingSubmissionsCache->get($row['sgc_id']);
                 if ($originalSubmission === null) {
                     $message = [
                         'ident' => $document->job->ident,

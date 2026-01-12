@@ -31,7 +31,7 @@ use App\Services\SubmissionStateMachine;
  * SubmissionController supplies the submissions data to Inertia/Vue.
  *
  * */
-class PublishController extends Controller
+class ReleaseController extends Controller
 {
 
     /**
@@ -84,7 +84,7 @@ class PublishController extends Controller
     public function init(Request $request)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -100,9 +100,16 @@ class PublishController extends Controller
         // echo "\nIn init: " . $template->render();
 
         // post packet TODO:  Need a new key assignment
+        \Log::info('ReleaseController::init sending request', [
+            'server' => $server,
+            'headers' => ['GEN-API-KEY' => '***', 'X-GENCC-ACTION' => 'INIT'],
+            'body' => $template->render()
+        ]);
+
         try {
             $response = Http::withHeaders([
-                'GEN-API-KEY' => $token
+                'GEN-API-KEY' => $token,
+                'X-GENCC-ACTION' => 'INIT'
             ])->withBody(
                 $template->render(), 'application/json; charset=UTF-8'
             )->post($server);
@@ -132,7 +139,7 @@ class PublishController extends Controller
     public function send_job(Request $request, $job)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -158,34 +165,33 @@ class PublishController extends Controller
                 continue;
             }
 
-            // Determine action_type for gencc-search API based on submission state
-            // Both new and republish use "publish", unpublish uses "unpublish"
-            $action_type = match($submission->status) {
-                Submission::STATUS_SUBMITTED_NEW => 'publish',
-                Submission::STATUS_SUBMITTED_REPUBLISH => 'publish',
-                Submission::STATUS_SUBMITTED_UNPUBLISH => 'unpublish',
-                default => 'publish' // fallback for legacy
+            // Determine action for HTTP header based on submission state
+            // Both new and republish use "PUBLISH", unpublish uses "UNPUBLISH"
+            // With simplified status model: new/republish/unpublish are pending statuses
+            $action = match($submission->status) {
+                Submission::STATUS_NEW => 'PUBLISH',
+                Submission::STATUS_REPUBLISH => 'PUBLISH',
+                Submission::STATUS_UNPUBLISH => 'UNPUBLISH',
+                default => 'PUBLISH' // fallback for legacy
             };
 
-            // Add action_type to data array for template
-            $submissionData = array_merge($data, ['action_type' => $action_type]);
-
-            $response = $this->_publish_submission($submission, 'json.Publish.submission', $submissionData, $token, $server);
+            $response = $this->_publish_submission($submission, 'json.Publish.submission', $data, $token, $server, $action);
 
             if (isset($response['status_code']) && $response['status_code'] == 200) {
                 // Determine target state and action based on current state
+                // new/republish -> published, unpublish -> unpublished
                 $targetState = match($submission->status) {
-                    Submission::STATUS_SUBMITTED_NEW => Submission::STATUS_PUBLISHED,
-                    Submission::STATUS_SUBMITTED_REPUBLISH => Submission::STATUS_PUBLISHED,
-                    Submission::STATUS_SUBMITTED_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
+                    Submission::STATUS_NEW => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_REPUBLISH => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
                     default => null
                 };
 
                 // Determine action type for tracking
                 $action = match($submission->status) {
-                    Submission::STATUS_SUBMITTED_NEW => 'published',
-                    Submission::STATUS_SUBMITTED_REPUBLISH => 'republished',
-                    Submission::STATUS_SUBMITTED_UNPUBLISH => 'unpublished',
+                    Submission::STATUS_NEW => 'published',
+                    Submission::STATUS_REPUBLISH => 'republished',
+                    Submission::STATUS_UNPUBLISH => 'unpublished',
                     default => 'published' // fallback for legacy
                 };
 
@@ -355,27 +361,29 @@ class PublishController extends Controller
     public function send_action(Request $request, $action)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
-        // send init handshake
+        // Prepare data for template
         $data = [
             'token' => $token,
             'timestamp' => Carbon::now(),
             'action' => $action
         ];
 
-        $success = true;
-
         $template = view('json.Publish.unpublish')->with($data);
 
-        // Verbose logging removed to prevent memory issues
-        // var_dump($template->render());
+        // Log the request for debugging
+        \Log::info('Sending unpublish action', [
+            'action_id' => $action->id,
+            'payload' => $template->render()
+        ]);
 
-        // post packet TODO:  Need a new key assignment
+        // Post with X-GENCC-ACTION header set to UNPUBLISH
         $response = Http::withHeaders([
-            'GEN-API-KEY' => $token
+            'GEN-API-KEY' => $token,
+            'X-GENCC-ACTION' => 'UNPUBLISH'
         ])->withBody(
             $template->render(), 'application/json; charset=UTF-8'
         )->post($server);
@@ -395,7 +403,7 @@ class PublishController extends Controller
                 200);
         }
 
-        // return with the proper rstatus code.
+        // return with the proper status code.
         Log::info("Unsuccessful send action!");
 
         return response()->json(['success' => 'false',
@@ -407,7 +415,7 @@ class PublishController extends Controller
     public function send_sgc_id(Request $request, $submission)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -431,7 +439,7 @@ class PublishController extends Controller
     public function end(Request $request)
     {
 
-        $server = env('PUBLISH_URL', false);
+        $server = env('RELEASE_URL', false);
 
         $token = env('GENCC_PUBLISH_TOKEN');
 
@@ -456,7 +464,54 @@ class PublishController extends Controller
         return $response->json();
     }
 
-    private function _publish_submission($submission, $template, $header_data, $token, $server) {
+    /**
+     * Trigger update_counts on gencc-search to refresh classification counts
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return array
+     */
+    public function updateCounts(Request $request)
+    {
+        $server = env('RELEASE_URL', false);
+
+        $token = env('GENCC_PUBLISH_TOKEN');
+
+        $data = [
+            'token' => $token,
+            'timestamp' => Carbon::now()
+        ];
+
+        $template = view('json.Publish.update_counts')->with($data);
+
+        \Log::info('ReleaseController::updateCounts sending request', [
+            'server' => $server,
+            'body' => $template->render()
+        ]);
+
+        try {
+            $response = Http::withHeaders([
+                'GEN-API-KEY' => $token,
+                'X-GENCC-ACTION' => 'UPDATE_COUNTS'
+            ])->withBody(
+                $template->render(), 'application/json; charset=UTF-8'
+            )->post($server);
+
+            if ($response->successful()) {
+                return $response->json();
+            } else {
+                \Log::error('Update counts failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+                return ['status_code' => $response->status(), 'error' => 'HTTP error'];
+            }
+        } catch (\Exception $e) {
+            \Log::error('Update counts exception', ['error' => $e->getMessage()]);
+            return ['status_code' => 500, 'error' => $e->getMessage()];
+        }
+    }
+
+    private function _publish_submission($submission, $template, $header_data, $token, $server, $action = 'PUBLISH') {
 
         $template = view($template)->with($header_data)
             ->with('submission', $submission);
@@ -466,11 +521,13 @@ class PublishController extends Controller
         // Log the request payload for debugging
         \Log::info('Publishing submission', [
             'sid' => $submission->sid,
+            'action' => $action,
             'payload' => $rendered
         ]);
 
         $response = Http::withHeaders([
-            'GEN-API-KEY' => $token
+            'GEN-API-KEY' => $token,
+            'X-GENCC-ACTION' => $action
         ])->withBody(
             $rendered, 'application/json; charset=UTF-8'
         )->post($server);
@@ -535,16 +592,9 @@ class PublishController extends Controller
 
             $submission->submission_errors = (object)$errors;
 
-            // Transition submission back to draft state
-            // Determine original intent to preserve proper draft state
-            $targetDraftState = match($submission->status) {
-                Submission::STATUS_SUBMITTED_NEW => Submission::STATUS_DRAFT_NEW,
-                Submission::STATUS_SUBMITTED_REPUBLISH => Submission::STATUS_DRAFT_REPUBLISH,
-                Submission::STATUS_SUBMITTED_UNPUBLISH => Submission::STATUS_DRAFT_UNPUBLISH,
-                default => Submission::STATUS_DRAFT_NEW
-            };
-
-            SubmissionStateMachine::transition($submission, $targetDraftState);
+            // With simplified status model, status does NOT change when moving back to draft job
+            // Stage (draft/submitted) is derived from Job.status
+            // Just move the submission to the draft job - no status transition needed
 
             // Move to draft job
             $submission->job_id = $draftJob->id;

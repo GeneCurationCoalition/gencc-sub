@@ -139,21 +139,34 @@ class SubmissionApiTest extends TestCase
     {
         $this->assertEquals('draft', Job::STATUS_DRAFT);
         $this->assertEquals('submitted', Job::STATUS_SUBMITTED);
-        $this->assertEquals('processed', Job::STATUS_PROCESSED);
+        $this->assertEquals('released', Job::STATUS_RELEASED);
+        // STATUS_PROCESSED is deprecated alias for STATUS_RELEASED
+        $this->assertEquals('released', Job::STATUS_PROCESSED);
 
         $this->assertEquals('draft', $this->job->status);
     }
 
     /**
      * Test that submission uses correct string status constants
+     *
+     * With the simplified status model (Phase 2):
+     * - Pending statuses: new, republish, unpublish
+     * - Released statuses: published, unpublished
+     * - Deprecated aliases (STATUS_DRAFT_*, STATUS_SUBMITTED_*) map to new values
      */
     public function test_submission_uses_string_status_constants(): void
     {
-        $this->assertEquals('draft_new', Submission::STATUS_DRAFT_NEW);
+        // New simplified constants
+        $this->assertEquals('new', Submission::STATUS_NEW);
         $this->assertEquals('published', Submission::STATUS_PUBLISHED);
-        $this->assertEquals('draft_republish', Submission::STATUS_DRAFT_REPUBLISH);
+        $this->assertEquals('republish', Submission::STATUS_REPUBLISH);
 
-        $this->assertEquals('draft_new', $this->submission->status);
+        // Deprecated aliases map to simplified values
+        $this->assertEquals('new', Submission::STATUS_DRAFT_NEW);
+        $this->assertEquals('republish', Submission::STATUS_DRAFT_REPUBLISH);
+
+        // Test submission has correct status (factory uses STATUS_DRAFT_NEW which maps to 'new')
+        $this->assertEquals('new', $this->submission->status);
     }
 
     /**
@@ -410,8 +423,8 @@ class SubmissionApiTest extends TestCase
         $this->job->update(['status' => Job::STATUS_SUBMITTED]);
         $this->assertEquals('Submitted', $this->job->display_status);
 
-        $this->job->update(['status' => Job::STATUS_PROCESSED]);
-        $this->assertEquals('Processed', $this->job->display_status);
+        $this->job->update(['status' => Job::STATUS_RELEASED]);
+        $this->assertEquals('Released', $this->job->display_status);
     }
 
     /**
@@ -902,7 +915,7 @@ class SubmissionApiTest extends TestCase
         $response->assertJson([
             'success' => 'false',
             'status_code' => 3007,
-            'message' => 'Cannot delete published submissions or submissions being updated'
+            'message' => 'Cannot delete submissions in this state. Only new submissions can be deleted.'
         ]);
     }
 
@@ -1187,7 +1200,9 @@ class SubmissionApiTest extends TestCase
         // Verify only valid constants exist
         $this->assertEquals('draft', Job::STATUS_DRAFT);
         $this->assertEquals('submitted', Job::STATUS_SUBMITTED);
-        $this->assertEquals('processed', Job::STATUS_PROCESSED);
+        $this->assertEquals('released', Job::STATUS_RELEASED);
+        // STATUS_PROCESSED is deprecated alias for STATUS_RELEASED
+        $this->assertEquals('released', Job::STATUS_PROCESSED);
 
         // Verify legacy constants are prefixed with LEGACY_
         $this->assertEquals(0, Job::LEGACY_STATUS_INITIALIZING);
@@ -1197,17 +1212,30 @@ class SubmissionApiTest extends TestCase
 
     /**
      * Test that submission has all required status constants
+     *
+     * With the simplified status model (Phase 2), we have 5 actual status values:
+     * - Pending: new, republish, unpublish
+     * - Released: published, unpublished
+     *
+     * The deprecated compound constants (draft_*, submitted_*) are aliased
+     * to the new simplified values for backwards compatibility.
      */
     public function test_submission_has_all_required_status_constants(): void
     {
-        $this->assertEquals('draft_new', Submission::STATUS_DRAFT_NEW);
-        $this->assertEquals('submitted_new', Submission::STATUS_SUBMITTED_NEW);
+        // New simplified status constants
+        $this->assertEquals('new', Submission::STATUS_NEW);
+        $this->assertEquals('republish', Submission::STATUS_REPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_UNPUBLISH);
         $this->assertEquals('published', Submission::STATUS_PUBLISHED);
-        $this->assertEquals('draft_republish', Submission::STATUS_DRAFT_REPUBLISH);
-        $this->assertEquals('submitted_republish', Submission::STATUS_SUBMITTED_REPUBLISH);
-        $this->assertEquals('draft_unpublish', Submission::STATUS_DRAFT_UNPUBLISH);
-        $this->assertEquals('submitted_unpublish', Submission::STATUS_SUBMITTED_UNPUBLISH);
         $this->assertEquals('unpublished', Submission::STATUS_UNPUBLISHED);
+
+        // Deprecated aliases map to simplified values
+        $this->assertEquals('new', Submission::STATUS_DRAFT_NEW);
+        $this->assertEquals('new', Submission::STATUS_SUBMITTED_NEW);
+        $this->assertEquals('republish', Submission::STATUS_DRAFT_REPUBLISH);
+        $this->assertEquals('republish', Submission::STATUS_SUBMITTED_REPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_DRAFT_UNPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_SUBMITTED_UNPUBLISH);
     }
 
     // ========================================================================
@@ -1238,6 +1266,7 @@ class SubmissionApiTest extends TestCase
         $this->submission->save();
 
         // Create an existing published submission with the second gene (same disease/moi)
+        // Must set is_live=true for the duplicate detection to work
         $existingSubmission = Submission::create([
             'job_id' => $this->job->id,
             'submitter_id' => $this->submitter->id,
@@ -1249,6 +1278,7 @@ class SubmissionApiTest extends TestCase
             'inheritance_id' => $inheritance->id,
             'classification_id' => Classification::first()->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
             'submission_data' => (object) [],
         ]);
 
@@ -1299,6 +1329,7 @@ class SubmissionApiTest extends TestCase
         $this->submission->save();
 
         // Create an existing published submission with the second disease (same gene/moi)
+        // Must set is_live=true for the duplicate detection to work
         $existingSubmission = Submission::create([
             'job_id' => $this->job->id,
             'submitter_id' => $this->submitter->id,
@@ -1310,6 +1341,7 @@ class SubmissionApiTest extends TestCase
             'inheritance_id' => $inheritance->id,
             'classification_id' => Classification::first()->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
             'submission_data' => (object) [],
         ]);
 
@@ -1352,6 +1384,7 @@ class SubmissionApiTest extends TestCase
         $this->submission->save();
 
         // Create an existing published submission with the second inheritance (same gene/disease)
+        // Must set is_live=true for the duplicate detection to work
         $existingSubmission = Submission::create([
             'job_id' => $this->job->id,
             'submitter_id' => $this->submitter->id,
@@ -1363,6 +1396,7 @@ class SubmissionApiTest extends TestCase
             'inheritance_id' => $inheritance2->id,
             'classification_id' => Classification::first()->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
             'submission_data' => (object) [],
         ]);
 
@@ -1406,6 +1440,7 @@ class SubmissionApiTest extends TestCase
         $this->submission->save();
 
         // Create an existing UNPUBLISHED submission with the second gene (same disease/moi)
+        // Must set is_live=true for the duplicate detection to work
         $existingSubmission = Submission::create([
             'job_id' => $this->job->id,
             'submitter_id' => $this->submitter->id,
@@ -1417,6 +1452,7 @@ class SubmissionApiTest extends TestCase
             'inheritance_id' => $inheritance->id,
             'classification_id' => Classification::first()->id,
             'status' => Submission::STATUS_UNPUBLISHED,  // Unpublished - should warn, not block
+            'is_live' => true,
             'submission_data' => (object) [],
         ]);
 

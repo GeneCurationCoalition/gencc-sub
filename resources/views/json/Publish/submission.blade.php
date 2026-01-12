@@ -1,10 +1,9 @@
 {
-	"action": "{{ $action_type }}",
 	"date": "{{ $timestamp }}",
 	"token": "{{ $token }}",
 	"job": "{{ $job->slug }}",
 	"publish_date": "{{ $job->released_at }}",
-	@if($action_type === 'unpublish' && $submission->unpublished_at)
+	@if($submission->unpublished_at)
 	"unpublished_at": "{{ $submission->unpublished_at->toIso8601String() }}",
 	@endif
 	"data":  {

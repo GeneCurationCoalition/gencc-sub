@@ -134,7 +134,8 @@
         const statusMap = {
             'draft': 'Draft',
             'submitted': 'Submitted',
-            'processed': 'Released'
+            'released': 'Released',
+            'processed': 'Released'  // Backwards compatibility
         };
         return statusMap[status] || status;
     }
@@ -144,7 +145,8 @@
         const severityMap = {
             'draft': 'warning',
             'submitted': 'info',
-            'processed': 'success'
+            'released': 'success',
+            'processed': 'success'  // Backwards compatibility
         };
         return severityMap[status] || 'warning';
     }
@@ -154,13 +156,14 @@
         const classMap = {
             'draft': 'job-status-draft',
             'submitted': 'job-status-submitted',
-            'processed': 'job-status-processed'
+            'released': 'job-status-released',
+            'processed': 'job-status-released'  // Backwards compatibility
         };
         return classMap[status] || '';
     }
 
     // Get the status date based on job status
-    // Draft: created_at, Submitted: submitted_at, Processed: released_at
+    // Draft: created_at, Submitted: submitted_at, Released: released_at
     function getStatusDate(job) {
         if (!job.status) return null;
 
@@ -172,7 +175,8 @@
             case 'submitted':
                 dateStr = job.submitted_at || job.created_at;
                 break;
-            case 'processed':
+            case 'released':
+            case 'processed':  // Backwards compatibility
                 dateStr = job.released_at || job.submitted_at || job.created_at;
                 break;
             default:
@@ -197,7 +201,8 @@
             case 'submitted':
                 dateStr = job.submitted_at || job.created_at;
                 break;
-            case 'processed':
+            case 'released':
+            case 'processed':  // Backwards compatibility
                 dateStr = job.released_at || job.submitted_at || job.created_at;
                 break;
             default:
@@ -392,7 +397,7 @@
         // Helper to check if using V2 status or legacy
         const isDraft = item.status ? item.status === 'draft' : item.status == 2 || item.status == 4;
         const isSubmitted = item.status ? item.status === 'submitted' : item.status == 1 || item.status == 5;
-        const isProcessed = item.status ? item.status === 'processed' : item.status == 3;
+        const isReleased = item.status ? (item.status === 'released' || item.status === 'processed') : item.status == 3;
 
         if (selectedDisplay.value == 2) {
             // Show Pending (newly submitted)
@@ -417,11 +422,11 @@
                 return (isDraft || isSubmitted)
         }
         else if (selectedDisplay.value == 5) {
-            // Show Processed
+            // Show Released
             if (filterUser.value)
-                return (item.user_id == mine.value && isProcessed)
+                return (item.user_id == mine.value && isReleased)
             else
-                return isProcessed
+                return isReleased
         }
         else if (selectedDisplay.value == 6) {
             // Show Favorites
@@ -440,11 +445,86 @@
 
     function exportCSV(event)
     {
-        // PrimeVue DataTable exportCSV() automatically exports only the filtered data:
-        // - Respects :value="jobs?.filter(rowFilter)" for display option filters (Show All, Show Pending, etc.)
-        // - Respects v-model:filters for keyword search via globalFilterFields
-        // Result: Export includes only rows visible in the current table view
-        dt.value.exportCSV();
+        // Helper function to format date as full ISO datetime format
+        const formatDateISO = (dateString) => {
+            if (!dateString) return '';
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return '';
+                return date.toISOString();
+            } catch (e) {
+                return '';
+            }
+        };
+
+        // Get the filtered data - apply rowFilter first
+        let filteredData = jobsWithStatusDate.value?.filter(rowFilter) || [];
+
+        // Apply global keyword search filter if present
+        const globalFilter = filters.value.global?.value;
+        if (globalFilter) {
+            const searchLower = globalFilter.toLowerCase();
+            filteredData = filteredData.filter(job => {
+                const searchableText = [
+                    job.slug,
+                    job.friendly,
+                    getStatusDate(job),
+                    job.status,
+                    displayStatusV2(job.status)
+                ].filter(Boolean).join(' ').toLowerCase();
+                return searchableText.includes(searchLower);
+            });
+        }
+
+        // Define columns matching the table display
+        const columnHeaders = [
+            'Job ID',
+            'Name',
+            '# Submissions',
+            'Created By',
+            'Created',
+            'Submitted',
+            'Released',
+            'Status'
+        ];
+
+        // Build CSV content
+        let csv = columnHeaders.join(',') + '\n';
+
+        filteredData.forEach(job => {
+            const values = [
+                job.slug || '',
+                job.friendly || '',
+                job.submissions_count || 0,
+                job.user?.name || '',
+                formatDateISO(job.created_at),
+                formatDateISO(job.submitted_at),
+                formatDateISO(job.released_at),
+                displayStatusV2(job.status) || ''
+            ];
+
+            // Escape values that contain commas, quotes, or newlines
+            const escapedValues = values.map((val) => {
+                const strVal = String(val);
+                if (strVal.includes(',') || strVal.includes('"') || strVal.includes('\n')) {
+                    return '"' + strVal.replace(/"/g, '""') + '"';
+                }
+                return strVal;
+            });
+
+            csv += escapedValues.join(',') + '\n';
+        });
+
+        // Download the CSV file
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'jobs_export.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     function rowStyle(data)
@@ -602,11 +682,6 @@ table tbody tr:hover {
                 <Column field="ident" header="# Submissions" sortable>
                      <template #body="{ data }">
                         <div class="font-medium">{{ data.submissions_count }}</div>
-                    </template>
-                </Column>
-                <Column field="processed_count" header="# Processed" sortable>
-                     <template #body="{ data }">
-                        <div class="font-medium">{{ data.processed_submission_ids?.length || 0 }}</div>
                     </template>
                 </Column>
                 <Column field="user.name" header="Created By" sortable>

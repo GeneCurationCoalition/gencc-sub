@@ -65,7 +65,7 @@ class Submission extends Model
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
                             'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'original_submission_data',
                             'submission_data', 'submission_errors', 'history', 'tags',
-                            'status', 'origin_state', 'local_key', 'last_edited_by',
+                            'status', 'action', 'origin_state', 'local_key', 'last_edited_by',
                             'document_id', 'submitted_at', 'released_at', 'unpublished_at'];
 
 	/**
@@ -76,16 +76,43 @@ class Submission extends Model
     protected $appends = ['last_edited_by_admin', 'display_id', 'is_archived'];
 
     /**
-     * String-based status constants for submission workflow
+     * String-based status constants for submission workflow (simplified)
+     *
+     * Pending statuses (action-based):
+     * - new: First submission for this SGC ID (v1)
+     * - republish: Update to existing submission (v2+)
+     * - unpublish: Hide existing submission (v2+)
+     *
+     * Released statuses (visibility-based):
+     * - published: Visible in gencc-search
+     * - unpublished: Hidden from gencc-search
+     *
+     * Stage (draft/submitted) is derived from Job.status, not stored here.
      */
-    public const STATUS_DRAFT_NEW = 'draft_new';
-    public const STATUS_SUBMITTED_NEW = 'submitted_new';
+    public const STATUS_NEW = 'new';
+    public const STATUS_REPUBLISH = 'republish';
+    public const STATUS_UNPUBLISH = 'unpublish';
     public const STATUS_PUBLISHED = 'published';
-    public const STATUS_DRAFT_REPUBLISH = 'draft_republish';
-    public const STATUS_SUBMITTED_REPUBLISH = 'submitted_republish';
-    public const STATUS_DRAFT_UNPUBLISH = 'draft_unpublish';
-    public const STATUS_SUBMITTED_UNPUBLISH = 'submitted_unpublish';
     public const STATUS_UNPUBLISHED = 'unpublished';
+
+    /**
+     * @deprecated Legacy compound status constants - use simple STATUS_* constants above.
+     * These are kept for backwards compatibility during migration.
+     */
+    public const STATUS_DRAFT_NEW = 'new';
+    public const STATUS_SUBMITTED_NEW = 'new';
+    public const STATUS_DRAFT_REPUBLISH = 'republish';
+    public const STATUS_SUBMITTED_REPUBLISH = 'republish';
+    public const STATUS_DRAFT_UNPUBLISH = 'unpublish';
+    public const STATUS_SUBMITTED_UNPUBLISH = 'unpublish';
+
+    /**
+     * Action constants for audit trail
+     * These represent the original intent of the submission
+     */
+    public const ACTION_NEW = 'new';
+    public const ACTION_REPUBLISH = 'republish';
+    public const ACTION_UNPUBLISH = 'unpublish';
 
     /**
      * @deprecated Legacy integer status constants - only kept for migration commands.
@@ -99,19 +126,43 @@ class Submission extends Model
     public const LEGACY_STATUS_PUBLISHED = 20;
 
     /*
-     * Status strings for display methods (string-based status)
+     * Status strings for display methods (simplified status)
+     * For pending statuses, stage is derived from Job.status
      *
      * @var array
      * */
     protected $status_strings = [
+        // Pending statuses (stage derived from Job)
+        'new' => 'New',
+        'republish' => 'Republish',
+        'unpublish' => 'Unpublish',
+        // Released statuses
+        'published' => 'Published',
+        'unpublished' => 'Unpublished',
+        // Legacy compound statuses (backwards compatibility)
         'draft_new' => 'Draft (New)',
         'submitted_new' => 'Submitted (New)',
-        'published' => 'Published',
         'draft_republish' => 'Draft (Republish)',
         'submitted_republish' => 'Submitted (Republish)',
         'draft_unpublish' => 'Draft (Unpublish)',
-        'submitted_unpublish' => 'Submitted (Unpublish)',
-        'unpublished' => 'Unpublished'
+        'submitted_unpublish' => 'Submitted (Unpublish)'
+    ];
+
+    /**
+     * Pending status values (action-based)
+     */
+    protected static $pendingStatuses = [
+        self::STATUS_NEW,
+        self::STATUS_REPUBLISH,
+        self::STATUS_UNPUBLISH,
+    ];
+
+    /**
+     * Released status values (visibility-based)
+     */
+    protected static $releasedStatuses = [
+        self::STATUS_PUBLISHED,
+        self::STATUS_UNPUBLISHED,
     ];
 
     public const TYPE_NONE = 0;
@@ -485,19 +536,55 @@ class Submission extends Model
 
 
     /**
-     * Get a display formatted form of job status
+     * Get a display formatted form of submission status
+     * For pending submissions, includes stage derived from Job.status
      *
-     * @@param
-     * @return
+     * @return string
      */
     public function getDisplayStatusAttribute()
     {
-       return $this->status_strings[$this->status] ?? 'Unknown';
+        // For pending statuses, prefix with stage from Job
+        if ($this->isPending() && $this->job) {
+            $stage = $this->job->status === 'submitted' ? 'Submitted' : 'Draft';
+            $statusLabel = $this->status_strings[$this->status] ?? ucfirst($this->status);
+            return "{$stage} ({$statusLabel})";
+        }
+
+        return $this->status_strings[$this->status] ?? 'Unknown';
     }
 
+    /**
+     * Check if this submission is in a pending state (not yet released)
+     *
+     * @return bool
+     */
+    public function isPending(): bool
+    {
+        return in_array($this->status, self::$pendingStatuses);
+    }
 
     /**
-     * Get a display formatted form of submission status
+     * Check if this submission is in a released state
+     *
+     * @return bool
+     */
+    public function isReleased(): bool
+    {
+        return in_array($this->status, self::$releasedStatuses);
+    }
+
+    /**
+     * Get the stage of this submission (derived from Job.status)
+     *
+     * @return string|null
+     */
+    public function getStageAttribute(): ?string
+    {
+        return $this->job?->status;
+    }
+
+    /**
+     * Get a display formatted form of submission status for JSON
      *
      * @@param
      * @return
@@ -1031,9 +1118,10 @@ class Submission extends Model
     /**
      * Validate that submission state is consistent with job state
      * Rules:
-     * - draft_xxx submissions ONLY in draft jobs
-     * - submitted_xxx submissions ONLY in submitted jobs
-     * - published/unpublished submissions ONLY in processed jobs
+     * - Pending submissions (new/republish/unpublish) must be in active (draft/submitted) jobs
+     * - Released submissions (published/unpublished) must be in released jobs
+     *
+     * Note: Stage (draft vs submitted) is derived from Job.status, not stored in submission.
      *
      * @return bool
      * @throws \Exception if inconsistent
@@ -1053,35 +1141,17 @@ class Submission extends Model
         $submissionState = $this->status;
         $jobState = $this->job->status;
 
-        // Draft submissions must be in draft jobs
-        if (in_array($submissionState, [
-            self::STATUS_DRAFT_NEW,
-            self::STATUS_DRAFT_REPUBLISH,
-            self::STATUS_DRAFT_UNPUBLISH
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_DRAFT) {
-                throw new \Exception("Draft submission {$this->sid} (state: {$submissionState}) cannot be in non-draft job {$this->job->slug} (state: {$jobState})");
+        // Pending submissions must be in active (draft or submitted) jobs
+        if ($this->isPending()) {
+            if (!in_array($jobState, [\App\Models\Job::STATUS_DRAFT, \App\Models\Job::STATUS_SUBMITTED])) {
+                throw new \Exception("Pending submission {$this->sid} (state: {$submissionState}) cannot be in released job {$this->job->slug} (state: {$jobState})");
             }
         }
 
-        // Submitted submissions must be in submitted jobs
-        if (in_array($submissionState, [
-            self::STATUS_SUBMITTED_NEW,
-            self::STATUS_SUBMITTED_REPUBLISH,
-            self::STATUS_SUBMITTED_UNPUBLISH
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_SUBMITTED) {
-                throw new \Exception("Submitted submission {$this->sid} (state: {$submissionState}) cannot be in non-submitted job {$this->job->slug} (state: {$jobState})");
-            }
-        }
-
-        // Published/unpublished submissions must be in processed jobs
-        if (in_array($submissionState, [
-            self::STATUS_PUBLISHED,
-            self::STATUS_UNPUBLISHED
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_PROCESSED) {
-                throw new \Exception("Published/unpublished submission {$this->sid} (state: {$submissionState}) cannot be in non-processed job {$this->job->slug} (state: {$jobState})");
+        // Released submissions (published/unpublished) must be in released jobs
+        if ($this->isReleased()) {
+            if ($jobState !== \App\Models\Job::STATUS_RELEASED) {
+                throw new \Exception("Released submission {$this->sid} (state: {$submissionState}) cannot be in non-released job {$this->job->slug} (state: {$jobState})");
             }
         }
 
