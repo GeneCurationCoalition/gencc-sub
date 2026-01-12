@@ -1,0 +1,112 @@
+name: Deploy to Staging
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 0.1.0). Leave empty to use branch name.'
+        required: false
+        type: string
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      version: ${{ steps.build.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push Docker image
+        id: build
+        run: |
+          # Determine version: manual input > release tag > branch name
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"  # Strip 'v' prefix: v1.2.3 -> 1.2.3
+          else
+            VERSION="${GITHUB_REF_NAME}"  # Use branch name
+          fi
+          IMAGE="ghcr.io/${{ github.repository }}"
+
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "${IMAGE}:${VERSION}" \
+            -t "${IMAGE}:latest" \
+            .
+
+          docker push "${IMAGE}:${VERSION}"
+          docker push "${IMAGE}:latest"
+
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # environment: staging
+
+    steps:
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Add host key
+        run: ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to staging
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          VERSION: ${{ needs.build-and-push.outputs.version }}
+        run: |
+          ssh ${STAGING_USER}@${STAGING_HOST} << EOF
+            set -e
+
+            # Pull new image (ghcr.io is public, no auth needed)
+            podman pull ${IMAGE}:${VERSION}
+
+            # Stop and remove old container (ignore errors if not running)
+            podman stop gencc-sub 2>/dev/null || true
+            podman rm gencc-sub 2>/dev/null || true
+
+            # Run new container
+            # - GCP_SECRET_NAME: triggers .env fetch from Google Secret Manager at startup
+            # - Logs volume: persist logs outside container for debugging
+            # - Network: allow_host_loopback enables connection to MySQL on host
+            podman run -d \
+              --name gencc-sub \
+              --restart=always \
+              --network=slirp4netns:allow_host_loopback=true \
+              -p 127.0.0.1:8080:80 \
+              -e GCP_SECRET_NAME=gencc-sub-stage-env \
+              -v /var/www/gencc-sub/storage/logs:/var/www/html/storage/logs \
+              ${IMAGE}:${VERSION}
+
+            # Wait for container to be ready (includes .env fetch)
+            sleep 10
+
+            # Run initialization commands
+            podman exec gencc-sub php artisan migrate --force
+            podman exec gencc-sub php artisan gencc:makeproddb
+            podman exec gencc-sub php artisan config:cache
+            podman exec gencc-sub php artisan route:cache
+            podman exec gencc-sub php artisan view:cache
+
+            # Verify container is running
+            podman ps | grep gencc-sub
+          EOF
