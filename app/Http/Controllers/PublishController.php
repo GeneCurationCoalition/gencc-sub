@@ -160,10 +160,11 @@ class PublishController extends Controller
 
             // Determine action_type for gencc-search API based on submission state
             // Both new and republish use "publish", unpublish uses "unpublish"
+            // With simplified status model: new/republish/unpublish are pending statuses
             $action_type = match($submission->status) {
-                Submission::STATUS_SUBMITTED_NEW => 'publish',
-                Submission::STATUS_SUBMITTED_REPUBLISH => 'publish',
-                Submission::STATUS_SUBMITTED_UNPUBLISH => 'unpublish',
+                Submission::STATUS_NEW => 'publish',
+                Submission::STATUS_REPUBLISH => 'publish',
+                Submission::STATUS_UNPUBLISH => 'unpublish',
                 default => 'publish' // fallback for legacy
             };
 
@@ -174,18 +175,19 @@ class PublishController extends Controller
 
             if (isset($response['status_code']) && $response['status_code'] == 200) {
                 // Determine target state and action based on current state
+                // new/republish -> published, unpublish -> unpublished
                 $targetState = match($submission->status) {
-                    Submission::STATUS_SUBMITTED_NEW => Submission::STATUS_PUBLISHED,
-                    Submission::STATUS_SUBMITTED_REPUBLISH => Submission::STATUS_PUBLISHED,
-                    Submission::STATUS_SUBMITTED_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
+                    Submission::STATUS_NEW => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_REPUBLISH => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
                     default => null
                 };
 
                 // Determine action type for tracking
                 $action = match($submission->status) {
-                    Submission::STATUS_SUBMITTED_NEW => 'published',
-                    Submission::STATUS_SUBMITTED_REPUBLISH => 'republished',
-                    Submission::STATUS_SUBMITTED_UNPUBLISH => 'unpublished',
+                    Submission::STATUS_NEW => 'published',
+                    Submission::STATUS_REPUBLISH => 'republished',
+                    Submission::STATUS_UNPUBLISH => 'unpublished',
                     default => 'published' // fallback for legacy
                 };
 
@@ -456,6 +458,47 @@ class PublishController extends Controller
         return $response->json();
     }
 
+    /**
+     * Trigger update_counts on gencc-search to refresh classification counts
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return array
+     */
+    public function updateCounts(Request $request)
+    {
+        $server = env('PUBLISH_URL', false);
+
+        $token = env('GENCC_PUBLISH_TOKEN');
+
+        $data = [
+            'token' => $token,
+            'timestamp' => Carbon::now()
+        ];
+
+        $template = view('json.Publish.update_counts')->with($data);
+
+        try {
+            $response = Http::withHeaders([
+                'GEN-API-KEY' => $token
+            ])->withBody(
+                $template->render(), 'application/json; charset=UTF-8'
+            )->post($server);
+
+            if ($response->successful()) {
+                return $response->json();
+            } else {
+                \Log::error('Update counts failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+                return ['status_code' => $response->status(), 'error' => 'HTTP error'];
+            }
+        } catch (\Exception $e) {
+            \Log::error('Update counts exception', ['error' => $e->getMessage()]);
+            return ['status_code' => 500, 'error' => $e->getMessage()];
+        }
+    }
+
     private function _publish_submission($submission, $template, $header_data, $token, $server) {
 
         $template = view($template)->with($header_data)
@@ -535,16 +578,9 @@ class PublishController extends Controller
 
             $submission->submission_errors = (object)$errors;
 
-            // Transition submission back to draft state
-            // Determine original intent to preserve proper draft state
-            $targetDraftState = match($submission->status) {
-                Submission::STATUS_SUBMITTED_NEW => Submission::STATUS_DRAFT_NEW,
-                Submission::STATUS_SUBMITTED_REPUBLISH => Submission::STATUS_DRAFT_REPUBLISH,
-                Submission::STATUS_SUBMITTED_UNPUBLISH => Submission::STATUS_DRAFT_UNPUBLISH,
-                default => Submission::STATUS_DRAFT_NEW
-            };
-
-            SubmissionStateMachine::transition($submission, $targetDraftState);
+            // With simplified status model, status does NOT change when moving back to draft job
+            // Stage (draft/submitted) is derived from Job.status
+            // Just move the submission to the draft job - no status transition needed
 
             // Move to draft job
             $submission->job_id = $draftJob->id;

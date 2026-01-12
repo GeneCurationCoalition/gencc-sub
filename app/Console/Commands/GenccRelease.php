@@ -15,21 +15,21 @@ use App\Services\SubmissionStateMachine;
 use App\Http\Controllers\PublishController as PublishController;
 use App\Events\PublishStatusUpdate;
 
-class RunPublish extends Command
+class GenccRelease extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'run:publish {arg=process}';
+    protected $signature = 'gencc:release {arg=process}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Command description';
+    protected $description = 'Release pending submissions to gencc-search';
 
     /**
      * Execute the console command.
@@ -47,6 +47,7 @@ class RunPublish extends Command
             case 'process':
                 $this->process_actions();
                 $this->process_jobs();
+                $this->triggerUpdateCounts();
                 break;
             case 'sgc_ids':
                 $this->process_sgc_ids();
@@ -188,13 +189,14 @@ class RunPublish extends Command
         $this->info("Closing session with gencc-search...");
         $response = $gencc_search->end(new Request);
 
-        if (isset($response['status_code'])) {
-            $this->info("Session closed with status: {$response['status_code']}");
-            return $response['status_code'];
+        if (!isset($response['status_code'])) {
+            $this->error("End failed: No status_code in response");
+            return 500;
         }
 
-        $this->error("End failed: No status_code in response");
-        return 500;
+        $this->info("Session closed with status: {$response['status_code']}");
+
+        return $response['status_code'];
     }
 
 
@@ -277,5 +279,36 @@ class RunPublish extends Command
         $response = $gencc_search->end(new Request);
 
         return ($response['status_code']);
+    }
+
+    /**
+     * Trigger update_counts on gencc-search to refresh classification counts
+     * Called after all publishing operations are complete
+     */
+    protected function triggerUpdateCounts()
+    {
+        $this->info("Triggering update counts on gencc-search...");
+
+        $gencc_search = new PublishController();
+
+        // Initialize session
+        $initResponse = $gencc_search->init(new Request);
+
+        if ($initResponse === null || ($initResponse['status_code'] ?? null) != 200) {
+            $this->warn("Update counts: Failed to initialize session");
+            return;
+        }
+
+        // Trigger update counts
+        $countResponse = $gencc_search->updateCounts(new Request);
+
+        if (isset($countResponse['status_code']) && $countResponse['status_code'] == 200) {
+            $this->info("Update counts completed successfully");
+        } else {
+            $this->warn("Update counts failed: " . ($countResponse['error'] ?? 'Unknown error'));
+        }
+
+        // Close session
+        $gencc_search->end(new Request);
     }
 }
