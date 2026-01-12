@@ -520,9 +520,10 @@ class DocumentController extends Controller
         set_time_limit(3600); // 1 hour for large files
         ini_set('max_execution_time', 3600);
 
-        // Wall-clock timeout for testing (measures real time, not just CPU time)
+        // Wall-clock timeout (measures real time, not just CPU time)
+        // Configurable via UPLOAD_TIMEOUT_SECONDS env variable, defaults to 10 minutes
         $startTime = microtime(true);
-        $wallClockTimeoutSeconds = 300; // 5 minutes - should be enough with caching optimizations
+        $wallClockTimeoutSeconds = (int) env('UPLOAD_TIMEOUT_SECONDS', 600);
 
         // Variables for shutdown handler
         $processedRows = 0;
