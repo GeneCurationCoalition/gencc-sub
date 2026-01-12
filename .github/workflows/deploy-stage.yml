@@ -99,7 +99,7 @@ jobs:
             podman rm -f gencc-sub 2>/dev/null || true
 
             # Run new container
-            # - GCP_SECRET_NAME: triggers .env fetch from Google Secret Manager at startup
+            # - .env volume: mount .env from host (must exist at /var/www/gencc-sub/.env)
             # - Logs volume: persist logs outside container for debugging
             # - Network: allow_host_loopback enables connection to MySQL on host
             podman run -d \
@@ -107,12 +107,12 @@ jobs:
               --restart=always \
               --network=slirp4netns:allow_host_loopback=true \
               -p 127.0.0.1:8080:80 \
-              -e GCP_SECRET_NAME=gencc-sub-stage-env \
+              -v /var/www/gencc-sub/.env:/var/www/html/.env:ro \
               -v /var/www/gencc-sub/storage/logs:/var/www/html/storage/logs \
               ${IMAGE}:${VERSION}
 
-            # Wait for container to be ready (includes .env fetch)
-            sleep 10
+            # Wait for container to be ready
+            sleep 5
 
             # Run initialization commands
             podman exec gencc-sub php artisan migrate --force
