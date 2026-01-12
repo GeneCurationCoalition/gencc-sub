@@ -100,6 +100,7 @@ jobs:
 
             # Run new container
             # - .env volume: mount .env from host (must exist at /var/www/gencc-sub/.env)
+            # - DB_HOST override: use 10.0.2.2 to connect to MySQL on host via slirp4netns
             # - Logs volume: persist logs outside container for debugging
             # - Network: allow_host_loopback enables connection to MySQL on host
             podman run -d \
@@ -107,6 +108,7 @@ jobs:
               --restart=always \
               --network=slirp4netns:allow_host_loopback=true \
               -p 127.0.0.1:8080:80 \
+              -e DB_HOST=10.0.2.2 \
               -v /var/www/gencc-sub/.env:/var/www/html/.env:ro \
               -v /var/www/gencc-sub/storage/logs:/var/www/html/storage/logs \
               ${IMAGE}:${VERSION}
