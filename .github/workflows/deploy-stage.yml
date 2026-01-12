@@ -83,9 +83,8 @@ jobs:
             # Pull new image (ghcr.io is public, no auth needed)
             podman pull ${IMAGE}:${VERSION}
 
-            # Stop and remove old container (ignore errors if not running)
-            podman stop gencc-sub 2>/dev/null || true
-            podman rm gencc-sub 2>/dev/null || true
+            # Stop and remove old container (force remove, ignore errors if not running)
+            podman rm -f gencc-sub 2>/dev/null || true
 
             # Run new container
             # - GCP_SECRET_NAME: triggers .env fetch from Google Secret Manager at startup
