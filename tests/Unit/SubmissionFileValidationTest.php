@@ -581,7 +581,7 @@ class SubmissionFileValidationTest extends TestCase
             'gene_history' => json_encode([]),
         ]);
 
-        // Create a published submission with the different gene
+        // Create a published submission with the different gene (must be is_live=true)
         $submission = Submission::create([
             'sid' => 'SGC-100001',
             'gene_id' => $differentGene->id,
@@ -593,6 +593,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
+            'is_live' => true,
             // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),
@@ -622,7 +623,7 @@ class SubmissionFileValidationTest extends TestCase
      */
     public function test_passes_when_republish_keeps_same_gene(): void
     {
-        // Create a published submission with HGNC:5 gene
+        // Create a published submission with HGNC:5 gene (must be is_live=true)
         $submission = Submission::create([
             'sid' => 'SGC-100002',
             'gene_id' => 1, // The HGNC:5 gene created in seedTestData
@@ -634,6 +635,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
+            'is_live' => true,
             // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),

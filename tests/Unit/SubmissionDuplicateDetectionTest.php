@@ -98,13 +98,14 @@ class SubmissionDuplicateDetectionTest extends TestCase
      */
     public function test_blocking_duplicate_for_published_submission(): void
     {
-        // Create existing published submission
+        // Create existing published submission (must be is_live=true to be detected)
         $existingSubmission = Submission::factory()->create([
             'submitter_id' => $this->submitter->id,
             'gene_id' => $this->gene->id,
             'original_disease_id' => $this->disease->id,
             'inheritance_id' => $this->inheritance->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         $result = SubmissionDuplicateDetection::checkForDuplicates(
@@ -200,6 +201,7 @@ class SubmissionDuplicateDetectionTest extends TestCase
             'original_disease_id' => $this->disease->id,
             'inheritance_id' => $this->inheritance->id,
             'status' => Submission::STATUS_UNPUBLISHED,
+            'is_live' => true,
         ]);
 
         $result = SubmissionDuplicateDetection::checkForDuplicates(
@@ -391,13 +393,14 @@ class SubmissionDuplicateDetectionTest extends TestCase
      */
     public function test_batch_existing_duplicates(): void
     {
-        // Create existing published submission
+        // Create existing published submission (must be is_live=true to be detected)
         Submission::factory()->create([
             'submitter_id' => $this->submitter->id,
             'gene_id' => $this->gene->id,
             'original_disease_id' => $this->disease->id,
             'inheritance_id' => $this->inheritance->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         $submissions = [
@@ -434,13 +437,14 @@ class SubmissionDuplicateDetectionTest extends TestCase
      */
     public function test_batch_with_self_exclusion(): void
     {
-        // Create existing submission (for republish scenario)
+        // Create existing submission (for republish scenario - must be is_live=true)
         $existingSubmission = Submission::factory()->create([
             'submitter_id' => $this->submitter->id,
             'gene_id' => $this->gene->id,
             'original_disease_id' => $this->disease->id,
             'inheritance_id' => $this->inheritance->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         $submissions = [
@@ -559,5 +563,102 @@ class SubmissionDuplicateDetectionTest extends TestCase
 
         $this->assertContains(Submission::STATUS_UNPUBLISHED, $warningStatuses);
         $this->assertCount(1, $warningStatuses);
+    }
+
+    /**
+     * Test that archived submissions (is_live=false) are NOT detected as duplicates.
+     * This is the key fix - historical versions should not block new submissions.
+     */
+    public function test_archived_submission_not_detected_as_duplicate(): void
+    {
+        // Create an archived published submission (is_live=false)
+        // This represents a historical version that has been superseded
+        Submission::factory()->create([
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $this->gene->id,
+            'original_disease_id' => $this->disease->id,
+            'inheritance_id' => $this->inheritance->id,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false,  // Archived - should NOT be detected
+        ]);
+
+        $result = SubmissionDuplicateDetection::checkForDuplicates(
+            $this->submitter->id,
+            $this->gene->id,
+            $this->disease->id,
+            $this->inheritance->id
+        );
+
+        // Should NOT find any duplicates since the archived submission is not live
+        $this->assertFalse($result['has_blocking_duplicate']);
+        $this->assertFalse($result['has_unpublished_duplicate']);
+        $this->assertTrue($result['duplicates']->isEmpty());
+    }
+
+    /**
+     * Test that archived unpublished submissions are NOT detected as warnings.
+     */
+    public function test_archived_unpublished_not_detected(): void
+    {
+        // Create an archived unpublished submission (is_live=false)
+        Submission::factory()->create([
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $this->gene->id,
+            'original_disease_id' => $this->disease->id,
+            'inheritance_id' => $this->inheritance->id,
+            'status' => Submission::STATUS_UNPUBLISHED,
+            'is_live' => false,  // Archived - should NOT be detected
+        ]);
+
+        $result = SubmissionDuplicateDetection::checkForDuplicates(
+            $this->submitter->id,
+            $this->gene->id,
+            $this->disease->id,
+            $this->inheritance->id
+        );
+
+        // Should NOT find any warnings since the archived submission is not live
+        $this->assertFalse($result['has_blocking_duplicate']);
+        $this->assertFalse($result['has_unpublished_duplicate']);
+    }
+
+    /**
+     * Test that only live submission is detected when both archived and live exist.
+     */
+    public function test_only_live_submission_detected_not_archived(): void
+    {
+        // Create an archived (v1) submission
+        Submission::factory()->create([
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $this->gene->id,
+            'original_disease_id' => $this->disease->id,
+            'inheritance_id' => $this->inheritance->id,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false,
+            'version_number' => 1,
+        ]);
+
+        // Create the current live (v2) submission
+        $liveSubmission = Submission::factory()->create([
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $this->gene->id,
+            'original_disease_id' => $this->disease->id,
+            'inheritance_id' => $this->inheritance->id,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
+            'version_number' => 2,
+        ]);
+
+        $result = SubmissionDuplicateDetection::checkForDuplicates(
+            $this->submitter->id,
+            $this->gene->id,
+            $this->disease->id,
+            $this->inheritance->id
+        );
+
+        // Should find exactly one duplicate (the live one)
+        $this->assertTrue($result['has_blocking_duplicate']);
+        $this->assertEquals(1, $result['duplicates']->count());
+        $this->assertEquals($liveSubmission->sid, $result['duplicates']->first()->sid);
     }
 }

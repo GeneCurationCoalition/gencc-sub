@@ -1237,9 +1237,24 @@ class SubmissionFileValidation
 
         // Batch query to fetch all submissions with their states and gene relationships
         // Use submission->submitter_id to support admin users acting as other submitters
+        // For SIDs with multiple versions, only check against the live version (is_live=true)
+        // or pending versions (draft/submitted statuses)
         $submissions = \App\Models\Submission::with('gene')
             ->whereIn('sid', array_keys($sgc_ids_to_check))
             ->where('submitter_id', $submitter_id)
+            ->where(function ($q) {
+                // Pending submissions (any draft/submitted status)
+                $q->whereIn('status', [
+                    \App\Models\Submission::STATUS_DRAFT_NEW,
+                    \App\Models\Submission::STATUS_DRAFT_REPUBLISH,
+                    \App\Models\Submission::STATUS_DRAFT_UNPUBLISH,
+                    \App\Models\Submission::STATUS_SUBMITTED_NEW,
+                    \App\Models\Submission::STATUS_SUBMITTED_REPUBLISH,
+                    \App\Models\Submission::STATUS_SUBMITTED_UNPUBLISH,
+                ])
+                // Or live released submissions
+                ->orWhere('is_live', true);
+            })
             ->get()
             ->keyBy('sid');
 
@@ -1415,10 +1430,11 @@ class SubmissionFileValidation
                 continue;
             }
 
-            // For republish, get the existing submission ID to exclude from check
+            // For republish, get the existing live submission ID to exclude from check
+            // Must filter by is_live=true to get the correct version when multiple versions exist
             $exclude_submission_id = null;
             if ($action === 'R' && !empty($sgc_id)) {
-                $existing = Submission::sid($sgc_id)->first();
+                $existing = Submission::sid($sgc_id)->where('is_live', true)->first();
                 $exclude_submission_id = $existing?->id;
             }
 

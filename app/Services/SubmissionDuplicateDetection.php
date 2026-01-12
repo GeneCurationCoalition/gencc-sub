@@ -46,14 +46,21 @@ class SubmissionDuplicateDetection
         }
 
         // Find all submissions with matching key fields for this submitter
+        // For released statuses (published/unpublished), only check live submissions (is_live=true)
+        // For pending statuses (draft/submitted), check all regardless of is_live
         $query = Submission::where('submitter_id', $submitterId)
             ->where('gene_id', $geneId)
             ->where('original_disease_id', $originalDiseaseId)
             ->where('inheritance_id', $inheritanceId)
-            ->whereIn('status', array_merge(
-                self::getBlockingStatuses(),
-                self::getWarningStatuses()
-            ));
+            ->where(function ($q) {
+                // Pending statuses - check all (no is_live filter)
+                $q->whereIn('status', self::getPendingStatuses())
+                    // Released statuses - only check live submissions
+                    ->orWhere(function ($subQ) {
+                        $subQ->whereIn('status', self::getReleasedStatuses())
+                            ->where('is_live', true);
+                    });
+            });
 
         // Exclude self when checking for updates
         if ($excludeSubmissionId !== null) {
@@ -188,6 +195,36 @@ class SubmissionDuplicateDetection
     public static function getWarningStatuses(): array
     {
         return [
+            Submission::STATUS_UNPUBLISHED,
+        ];
+    }
+
+    /**
+     * Get pending statuses (draft/submitted) - these always block regardless of is_live.
+     *
+     * @return array
+     */
+    public static function getPendingStatuses(): array
+    {
+        return [
+            Submission::STATUS_DRAFT_NEW,
+            Submission::STATUS_DRAFT_REPUBLISH,
+            Submission::STATUS_DRAFT_UNPUBLISH,
+            Submission::STATUS_SUBMITTED_NEW,
+            Submission::STATUS_SUBMITTED_REPUBLISH,
+            Submission::STATUS_SUBMITTED_UNPUBLISH,
+        ];
+    }
+
+    /**
+     * Get released statuses (published/unpublished) - these only block/warn if is_live=true.
+     *
+     * @return array
+     */
+    public static function getReleasedStatuses(): array
+    {
+        return [
+            Submission::STATUS_PUBLISHED,
             Submission::STATUS_UNPUBLISHED,
         ];
     }
@@ -340,11 +377,18 @@ class SubmissionDuplicateDetection
         }
 
         // Build query for all combinations
+        // For released statuses (published/unpublished), only check live submissions (is_live=true)
+        // For pending statuses (draft/submitted), check all regardless of is_live
         $query = Submission::where('submitter_id', $submitterId)
-            ->whereIn('status', array_merge(
-                self::getBlockingStatuses(),
-                self::getWarningStatuses()
-            ))
+            ->where(function ($q) {
+                // Pending statuses - check all (no is_live filter)
+                $q->whereIn('status', self::getPendingStatuses())
+                    // Released statuses - only check live submissions
+                    ->orWhere(function ($subQ) {
+                        $subQ->whereIn('status', self::getReleasedStatuses())
+                            ->where('is_live', true);
+                    });
+            })
             ->where(function ($q) use ($combinations) {
                 foreach ($combinations as $combo) {
                     $q->orWhere(function ($subQ) use ($combo) {
