@@ -13,36 +13,43 @@
     const dialogTitle = defineModel('dialogTitle');
     const dialogLabel = defineModel('dialogLabel');
 
-    // Check if this is a non-most-recent (historical) version
-    const isNotMostRecentVersion = computed(() => {
-        return props.submission?.is_most_recent === false &&
-               (props.submission?.status === 'published' || props.submission?.status === 'unpublished');
+    // Check if this is an archived (historical) version
+    // Archived = released but superseded by a newer version (is_live=false)
+    const isArchived = computed(() => {
+        return props.submission?.is_archived === true;
     });
 
-    // Compute header color based on submission status
-    // Non-most-recent historical versions get gray header
+    // Check if submission is in a released state
+    const isReleased = computed(() => {
+        return props.submission?.status === 'published' || props.submission?.status === 'unpublished';
+    });
+
+    // Compute header color based on job status (for pending) or released state
+    // Archived historical versions get gray header
     const headerClass = computed(() => {
-        // Non-most-recent (historical) versions get gray header
-        if (isNotMostRecentVersion.value) {
+        // Archived (historical) versions get gray header
+        if (isArchived.value) {
             return 'bg-gray-500';
         }
 
-        if (!props.submission?.status) {
-            return 'bg-sky-800'; // Default for legacy
+        // Get job status to determine theme for pending submissions
+        const jobStatus = props.submission?.job?.status;
+
+        // Released submissions (published/unpublished) get green theme
+        if (isReleased.value) {
+            return 'bg-green-700';
         }
 
-        const statusColors = {
-            'draft_new': 'bg-amber-700',          // Amber for draft (matches Job header)
-            'submitted_new': 'bg-blue-700',        // Blue for submitted
-            'published': 'bg-green-700',           // Green for published/processed
-            'draft_republish': 'bg-amber-700',    // Amber for draft (matches Job header)
-            'submitted_republish': 'bg-blue-700',  // Blue for submitted
-            'draft_unpublish': 'bg-amber-700',    // Amber for draft (matches Job header)
-            'submitted_unpublish': 'bg-blue-700',  // Blue for submitted (matches job state)
-            'unpublished': 'bg-green-700'          // Green for processed
-        };
+        // Pending submissions - color based on job status
+        if (jobStatus === 'draft') {
+            return 'bg-amber-700';  // Amber/yellow for draft job
+        } else if (jobStatus === 'submitted') {
+            return 'bg-blue-700';   // Blue for submitted job
+        } else if (jobStatus === 'released' || jobStatus === 'processed') {
+            return 'bg-green-700';  // Green for released job
+        }
 
-        return statusColors[props.submission.status] || 'bg-sky-800';
+        return 'bg-sky-800'; // Default fallback
     });
 </script>
 
@@ -56,8 +63,8 @@
                 <div class="text-left col-span-6 pl-2">
                     <p class="font-black text-2xl inline-block align-bottom leading-5">
                         {{ submission.display_id || submission.sid }}
-                        <span v-if="isNotMostRecentVersion" class="text-sm font-normal ml-2 bg-gray-700 px-2 py-1 rounded align-middle">
-                            <i class="pi pi-history mr-1"></i>Version {{ submission.version_number || 1 }} (Historical)
+                        <span v-if="isArchived" class="text-sm font-normal ml-2 bg-gray-700 px-2 py-1 rounded align-middle">
+                            <i class="pi pi-history mr-1"></i>Version {{ submission.version_number || 1 }} (Archived)
                         </span>
                         <br>
                         <Link :href="'/jobs/' + submission.job.ident" class="text-sm underline font-normal">{{ submission.job.slug }}</Link>

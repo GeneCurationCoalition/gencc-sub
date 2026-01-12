@@ -41,15 +41,17 @@ class DashboardController extends Controller
      */
     private function countSubmissionsByStatus(Job $job, bool $includeErrors = false): array
     {
+        // With simplified status model, stage (draft/submitted) is derived from Job.status
+        // Use the new simplified status constants directly
         $counts = [
             'new' => $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+                ->where('status', Submission::STATUS_NEW)
                 ->count(),
             'republish' => $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->where('status', Submission::STATUS_REPUBLISH)
                 ->count(),
             'unpublish' => $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+                ->where('status', Submission::STATUS_UNPUBLISH)
                 ->count(),
         ];
 
@@ -58,15 +60,15 @@ class DashboardController extends Controller
                 ->whereNotNull('submission_errors')
                 ->count();
             $counts['new_errors'] = $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+                ->where('status', Submission::STATUS_NEW)
                 ->whereNotNull('submission_errors')
                 ->count();
             $counts['republish_errors'] = $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->where('status', Submission::STATUS_REPUBLISH)
                 ->whereNotNull('submission_errors')
                 ->count();
             $counts['unpublish_errors'] = $job->submissions()
-                ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+                ->where('status', Submission::STATUS_UNPUBLISH)
                 ->whereNotNull('submission_errors')
                 ->count();
         }
@@ -133,15 +135,13 @@ class DashboardController extends Controller
 
             $submission_error_count += $item->submissions->filter(fn($s) => $s->has_errors)->count();
 
-            // Count submissions in draft/submitted states (not published, not unpublished)
+            // Count submissions in pending states (not released)
+            // With simplified status model, pending statuses are: new, republish, unpublish
             $submission_processing_count += $item->submissions->filter(fn($s) =>
                 in_array($s->status, [
-                    Submission::STATUS_DRAFT_NEW,
-                    Submission::STATUS_DRAFT_REPUBLISH,
-                    Submission::STATUS_DRAFT_UNPUBLISH,
-                    Submission::STATUS_SUBMITTED_NEW,
-                    Submission::STATUS_SUBMITTED_REPUBLISH,
-                    Submission::STATUS_SUBMITTED_UNPUBLISH,
+                    Submission::STATUS_NEW,
+                    Submission::STATUS_REPUBLISH,
+                    Submission::STATUS_UNPUBLISH,
                 ])
             )->count();
 
@@ -336,19 +336,20 @@ class DashboardController extends Controller
             $awaitingQuery->where('submitter_id', $submitter_id);
         }
 
-        // First version awaiting: draft_new or submitted_new
+        // First version awaiting: status = 'new'
+        // With simplified status model, pending statuses are: new, republish, unpublish
         $awaiting_first_version_count = (clone $awaitingQuery)
-            ->whereIn('status', [Submission::STATUS_DRAFT_NEW, Submission::STATUS_SUBMITTED_NEW])
+            ->where('status', Submission::STATUS_NEW)
             ->count();
 
-        // Republish awaiting: draft_republish or submitted_republish
+        // Republish awaiting: status = 'republish'
         $awaiting_republish_count = (clone $awaitingQuery)
-            ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+            ->where('status', Submission::STATUS_REPUBLISH)
             ->count();
 
-        // Unpublish awaiting: draft_unpublish or submitted_unpublish
+        // Unpublish awaiting: status = 'unpublish'
         $awaiting_unpublish_count = (clone $awaitingQuery)
-            ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+            ->where('status', Submission::STATUS_UNPUBLISH)
             ->count();
 
         $awaiting_total = $awaiting_first_version_count + $awaiting_republish_count + $awaiting_unpublish_count;
@@ -437,50 +438,108 @@ class DashboardController extends Controller
         }
         $total_unique_sids = (clone $versioningQuery)->distinct('sid')->count('sid');
 
-        // Calculate classification distribution from processed jobs
-        // This counts classifications from the last published version of each SGC ID
-        // NOT from current submission state (which may be in draft/republish)
-        $classificationOrder = [2, 3, 4, 5, 6, 7, 8, 9, 10]; // Definitive through NKDR
+        // Calculate classification distribution from live submissions
+        // Live submissions are those with is_live=true and status='published'
+        // Classification IDs: 1=Definitive, 2=Strong, 3=Moderate, 4=Supportive,
+        // 5=Limited, 6=Disputed, 7=Refuted, 8=Animal Model, 9=NKDR
+        $classificationOrder = [1, 2, 3, 4, 5, 6, 7, 8, 9]; // Definitive through NKDR
         $classifications = array_fill(0, count($classificationOrder), 0);
 
-        // Track the latest classification for each SGC ID across all processed jobs
-        $latestClassifications = [];
+        // Query live submissions directly
+        $liveClassificationQuery = Submission::query()
+            ->where('is_live', true)
+            ->where('status', Submission::STATUS_PUBLISHED)
+            ->whereNotNull('classification_id');
 
-        // Sort jobs by released_at to process chronologically (oldest to newest)
-        $sortedProcessedJobs = $processedJobs->sortBy(function($job) {
-            return $job->released_at ? $job->released_at->timestamp : $job->id;
-        });
+        if ($submitter_id !== null) {
+            $liveClassificationQuery->where('submitter_id', $submitter_id);
+        }
 
-        foreach ($sortedProcessedJobs as $job) {
-            if ($job->processed_submission_ids && is_array($job->processed_submission_ids)) {
-                foreach ($job->processed_submission_ids as $entry) {
-                    $sid = $entry['sid'] ?? null;
-                    $action = $entry['action'] ?? null;
-                    $classification_id = $entry['classification_id'] ?? null;
+        // Group by classification_id and count
+        $liveClassificationCounts = $liveClassificationQuery
+            ->selectRaw('classification_id, COUNT(*) as count')
+            ->groupBy('classification_id')
+            ->pluck('count', 'classification_id');
 
-                    if (!$sid) continue;
+        // Map counts to the ordered classification array
+        foreach ($classificationOrder as $index => $classId) {
+            $classifications[$index] = $liveClassificationCounts->get($classId, 0);
+        }
 
-                    // Track or update classification for this SGC ID based on action
-                    if ($action === 'published' || $action === 'republished') {
-                        // Update/store the classification for this SGC ID
-                        if ($classification_id) {
-                            $latestClassifications[$sid] = $classification_id;
-                        }
-                    } elseif ($action === 'unpublished') {
-                        // Remove this SGC ID from published classifications
-                        unset($latestClassifications[$sid]);
-                    }
+        // Calculate pending classification changes (what counts would be after pending jobs process)
+        // Add: 'new' submissions (will be published)
+        // Add: 'republish' of unpublished submissions (will be re-published, going from not-live to live)
+        // Subtract: 'unpublish' submissions (will remove from live)
+        // Note: 'republish' of published submissions doesn't change count, just updates existing
+        $pendingClassifications = $classifications; // Start with current live counts
+
+        // Query pending 'new' submissions (will be added)
+        $pendingNewQuery = Submission::query()
+            ->where('status', Submission::STATUS_NEW)
+            ->whereNotNull('classification_id')
+            ->whereNull('submission_errors'); // Only error-free submissions
+
+        if ($submitter_id !== null) {
+            $pendingNewQuery->where('submitter_id', $submitter_id);
+        }
+
+        $pendingNewCounts = $pendingNewQuery
+            ->selectRaw('classification_id, COUNT(*) as count')
+            ->groupBy('classification_id')
+            ->pluck('count', 'classification_id');
+
+        // Query pending 'republish' submissions that are republishing an UNPUBLISHED submission
+        // These will add to the count because they're going from not-live to live
+        $pendingRepublishOfUnpublishedQuery = Submission::query()
+            ->where('status', Submission::STATUS_REPUBLISH)
+            ->whereNotNull('classification_id')
+            ->whereNull('submission_errors')
+            ->whereIn('sid', function ($subquery) use ($submitter_id) {
+                // Find SIDs where the live version is currently unpublished
+                $subquery->select('sid')
+                    ->from('submissions')
+                    ->where('status', Submission::STATUS_UNPUBLISHED)
+                    ->where('is_live', true);
+                if ($submitter_id !== null) {
+                    $subquery->where('submitter_id', $submitter_id);
                 }
-            }
+            });
+
+        if ($submitter_id !== null) {
+            $pendingRepublishOfUnpublishedQuery->where('submitter_id', $submitter_id);
         }
 
-        // Count classifications from the latest state of each SGC ID
-        foreach ($latestClassifications as $classification_id) {
-            $index = array_search($classification_id, $classificationOrder);
-            if ($index !== false) {
-                $classifications[$index]++;
-            }
+        $pendingRepublishOfUnpublishedCounts = $pendingRepublishOfUnpublishedQuery
+            ->selectRaw('classification_id, COUNT(*) as count')
+            ->groupBy('classification_id')
+            ->pluck('count', 'classification_id');
+
+        // Query pending 'unpublish' submissions (will be subtracted)
+        $pendingUnpublishQuery = Submission::query()
+            ->where('status', Submission::STATUS_UNPUBLISH)
+            ->whereNotNull('classification_id')
+            ->whereNull('submission_errors'); // Only error-free submissions
+
+        if ($submitter_id !== null) {
+            $pendingUnpublishQuery->where('submitter_id', $submitter_id);
         }
+
+        $pendingUnpublishCounts = $pendingUnpublishQuery
+            ->selectRaw('classification_id, COUNT(*) as count')
+            ->groupBy('classification_id')
+            ->pluck('count', 'classification_id');
+
+        // Calculate pending (projected) counts
+        foreach ($classificationOrder as $index => $classId) {
+            $addFromNew = $pendingNewCounts->get($classId, 0);
+            $addFromRepublishUnpublished = $pendingRepublishOfUnpublishedCounts->get($classId, 0);
+            $subtractCount = $pendingUnpublishCounts->get($classId, 0);
+            $pendingClassifications[$index] = max(0, $classifications[$index] + $addFromNew + $addFromRepublishUnpublished - $subtractCount);
+        }
+
+        // Show pending bars whenever there's an active/pending job (draft or submitted)
+        // This shows the comparison even if counts end up being the same
+        $hasPendingChanges = $unprocessedJob !== null;
 
         // Get the last 5 processed jobs chronologically by released_at date
         // Show each job with parallel bars for new/republished/unpublished counts
@@ -561,6 +620,8 @@ class DashboardController extends Controller
             'submitter_curie' => $submitter_curie,
             'job_labels' => $jobLabels,
             'classifications' => $classifications,
+            'pending_classifications' => $pendingClassifications,
+            'has_pending_changes' => $hasPendingChanges,
             'submissions_new' => $submissions_new,
             'submissions_republished' => $submissions_republished,
             'submissions_unpublished_chart' => $submissions_unpublished_chart,

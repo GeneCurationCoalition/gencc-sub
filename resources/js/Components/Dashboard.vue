@@ -12,7 +12,7 @@
     import { useToast } from 'primevue/usetoast';
 
     const props = defineProps(['total_jobs_processing', 'total_submissions_processing', 'active_new_count', 'active_republish_count', 'active_unpublish_count', 'token_expire_date', 'total_submissions_published',
-                               'token_days', 'job_labels', 'classifications', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
+                               'token_days', 'job_labels', 'classifications', 'pending_classifications', 'has_pending_changes', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
                                 'total_jobs_completed', 'total_submissions_unpublished',
                                 'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
                                 'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'unprocessed_new_error_count', 'unprocessed_republish_error_count', 'unprocessed_unpublish_error_count', 'has_submitter',
@@ -154,19 +154,30 @@
             data: props.submissions_unpublished_chart
     }];
 
-    const options2 = {
+    // Classification chart colors - one for each classification type
+    // These match the original distributed bar colors
+    const classificationColors = ['#276749', '#38a169', '#68d391', '#63b3ed', '#fc8181', '#e53e3e', '#f6ad55', '#718096', '#a0aec0'];
+
+    // Chart options for grouped bars (current vs pending)
+    const options2 = computed(() => ({
             chart: {
-                id: 'fskki'
+                id: 'classification-chart',
+                type: 'bar',
+                stacked: false
             },
             xaxis: {
                 categories: ['Definitive', 'Strong', 'Moderate', 'Supportive', 'Limited', 'Disputed', 'Refuted', 'Animal', "NKDR"]
             },
             title: {
-                text: "Classifications"
+                text: props.has_pending_changes ? "Classifications (Current vs After Pending)" : "Classifications"
             },
             plotOptions: {
                 bar: {
-                    distributed: true,
+                    horizontal: false,
+                    columnWidth: '55%',
+                    // distributed: true gives each bar its own color (for single series)
+                    // distributed: false groups bars by series (for comparison)
+                    distributed: !props.has_pending_changes,
                     dataLabels: {
                         position: 'top'
                     }
@@ -174,25 +185,106 @@
             },
             dataLabels: {
                 enabled: true,
-                formatter: function (val) {
-                    return val > 0 ? val : '';
+                formatter: function (val, opts) {
+                    if (!props.has_pending_changes) {
+                        return val > 0 ? val : '';
+                    }
+
+                    // Two-series mode: Show single combined label on the taller bar
+                    const currentVal = props.classifications[opts.dataPointIndex] || 0;
+                    const pendingVal = props.pending_classifications[opts.dataPointIndex] || 0;
+                    const diff = pendingVal - currentVal;
+
+                    // Determine which bar is taller (or equal - show on current)
+                    const currentIsTaller = currentVal >= pendingVal;
+
+                    if (opts.seriesIndex === 0) {
+                        // Current Live bar
+                        if (currentIsTaller) {
+                            // Show combined label: "999" or "999(+50)" or "999(-2)"
+                            if (diff === 0) {
+                                return currentVal > 0 ? currentVal : '';
+                            }
+                            const diffStr = diff > 0 ? `+${diff}` : diff.toString();
+                            return currentVal > 0 ? `${currentVal}(${diffStr})` : '';
+                        }
+                        return ''; // Don't show label on shorter bar
+                    } else {
+                        // After Pending bar
+                        if (!currentIsTaller && diff !== 0) {
+                            // Pending bar is taller - show combined label
+                            const diffStr = diff > 0 ? `+${diff}` : diff.toString();
+                            return currentVal > 0 ? `${currentVal}(${diffStr})` : `0(${diffStr})`;
+                        }
+                        return ''; // Don't show label on shorter bar or if no change
+                    }
                 },
                 offsetY: -20,
                 style: {
-                    fontSize: '12px',
+                    fontSize: '11px',
                     colors: ['#304758']
                 }
             },
             legend: {
-                show: false
+                show: props.has_pending_changes,
+                position: 'top'
             },
-            colors: ['#276749', '#38a169', '#68d391', '#63b3ed', '#fc8181', '#e53e3e', '#f6ad55', '#718096']
-    };
+            // Use different colors for current vs pending
+            colors: props.has_pending_changes
+                ? ['#3b82f6', '#93c5fd']  // Blue (current) and light blue (pending)
+                : classificationColors,
+            tooltip: {
+                shared: true,
+                intersect: false,
+                y: {
+                    formatter: function(val, opts) {
+                        if (props.has_pending_changes && opts.seriesIndex === 1) {
+                            // For pending series, show the actual pending total and difference
+                            const currentVal = props.classifications[opts.dataPointIndex] || 0;
+                            const pendingVal = props.pending_classifications[opts.dataPointIndex] || 0;
 
-    const classifications = [{
-            name: 'classifications',
+                            // If no change, don't show anything for this series
+                            if (pendingVal === currentVal) {
+                                return null;
+                            }
+
+                            const diff = pendingVal - currentVal;
+                            const diffStr = diff > 0 ? `+${diff}` : diff.toString();
+                            return `${pendingVal} (${diffStr})`;
+                        }
+                        return val;
+                    }
+                }
+            }
+    }));
+
+    // Series data - show both current and pending if there are changes
+    const classificationSeries = computed(() => {
+        if (props.has_pending_changes) {
+            // For "After Pending" series, only show bars where there's a difference
+            const pendingData = props.pending_classifications.map((pending, index) => {
+                const current = props.classifications[index] || 0;
+                // Return the pending value if different, otherwise 0 (no bar shown)
+                return pending !== current ? pending : 0;
+            });
+
+            return [
+                {
+                    name: 'Current Live',
+                    data: props.classifications
+                },
+                {
+                    name: 'After Pending',
+                    data: pendingData
+                }
+            ];
+        }
+        // No pending changes - show single series with distributed colors
+        return [{
+            name: 'Live Submissions',
             data: props.classifications
-    }];
+        }];
+    });
 
     // Computed property for status tag styling
     const statusTagSeverity = computed(() => {
@@ -506,7 +598,7 @@
                     <VueApexCharts width="500" type="bar" :options="options" :series="series"></VueApexCharts>
                 </div>
                 <div class="">
-                    <VueApexCharts width="500" type="bar" :options="options2" :series="classifications"></VueApexCharts>
+                    <VueApexCharts width="500" type="bar" :options="options2" :series="classificationSeries"></VueApexCharts>
                 </div>
             </div>
 

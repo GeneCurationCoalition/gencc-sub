@@ -8,7 +8,7 @@ import axios from 'axios';
 import { useToast } from 'primevue/usetoast';
 
 const props = defineProps(['total_jobs_processing', 'total_submissions_processing', 'active_new_count', 'active_republish_count', 'active_unpublish_count', 'token_expire_date', 'total_submissions_published',
-                           'token_days', 'job_labels', 'classifications', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
+                           'token_days', 'job_labels', 'classifications', 'pending_classifications', 'has_pending_changes', 'submissions_new', 'submissions_republished', 'submissions_unpublished_chart', 'total_jobs_errors', 'total_submissions_errors',
                            'total_jobs_completed', 'total_submissions_unpublished',
                            'unprocessed_job_status', 'unprocessed_job_date', 'unprocessed_job_slug', 'unprocessed_job_ident', 'unprocessed_job_is_publishing', 'unprocessed_job_is_processing',
                            'unprocessed_new_count', 'unprocessed_republish_count', 'unprocessed_unpublish_count', 'unprocessed_error_count', 'has_submitter', 'submitter_curie',
@@ -133,7 +133,7 @@ onUnmounted(() => {
             <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
                 <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg">
                     <Dashboard :total_submissions_processing="total_submissions_processing" :total_jobs_processing="total_jobs_processing" :active_new_count="active_new_count" :active_republish_count="active_republish_count" :active_unpublish_count="active_unpublish_count" :token_expire_date="token_expire_date"
-                                :job_labels="job_labels" :token_days="token_days" :classifications="classifications" :submissions_new="submissions_new" :submissions_republished="submissions_republished" :submissions_unpublished_chart="submissions_unpublished_chart"
+                                :job_labels="job_labels" :token_days="token_days" :classifications="classifications" :pending_classifications="pending_classifications" :has_pending_changes="has_pending_changes" :submissions_new="submissions_new" :submissions_republished="submissions_republished" :submissions_unpublished_chart="submissions_unpublished_chart"
                                 :total_submissions_errors="total_submissions_errors"  :total_jobs_errors="total_jobs_errors"
                                 :total_submissions_published="total_submissions_published" :total_submissions_unpublished="total_submissions_unpublished" :total_jobs_completed="total_jobs_completed"
                                 :unprocessed_job_status="unprocessed_job_status" :unprocessed_job_date="unprocessed_job_date" :unprocessed_job_slug="unprocessed_job_slug" :unprocessed_job_ident="unprocessed_job_ident" :unprocessed_job_is_publishing="unprocessed_job_is_publishing" :unprocessed_job_is_processing="unprocessed_job_is_processing"

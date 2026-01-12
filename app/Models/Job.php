@@ -70,7 +70,12 @@ class Job extends Model
      */
     public const STATUS_DRAFT = 'draft';
     public const STATUS_SUBMITTED = 'submitted';
-    public const STATUS_PROCESSED = 'processed';
+    public const STATUS_RELEASED = 'released';
+
+    /**
+     * @deprecated Use STATUS_RELEASED instead. Will be removed in a future release.
+     */
+    public const STATUS_PROCESSED = 'released';
 
     /**
      * @deprecated Legacy integer status constants - kept for migration commands only
@@ -92,7 +97,8 @@ class Job extends Model
     protected $status_strings = [
         'draft' => 'Draft',
         'submitted' => 'Submitted',
-        'processed' => 'Processed'
+        'released' => 'Released',
+        'processed' => 'Released' // Backwards compatibility
     ];
 
     /**
@@ -235,24 +241,55 @@ class Job extends Model
 
 
     /**
+     * Query scope for released status
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeReleased($query)
+    {
+		return $query->where('status', self::STATUS_RELEASED);
+    }
+
+    /**
      * Query scope for processed status
+     * @deprecated Use scopeReleased() instead
      *
      * @return Illuminate\Database\Eloquent\Collection
      */
 	public function scopeProcessed($query)
     {
-		return $query->where('status', self::STATUS_PROCESSED);
+		return $this->scopeReleased($query);
     }
 
 
     /**
-     * Query scope for active (non-processed) jobs
+     * Query scope for active (non-released) jobs
      *
      * @return Illuminate\Database\Eloquent\Collection
      */
 	public function scopeActive($query)
     {
 		return $query->whereIn('status', [self::STATUS_DRAFT, self::STATUS_SUBMITTED]);
+    }
+
+    /**
+     * Check if this job is released
+     *
+     * @return bool
+     */
+    public function isReleased(): bool
+    {
+        return $this->status === self::STATUS_RELEASED;
+    }
+
+    /**
+     * Check if this job is active (draft or submitted)
+     *
+     * @return bool
+     */
+    public function isActive(): bool
+    {
+        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_SUBMITTED]);
     }
 
     /**

@@ -82,7 +82,8 @@ function displayStatusV2(status) {
     const statusMap = {
         'draft': 'Draft',
         'submitted': 'Submitted',
-        'processed': 'Released'
+        'released': 'Released',
+        'processed': 'Released'  // Backwards compatibility
     };
     return statusMap[status] || status;
 }
@@ -93,7 +94,8 @@ function getStatusSeverity(status) {
     const severityMap = {
         'draft': 'warning',       // Yellow
         'submitted': 'info',       // Blue
-        'processed': 'success'     // Green
+        'released': 'success',     // Green
+        'processed': 'success'     // Green (backwards compatibility)
     };
     return severityMap[status] || 'secondary';
 }
@@ -103,13 +105,14 @@ function getJobStatusClass(status) {
     const classMap = {
         'draft': 'job-status-draft',
         'submitted': 'job-status-submitted',
-        'processed': 'job-status-processed'
+        'released': 'job-status-released',
+        'processed': 'job-status-released'  // Backwards compatibility
     };
     return classMap[status] || '';
 }
 
 // Get the status date based on job status
-// Draft: created_at, Submitted: submitted_at, Released/Processed: released_at
+// Draft: created_at, Submitted: submitted_at, Released: released_at
 function getStatusDate(job) {
     if (!job.status) return null;
 
@@ -121,7 +124,8 @@ function getStatusDate(job) {
         case 'submitted':
             dateStr = job.submitted_at || job.created_at;
             break;
-        case 'processed':
+        case 'released':
+        case 'processed':  // Backwards compatibility
             dateStr = job.released_at || job.submitted_at || job.created_at;
             break;
         default:
@@ -831,8 +835,8 @@ const formatDate = (dateString) => {
                 <p class="font-bold">Job has been submitted and will be processed automatically.</p>
             </div>
 
-            <!-- Released/Processed status -->
-            <div v-if="job.status === 'processed'" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
+            <!-- Released status -->
+            <div v-if="job.status === 'released' || job.status === 'processed'" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Job has been released.</p>
             </div>
 
@@ -1070,7 +1074,7 @@ const formatDate = (dateString) => {
                         <!-- Show uploaded filename as download link if a document exists -->
                         <template v-if="job.documents && job.documents.length > 0">
                             <div class="col-span-2 pt-3 text-right pr-3">Uploaded File:</div>
-                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': job.status === 'draft' && hasValidationErrors, 'border-orange-400': job.status === 'draft' && hasPartialUpload && !hasValidationErrors, 'border-yellow-400': job.status === 'draft' && uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload, 'border-green-500': job.status === 'processed'}">
+                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': job.status === 'draft' && hasValidationErrors, 'border-orange-400': job.status === 'draft' && hasPartialUpload && !hasValidationErrors, 'border-yellow-400': job.status === 'draft' && uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload, 'border-green-500': job.status === 'released' || job.status === 'processed'}">
                                 <div class="flex items-center gap-2">
                                     <a :href="'/api/documents/' + job.documents[0].ident + '/download'" class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-2">
                                         <i class="pi pi-download text-sm"></i>
@@ -1251,7 +1255,7 @@ const formatDate = (dateString) => {
                 </template>
             </Card>
 
-            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" ></SubmissionsListing>
+            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />
         </div>
 
     </div>

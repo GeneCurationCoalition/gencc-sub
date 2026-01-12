@@ -12,6 +12,12 @@ use Exception;
  * Manages state transitions for Submission records using the status field.
  * Validates that transitions follow the defined state machine rules.
  *
+ * With simplified statuses:
+ * - Pending: new, republish, unpublish (action-based)
+ * - Released: published, unpublished (visibility-based)
+ *
+ * Stage (draft/submitted) is derived from Job.status, not stored in submission.
+ *
  * @package App\Services
  */
 class SubmissionStateMachine
@@ -19,70 +25,60 @@ class SubmissionStateMachine
     /**
      * Valid state transitions
      * Format: [from_state => [allowed_to_states]]
+     *
+     * Note: Transitions from pending to pending are handled by Job state machine.
+     * Submission status only changes when:
+     * 1. Released (pending -> published/unpublished)
+     * 2. Cancelled (pending -> deleted, previous version restored)
      */
     protected static $transitions = [
-        Submission::STATUS_DRAFT_NEW => [
-            Submission::STATUS_SUBMITTED_NEW,
+        // Pending states
+        Submission::STATUS_NEW => [
+            Submission::STATUS_PUBLISHED,
             'deleted' // Special case for deletion
         ],
-        Submission::STATUS_SUBMITTED_NEW => [
+        Submission::STATUS_REPUBLISH => [
             Submission::STATUS_PUBLISHED,
-            Submission::STATUS_DRAFT_NEW // Cancel
+            'cancelled' // Deletes this version, restores previous
         ],
-        Submission::STATUS_PUBLISHED => [
-            Submission::STATUS_DRAFT_REPUBLISH,
-            Submission::STATUS_DRAFT_UNPUBLISH
-        ],
-        Submission::STATUS_DRAFT_REPUBLISH => [
-            Submission::STATUS_SUBMITTED_REPUBLISH,
-            Submission::STATUS_PUBLISHED, // Cancel (if origin was published)
-            Submission::STATUS_UNPUBLISHED // Cancel (if origin was unpublished)
-        ],
-        Submission::STATUS_SUBMITTED_REPUBLISH => [
-            Submission::STATUS_PUBLISHED,
-            Submission::STATUS_DRAFT_REPUBLISH // Cancel
-        ],
-        Submission::STATUS_DRAFT_UNPUBLISH => [
-            Submission::STATUS_SUBMITTED_UNPUBLISH,
-            Submission::STATUS_PUBLISHED // Cancel
-        ],
-        Submission::STATUS_SUBMITTED_UNPUBLISH => [
+        Submission::STATUS_UNPUBLISH => [
             Submission::STATUS_UNPUBLISHED,
-            Submission::STATUS_DRAFT_UNPUBLISH // Cancel
+            'cancelled' // Deletes this version, restores previous
+        ],
+        // Released states
+        Submission::STATUS_PUBLISHED => [
+            Submission::STATUS_REPUBLISH,
+            Submission::STATUS_UNPUBLISH
         ],
         Submission::STATUS_UNPUBLISHED => [
-            Submission::STATUS_DRAFT_REPUBLISH
+            Submission::STATUS_REPUBLISH
         ]
     ];
 
     /**
-     * States that are considered "draft" states (for job submission purposes)
+     * Pending status values (action-based)
      */
-    protected static $draftStates = [
-        Submission::STATUS_DRAFT_NEW,
-        Submission::STATUS_DRAFT_REPUBLISH,
-        Submission::STATUS_DRAFT_UNPUBLISH,
+    protected static $pendingStates = [
+        Submission::STATUS_NEW,
+        Submission::STATUS_REPUBLISH,
+        Submission::STATUS_UNPUBLISH,
     ];
 
     /**
-     * States that are considered "submitted" states (awaiting processing)
+     * Released status values (visibility-based)
      */
-    protected static $submittedStates = [
-        Submission::STATUS_SUBMITTED_NEW,
-        Submission::STATUS_SUBMITTED_REPUBLISH,
-        Submission::STATUS_SUBMITTED_UNPUBLISH,
-    ];
-
-    /**
-     * States that are NOT editable
-     */
-    protected static $nonEditableStates = [
-        Submission::STATUS_DRAFT_UNPUBLISH,
-        Submission::STATUS_SUBMITTED_NEW,
-        Submission::STATUS_SUBMITTED_REPUBLISH,
-        Submission::STATUS_SUBMITTED_UNPUBLISH,
+    protected static $releasedStates = [
         Submission::STATUS_PUBLISHED,
         Submission::STATUS_UNPUBLISHED,
+    ];
+
+    /**
+     * States that are editable
+     * Only new and republish are editable (unpublish is just marking for removal)
+     */
+    protected static $editableStates = [
+        Submission::STATUS_NEW,
+        Submission::STATUS_REPUBLISH,
     ];
 
     /**
@@ -133,124 +129,85 @@ class SubmissionStateMachine
     }
 
     /**
-     * Check if a state is a draft state (editable)
+     * Check if a state is a pending state (not yet released)
      *
      * @param string $state
      * @return bool
      */
-    public static function isDraftState(string $state): bool
+    public static function isPendingState(string $state): bool
     {
-        return in_array($state, self::$draftStates);
+        return in_array($state, self::$pendingStates);
     }
 
     /**
-     * Check if a state is a submitted state (awaiting processing)
+     * Check if a state is a released state
      *
      * @param string $state
      * @return bool
      */
-    public static function isSubmittedState(string $state): bool
+    public static function isReleasedState(string $state): bool
     {
-        return in_array($state, self::$submittedStates);
+        return in_array($state, self::$releasedStates);
     }
 
     /**
-     * Check if a submission is in a draft state (alias for isDraftState)
+     * Check if a submission is in a pending state
      * Accepts Submission object or string state
      *
      * @param Submission|string $submissionOrState
      * @return bool
      */
-    public static function isDraft($submissionOrState): bool
+    public static function isPending($submissionOrState): bool
     {
         $state = $submissionOrState instanceof \App\Models\Submission
             ? $submissionOrState->status
             : $submissionOrState;
 
-        return self::isDraftState($state);
+        return self::isPendingState($state);
     }
 
     /**
-     * Check if a submission is in a submitted state (alias for isSubmittedState)
+     * Check if a submission is in a released state
      * Accepts Submission object or string state
      *
      * @param Submission|string $submissionOrState
      * @return bool
      */
-    public static function isSubmitted($submissionOrState): bool
+    public static function isReleased($submissionOrState): bool
     {
         $state = $submissionOrState instanceof \App\Models\Submission
             ? $submissionOrState->status
             : $submissionOrState;
 
-        return self::isSubmittedState($state);
+        return self::isReleasedState($state);
     }
 
     /**
      * Check if a submission can be edited in its current state
+     * Only new and republish are editable (must be in draft job)
      *
-     * @param string $state
+     * @param Submission|string $submissionOrState
      * @return bool
      */
-    public static function isEditable(string $state): bool
+    public static function isEditable($submissionOrState): bool
     {
-        return !in_array($state, self::$nonEditableStates);
+        $state = $submissionOrState instanceof \App\Models\Submission
+            ? $submissionOrState->status
+            : $submissionOrState;
+
+        return in_array($state, self::$editableStates);
     }
 
     /**
      * Check if a submission can be deleted in its current state
-     * Only draft_new submissions can be deleted
+     * Only new submissions can be deleted (v1 drafts)
      *
      * @param string $state
      * @return bool
      */
     public static function canDelete(string $state): bool
     {
-        return $state === Submission::STATUS_DRAFT_NEW;
-    }
-
-    /**
-     * Get the appropriate "submitted" state for a draft state
-     *
-     * @param string $draftState
-     * @return string|null
-     * @throws Exception if not a draft state
-     */
-    public static function getSubmittedStateFor(string $draftState): ?string
-    {
-        $mapping = [
-            Submission::STATUS_DRAFT_NEW => Submission::STATUS_SUBMITTED_NEW,
-            Submission::STATUS_DRAFT_REPUBLISH => Submission::STATUS_SUBMITTED_REPUBLISH,
-            Submission::STATUS_DRAFT_UNPUBLISH => Submission::STATUS_SUBMITTED_UNPUBLISH,
-        ];
-
-        if (!isset($mapping[$draftState])) {
-            throw new Exception("'{$draftState}' is not a draft state");
-        }
-
-        return $mapping[$draftState];
-    }
-
-    /**
-     * Get the appropriate "draft" state for a submitted state (for cancellation)
-     *
-     * @param string $submittedState
-     * @return string|null
-     * @throws Exception if not a submitted state
-     */
-    public static function getDraftStateFor(string $submittedState): ?string
-    {
-        $mapping = [
-            Submission::STATUS_SUBMITTED_NEW => Submission::STATUS_DRAFT_NEW,
-            Submission::STATUS_SUBMITTED_REPUBLISH => Submission::STATUS_DRAFT_REPUBLISH,
-            Submission::STATUS_SUBMITTED_UNPUBLISH => Submission::STATUS_DRAFT_UNPUBLISH,
-        ];
-
-        if (!isset($mapping[$submittedState])) {
-            throw new Exception("'{$submittedState}' is not a submitted state");
-        }
-
-        return $mapping[$submittedState];
+        return $state === Submission::STATUS_NEW;
     }
 
     /**
@@ -273,10 +230,6 @@ class SubmissionStateMachine
         // Update state
         $submission->status = $toState;
 
-        // Note: origin_state is no longer needed since we now create new version records
-        // when republishing/unpublishing. The previous state can be determined by looking
-        // at the previous version record (version_number - 1).
-
         return $submission;
     }
 
@@ -289,16 +242,82 @@ class SubmissionStateMachine
     public static function getStateDescription(string $state): string
     {
         $descriptions = [
-            Submission::STATUS_DRAFT_NEW => 'New submission being drafted',
-            Submission::STATUS_SUBMITTED_NEW => 'New submission awaiting publication',
+            Submission::STATUS_NEW => 'New submission (v1) awaiting release',
+            Submission::STATUS_REPUBLISH => 'Update to existing submission awaiting release',
+            Submission::STATUS_UNPUBLISH => 'Submission marked for unpublishing',
             Submission::STATUS_PUBLISHED => 'Published and visible to public',
-            Submission::STATUS_DRAFT_REPUBLISH => 'Published submission being updated',
-            Submission::STATUS_SUBMITTED_REPUBLISH => 'Updated submission awaiting republication',
-            Submission::STATUS_DRAFT_UNPUBLISH => 'Published submission marked for unpublishing',
-            Submission::STATUS_SUBMITTED_UNPUBLISH => 'Submission awaiting unpublication',
             Submission::STATUS_UNPUBLISHED => 'Unpublished and hidden from public',
         ];
 
         return $descriptions[$state] ?? 'Unknown state';
+    }
+
+    // =========================================================================
+    // Legacy compatibility methods
+    // These maintain backwards compatibility during migration
+    // =========================================================================
+
+    /**
+     * @deprecated Use isPendingState() instead
+     * Check if a state is a "draft" state
+     * In the new model, this means pending state where job is draft
+     */
+    public static function isDraftState(string $state): bool
+    {
+        return self::isPendingState($state);
+    }
+
+    /**
+     * @deprecated Use isPendingState() instead
+     * Check if a state is a "submitted" state
+     * In the new model, this means pending state where job is submitted
+     */
+    public static function isSubmittedState(string $state): bool
+    {
+        return self::isPendingState($state);
+    }
+
+    /**
+     * @deprecated Use isPending() instead
+     */
+    public static function isDraft($submissionOrState): bool
+    {
+        return self::isPending($submissionOrState);
+    }
+
+    /**
+     * @deprecated Use isPending() instead
+     */
+    public static function isSubmitted($submissionOrState): bool
+    {
+        return self::isPending($submissionOrState);
+    }
+
+    /**
+     * @deprecated No longer needed - status doesn't change between draft/submitted
+     * Get the appropriate "submitted" state for a draft state
+     * With simplified statuses, this is a no-op (status doesn't change)
+     */
+    public static function getSubmittedStateFor(string $state): ?string
+    {
+        // Status doesn't change - just return the same state
+        if (!self::isPendingState($state)) {
+            throw new Exception("'{$state}' is not a pending state");
+        }
+        return $state;
+    }
+
+    /**
+     * @deprecated No longer needed - status doesn't change between draft/submitted
+     * Get the appropriate "draft" state for a submitted state (for cancellation)
+     * With simplified statuses, this is a no-op (status doesn't change)
+     */
+    public static function getDraftStateFor(string $state): ?string
+    {
+        // Status doesn't change - just return the same state
+        if (!self::isPendingState($state)) {
+            throw new Exception("'{$state}' is not a pending state");
+        }
+        return $state;
     }
 }

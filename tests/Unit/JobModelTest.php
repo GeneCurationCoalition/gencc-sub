@@ -61,7 +61,9 @@ class JobModelTest extends TestCase
     {
         $this->assertEquals('draft', Job::STATUS_DRAFT);
         $this->assertEquals('submitted', Job::STATUS_SUBMITTED);
-        $this->assertEquals('processed', Job::STATUS_PROCESSED);
+        $this->assertEquals('released', Job::STATUS_RELEASED);
+        // STATUS_PROCESSED is deprecated alias for STATUS_RELEASED
+        $this->assertEquals('released', Job::STATUS_PROCESSED);
     }
 
     /**
@@ -173,8 +175,12 @@ class JobModelTest extends TestCase
         $job->status = Job::STATUS_SUBMITTED;
         $this->assertEquals('Submitted', $job->display_status);
 
+        $job->status = Job::STATUS_RELEASED;
+        $this->assertEquals('Released', $job->display_status);
+
+        // Backwards compatibility - STATUS_PROCESSED also displays as Released
         $job->status = Job::STATUS_PROCESSED;
-        $this->assertEquals('Processed', $job->display_status);
+        $this->assertEquals('Released', $job->display_status);
     }
 
     /**

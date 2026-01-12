@@ -33,14 +33,28 @@
     // - Published (status='published')
     // - Draft unpublish (status='draft_unpublish') - user must delete draft to keep published version
     // - Legacy: published (status=20) OR job not in processing/error status
+    // With simplified status model: only 'new' and 'republish' in draft job are editable
     const isNotEditable = computed(() => {
-        // V2 status checks
+        // V2 status checks - with simplified model
         if (props.submission.status) {
-            return props.submission.status === 'published' ||
-                   props.submission.status === 'draft_unpublish' ||
-                   props.submission.status === 'submitted_republish' ||
-                   props.submission.status === 'submitted_unpublish' ||
-                   props.submission.status === 'unpublished';
+            // Released statuses are never editable
+            if (['published', 'unpublished'].includes(props.submission.status)) {
+                return true;
+            }
+            // Unpublish action is not editable (just marks for removal)
+            if (['unpublish', 'draft_unpublish', 'submitted_unpublish'].includes(props.submission.status)) {
+                return true;
+            }
+            // If job is submitted, pending submissions are read-only
+            if (props.submission.job?.status === 'submitted') {
+                return true;
+            }
+            // Legacy compound statuses for submitted job
+            if (['submitted_new', 'submitted_republish'].includes(props.submission.status)) {
+                return true;
+            }
+            // Editable: new, republish (or legacy draft_new, draft_republish) in draft job
+            return false;
         }
 
         // Legacy status checks (fallback)
@@ -54,10 +68,10 @@
             return true;
         }
 
-        // Additionally, block gene editing for draft_republish and submitted_republish
+        // Additionally, block gene editing for republish status
+        // With simplified model: 'republish' or legacy 'draft_republish', 'submitted_republish'
         if (props.submission.status) {
-            return props.submission.status === 'draft_republish' ||
-                   props.submission.status === 'submitted_republish';
+            return ['republish', 'draft_republish', 'submitted_republish'].includes(props.submission.status);
         }
 
         return false;
@@ -209,11 +223,20 @@
 
     function jobHasStatusProcessingOrError() {
        // V2 state model: Only show edit buttons for editable states
-       // Editable states: draft_new, draft_republish
-       // Read-only states (buttons hidden): published, draft_unpublish, submitted_*, unpublished
+       // With simplified model: 'new' and 'republish' in draft job are editable
+       // Read-only states (buttons hidden): published, unpublish, unpublished, or any pending in submitted job
        if (props.submission?.status) {
-           return props.submission.status === 'draft_new' ||
-                  props.submission.status === 'draft_republish';
+           const status = props.submission.status;
+           const jobStatus = props.submission.job?.status;
+
+           // Editable: new/republish in draft job
+           if (['new', 'draft_new'].includes(status) && jobStatus !== 'submitted') {
+               return true;
+           }
+           if (['republish', 'draft_republish'].includes(status) && jobStatus !== 'submitted') {
+               return true;
+           }
+           return false;
        }
 
        // Legacy: Show buttons if job is in processing or error status
@@ -776,8 +799,8 @@
     };
 
     const requireDeleteDraftConfirmation = () => {
-        // Build message based on submission status
-        const isRepublish = props.submission.status === 'draft_republish';
+        // Build message based on submission status (using simplified status values)
+        const isRepublish = props.submission.status === 'republish';
         const actionType = isRepublish ? 'republish' : 'unpublish';
         let message = `This will permanently delete this draft ${actionType} version. The original published submission will remain unchanged.`;
 
@@ -789,6 +812,22 @@
             rejectLabel: 'Cancel',
             accept: () => {
                 deleteDraftSubmission();
+            },
+            reject: () => {
+                //
+            }
+        });
+    };
+
+    const requireDeleteNewConfirmation = () => {
+        confirm.require({
+            group: 'headless',
+            header: 'Delete Submission?',
+            message: 'This will permanently delete this new submission. This action cannot be undone.',
+            acceptLabel: 'Delete',
+            rejectLabel: 'Cancel',
+            accept: () => {
+                deleteNewSubmission();
             },
             reject: () => {
                 //
@@ -810,6 +849,23 @@
                 router.visit('/jobs/' + jobIdent);
             } else {
                 toast.add({ severity: 'error', summary: 'Error', detail: response.data.message || 'Failed to delete draft', life: 5000 });
+            }
+        } catch (error) {
+            console.error(error);
+            toast.add({ severity: 'error', summary: 'Error', detail: 'An error occurred', life: 5000 });
+        }
+    }
+
+    async function deleteNewSubmission() {
+        try {
+            const response = await axios.delete('/api/submissions/' + props.submission.sid);
+
+            if (response.data.status_code == 200) {
+                // Redirect to the job's view
+                const jobIdent = response.data.job_ident || props.submission.job.ident;
+                router.visit('/jobs/' + jobIdent);
+            } else {
+                toast.add({ severity: 'error', summary: 'Error', detail: response.data.message || 'Failed to delete submission', life: 5000 });
             }
         } catch (error) {
             console.error(error);
@@ -910,50 +966,71 @@
     }
 
     // V2 status display for submissions
+    // With simplified status model: new, republish, unpublish (pending) and published, unpublished (released)
     function displayStatusV2(status) {
         const statusMap = {
+            // New simplified statuses
+            'new': 'New',
+            'republish': 'Republish',
+            'unpublish': 'Unpublish',
+            'published': 'Published',
+            'unpublished': 'Unpublished',
+            // Legacy compound statuses (for backwards compatibility)
             'draft_new': 'New',
             'submitted_new': 'New',
-            'published': 'Published',
             'draft_republish': 'Republish',
             'submitted_republish': 'Republish',
             'draft_unpublish': 'Unpublish',
-            'submitted_unpublish': 'Unpublish',
-            'unpublished': 'Unpublished'
+            'submitted_unpublish': 'Unpublish'
         };
         return statusMap[status] || status;
     }
 
     // Get severity for status badge
-    function getStatusSeverity(status) {
+    // Stage (draft/submitted) is now derived from job.status
+    function getStatusSeverity(status, jobStatus = null) {
+        const isSubmittedJob = jobStatus === 'submitted';
+
         const severityMap = {
+            // New simplified statuses - use job status for color
+            'new': isSubmittedJob ? 'info' : 'warning',
+            'republish': isSubmittedJob ? 'info' : 'warning',
+            'unpublish': isSubmittedJob ? 'orange' : 'amber',
+            'published': 'success',
+            'unpublished': 'danger',
+            // Legacy compound statuses
             'draft_new': 'warning',
             'submitted_new': 'info',
-            'published': 'success',
             'draft_republish': 'warning',
             'submitted_republish': 'info',
             'draft_unpublish': 'amber',
-            'submitted_unpublish': 'orange',
-            'unpublished': 'danger'
+            'submitted_unpublish': 'orange'
         };
         return severityMap[status] || 'secondary';
     }
 
     // Get custom CSS class for status badges
-    function getStatusClass(status, isMostRecent = true) {
+    function getStatusClass(status, isMostRecent = true, jobStatus = null) {
         if (!isMostRecent && (status === 'published' || status === 'unpublished')) {
             return 'status-not-current';
         }
 
+        const isSubmittedJob = jobStatus === 'submitted';
+
         const classMap = {
+            // New simplified statuses - class based on job status
+            'new': isSubmittedJob ? 'status-submitted-new' : 'status-draft-new',
+            'republish': isSubmittedJob ? 'status-submitted-republish' : 'status-draft-republish',
+            'unpublish': isSubmittedJob ? 'status-submitted-unpublish' : 'status-draft-unpublish',
+            'published': 'status-published',
+            'unpublished': 'status-unpublished',
+            // Legacy compound statuses
             'draft_new': 'status-draft-new',
             'submitted_new': 'status-submitted-new',
-            'published': 'status-published',
             'draft_republish': 'status-draft-republish',
             'submitted_republish': 'status-submitted-republish',
             'draft_unpublish': 'status-draft-unpublish',
-            'submitted_unpublish': 'status-submitted-unpublish',
-            'unpublished': 'status-unpublished'
+            'submitted_unpublish': 'status-submitted-unpublish'
         };
         return classMap[status] || '';
     }
@@ -963,7 +1040,16 @@
         if (!submission.status) return submission.created_at;
 
         let dateStr = null;
+        const isSubmittedJob = submission.job?.status === 'submitted';
+
         switch (submission.status) {
+            // New simplified pending statuses
+            case 'new':
+            case 'republish':
+            case 'unpublish':
+                dateStr = isSubmittedJob ? (submission.submitted_at || submission.created_at) : submission.created_at;
+                break;
+            // Legacy compound statuses
             case 'draft_new':
             case 'draft_republish':
             case 'draft_unpublish':
@@ -974,6 +1060,7 @@
             case 'submitted_unpublish':
                 dateStr = submission.submitted_at || submission.created_at;
                 break;
+            // Released statuses
             case 'published':
                 dateStr = submission.released_at || submission.submitted_at || submission.created_at;
                 break;
@@ -1056,26 +1143,38 @@ console.log(props.submission)
                     </span>
                 </p>
             </div>
-            <div v-if="(submission.status === 'submitted_new')" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
+            <!-- New submissions in draft stage -->
+            <div v-if="submission.status === 'new' && submission.job?.status === 'draft'" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
+                <p class="font-bold">Draft Submission (New).
+                    <Button icon="pi pi-trash" severity="danger" class="float-right align-middle ml-2" @click="requireDeleteNewConfirmation()" v-tooltip.top="'Delete submission'"/>
+                    <span class="float-right text-sm font-normal pt-2">Make edits below or delete this submission.</span>
+                </p>
+            </div>
+            <!-- New submissions in submitted stage -->
+            <div v-if="submission.status === 'new' && submission.job?.status === 'submitted'" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
                 <p class="font-bold">New submission has been Submitted.</p>
             </div>
-            <div v-if="(submission.status === 'submitted_republish')" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
-                <p class="font-bold">Republished submission has been Submitted.</p>
-            </div>
-            <div v-if="(submission.status === 'submitted_unpublish')" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
-                <p class="font-bold">Unpublish submission has been Submitted.</p>
-            </div>
-            <div v-if="(submission.status === 'draft_republish')" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
+            <!-- Republish submissions in draft stage -->
+            <div v-if="submission.status === 'republish' && submission.job?.status === 'draft'" class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Draft Submission (Republishing).
                     <Button icon="pi pi-trash" severity="danger" class="float-right align-middle ml-2" @click="requireDeleteDraftConfirmation()" v-tooltip.top="'Delete draft'"/>
                     <span class="float-right text-sm font-normal pt-2">Make edits below or delete this draft.</span>
                 </p>
             </div>
-            <div v-if="(submission.status === 'draft_unpublish')" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
+            <!-- Republish submissions in submitted stage -->
+            <div v-if="submission.status === 'republish' && submission.job?.status === 'submitted'" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
+                <p class="font-bold">Republished submission has been Submitted.</p>
+            </div>
+            <!-- Unpublish submissions in draft stage -->
+            <div v-if="submission.status === 'unpublish' && submission.job?.status === 'draft'" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Draft Submission (Unpublishing) - Read Only.
                     <Button icon="pi pi-trash" severity="danger" class="float-right align-middle ml-2" @click="requireDeleteDraftConfirmation()" v-tooltip.top="'Delete draft'"/>
                     <span class="float-right text-sm font-normal pt-2">This submission is read-only. Delete this draft to cancel the unpublish.</span>
                 </p>
+            </div>
+            <!-- Unpublish submissions in submitted stage -->
+            <div v-if="submission.status === 'unpublish' && submission.job?.status === 'submitted'" class="bg-red-100 border-l-4 border-red-700 text-red-800 p-4 mb-2" role="alert">
+                <p class="font-bold">Unpublish submission has been Submitted.</p>
             </div>
             <div v-if="hasSubmittedJob && submission.status === 'unpublished' && !isArchivedVersion" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mt-2 mb-2" role="alert">
                 <p class="font-bold">A submitted job exists.</p>
@@ -1138,8 +1237,17 @@ console.log(props.submission)
                             <div class="font-normal font-bold">{{ formatDateTimestamp(getStatusDate(submission)) }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Status:</div>
-                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <Tag v-if="submission.status" :value="displayStatusV2(submission.status)" :severity="getStatusSeverity(submission.status)" :class="['status-tag', getStatusClass(submission.status, submission.is_most_recent !== false)]" />
+                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3 flex items-center gap-2">
+                            <Tag v-if="submission.status"
+                                 :value="displayStatusV2(submission.status)"
+                                 :severity="isArchivedVersion ? 'secondary' : getStatusSeverity(submission.status, submission.job?.status)"
+                                 :class="['status-tag', isArchivedVersion ? 'status-not-current' : getStatusClass(submission.status, submission.is_most_recent !== false, submission.job?.status)]" />
+                            <span v-if="isArchivedVersion" class="text-gray-500 text-sm italic flex items-center gap-1">
+                                <i class="pi pi-history"></i> Archived (superseded by newer version)
+                            </span>
+                            <span v-else-if="hasPendingDraftVersion" class="text-amber-600 text-sm italic flex items-center gap-1">
+                                <i class="pi pi-pencil"></i> Has pending draft
+                            </span>
                         </div>
 
                         <hr class="col-span-12 my-4" />

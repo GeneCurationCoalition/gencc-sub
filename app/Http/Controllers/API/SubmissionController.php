@@ -684,21 +684,31 @@ class SubmissionController extends Controller
                     'message' => 'Unauthorized'],
                     200);
 
-        // Prevent deletion of published submissions or submissions that were previously published (have publish_date)
-        if ($submission->status === Submission::STATUS_PUBLISHED ||
-            $submission->publish_date !== null)
-                return response()->json(['success' => 'false',
+        // Use state machine to check if deletion is allowed
+        // Only new (v1) submissions in draft state can be deleted
+        if (!SubmissionStateMachine::canDelete($submission->status)) {
+            return response()->json(['success' => 'false',
                     'status_code' => 3007,
-                    'message' => 'Cannot delete published submissions or submissions being updated'],
+                    'message' => 'Cannot delete submissions in this state. Only new submissions can be deleted.'],
                     200);
+        }
 
-        $job = $submission->job;
+        // Additional check: can only delete if job is in draft state
+        if ($submission->job && $submission->job->status !== Job::STATUS_DRAFT) {
+            return response()->json(['success' => 'false',
+                    'status_code' => 3008,
+                    'message' => 'Cannot delete submissions in a submitted job. Cancel the job submission first.'],
+                    200);
+        }
+
+        $jobIdent = $submission->job?->ident;
 
         $submission->delete();
 
         return response()->json(['success' => 'true',
                 'status_code' => 200,
-                'message' => 'Submission Removed'],
+                'message' => 'Submission Removed',
+                'job_ident' => $jobIdent],
                 200);
     }
 
