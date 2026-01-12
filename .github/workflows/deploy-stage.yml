@@ -102,7 +102,6 @@ jobs:
 
             # Run initialization commands
             podman exec gencc-sub php artisan migrate --force
-            podman exec gencc-sub php artisan gencc:makeproddb
             podman exec gencc-sub php artisan config:cache
             podman exec gencc-sub php artisan route:cache
             podman exec gencc-sub php artisan view:cache
