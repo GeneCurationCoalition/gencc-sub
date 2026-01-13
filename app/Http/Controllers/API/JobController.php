@@ -62,7 +62,7 @@ class JobController extends Controller
         $job = new Job(
             ['user_id' => $user->id,
              'submitter_id' => $effectiveSubmitterId,
-             'submission_date' => Carbon::now(),
+             // created_at is auto-set by Laravel
              'status' => Job::STATUS_DRAFT ]
         );
 
@@ -233,19 +233,37 @@ class JobController extends Controller
         // Process submissions before deletion
         $submissions = $job->submissions()->get();
 
+        // Collect SIDs of draft versions to restore is_most_recent on their originals
+        $draftSids = [];
+
         foreach ($submissions as $submission) {
+            // With versioning, draft versions are new records that should be deleted
+            // The original published versions remain unchanged
             if ($submission->status === Submission::STATUS_DRAFT_REPUBLISH ||
-                $submission->status === Submission::STATUS_DRAFT_UNPUBLISH) {
+                $submission->status === Submission::STATUS_DRAFT_UNPUBLISH ||
+                $submission->status === Submission::STATUS_DRAFT_NEW) {
 
-                // Restore draft_republish and draft_unpublish submissions to their origin state
-                \App\Services\SubmissionStateMachine::cancel($submission);
-                $submission->save();
+                // Track SIDs that need is_most_recent restored (only for republish/unpublish drafts)
+                if ($submission->status !== Submission::STATUS_DRAFT_NEW) {
+                    $draftSids[$submission->sid] = $submission->id;
+                }
 
-            } elseif ($submission->status === Submission::STATUS_DRAFT_NEW) {
-
-                // Force delete draft_new submissions (they were never published, so no need for soft delete)
+                // Delete draft version records
                 $submission->forceDelete();
 
+            }
+        }
+
+        // Restore is_most_recent=true on the previous versions
+        foreach ($draftSids as $sid => $deletedId) {
+            $previousVersion = Submission::where('sid', $sid)
+                ->where('id', '!=', $deletedId)
+                ->orderBy('version_number', 'desc')
+                ->first();
+
+            if ($previousVersion && !$previousVersion->is_most_recent) {
+                $previousVersion->is_most_recent = true;
+                $previousVersion->save();
             }
         }
 
@@ -416,14 +434,27 @@ class JobController extends Controller
                     $preferences->job_favorites = [];
                 }
 
-                if ($request->input('value') === "false")
+                // Handle various falsy value representations (boolean false, string "false", empty string)
+                $value = $request->input('value');
+                $isFavorite = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                // If filter_var returns null (couldn't parse), treat empty/falsy as false
+                if ($isFavorite === null) {
+                    $isFavorite = !empty($value) && $value !== 'false' && $value !== '0';
+                }
+
+                if (!$isFavorite)
                 {
                     if (($key = array_search($id, $preferences->job_favorites)) !== false)
                         unset($preferences->job_favorites[$key]);
+                    // Re-index array after removal to prevent JSON object conversion
+                    $preferences->job_favorites = array_values($preferences->job_favorites);
                 }
                 else
                 {
-                    $preferences->job_favorites[] = $id;
+                    // Only add if not already in favorites
+                    if (!in_array($id, $preferences->job_favorites)) {
+                        $preferences->job_favorites[] = $id;
+                    }
                 }
                 Auth::user()->preferences = $preferences;
                 Auth::user()->save();

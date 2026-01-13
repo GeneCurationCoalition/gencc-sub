@@ -20,7 +20,7 @@ import AppLayout from '@/Layouts/AppLayout.vue';
                             <h3 class="text-2xl font-bold text-gray-900 mb-4">Submission Spreadsheet</h3>
                             <p class="text-gray-700 leading-relaxed">
                                 Member organizations can download the current version of the
-                                <a href="/documents/GenCC Submission Spreadsheet.xlsx"
+                                <a href="/download/template"
                                    class="font-semibold text-indigo-700 hover:text-indigo-900">
                                     GenCC Submission Spreadsheet - Version 2
                                 </a>

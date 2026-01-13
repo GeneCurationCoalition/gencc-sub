@@ -47,7 +47,7 @@ This document defines the state transition rules for both Submission and Job rec
 - NOT editable directly
 - Has SGC_ID assigned
 - Publicly visible
-- Tracks `published_at` timestamp
+- Tracks `released_at` timestamp
 
 ---
 
@@ -261,7 +261,7 @@ When run:publish processes a submitted job:
 
 1. **Process Each Submission**: Sends to GenCC-Search
 2. **Record Success**: Adds entry to job's `processed_submission_ids` array
-3. **Update Timestamps**: Sets `published_at` for published submissions
+3. **Update Timestamps**: Sets `released_at` for published submissions
 4. **Handle Failures**: Moves failed submissions to new draft job
 5. **Complete Job**: Transitions job to `processed` state
 
@@ -294,7 +294,7 @@ The submission listing provides these filters:
 - `origin_snapshot`: JSON snapshot of field values for restore
 - `origin_job_id`: Foreign key to original job
 - `submission_errors`: JSON object of validation errors
-- `published_at`: Timestamp of publication
+- `released_at`: Timestamp of publication
 
 ### Job Table
 - `status`: Current V2 status (draft, submitted, processed)

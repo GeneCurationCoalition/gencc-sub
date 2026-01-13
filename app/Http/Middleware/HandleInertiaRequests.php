@@ -65,7 +65,9 @@ class HandleInertiaRequests extends Middleware
             'selectedSubmitter' => fn () => $request->user() &&
                 $request->user()->isGenccAdmin() &&
                 $request->session()->has('selected_submitter_id')
-                ? \App\Models\Submitter::find($request->session()->get('selected_submitter_id'))
+                ? \App\Models\Submitter::where('id', $request->session()->get('selected_submitter_id'))
+                    ->select('id', 'name', 'curie')
+                    ->first()
                 : null,
 
         ]);

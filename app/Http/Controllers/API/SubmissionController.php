@@ -27,6 +27,8 @@ use App\Jobs\ProcessPubmed;
 use App\Services\SubmissionStateMachine;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionDuplicateDetection;
+use App\Exports\SubmissionsTemplateExport;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class SubmissionController extends Controller
 {
@@ -80,7 +82,7 @@ class SubmissionController extends Controller
                 'inheritance_id' => null,
                 'classification_id' => null,
                 'submitter_id' => $effectiveSubmitterId,
-                'submission_date' => Carbon::now(),
+                // created_at is auto-set by Laravel
                 'submission_data' => [],
                 'status' => Submission::STATUS_DRAFT_NEW,
                 'submission_errors' => []
@@ -128,7 +130,12 @@ class SubmissionController extends Controller
     {
         $effectiveSubmitterId = $this->getEffectiveSubmitterId($request);
 
-        $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')->where('sid', $id)->first();
+        // Try to find by ident first (for version-specific operations like favorites)
+        // Fall back to sid for backwards compatibility
+        $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')->where('ident', $id)->first();
+        if ($submission === null) {
+            $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')->where('sid', $id)->first();
+        }
 
         if ($submission === null)
                 return response()->json(['success' => 'false',
@@ -505,13 +512,23 @@ class SubmissionController extends Controller
                     $preferences->sub_favorites = [];
                 }
 
-                if ($request->input('value') === "false"){
-                    if (($key = array_search($submission->ident, $preferences->sub_favorites)) !== false)
+                // Handle various representations of true/false from JavaScript
+                // Boolean false can be sent as: false, "false", "0", "", 0
+                $value = $request->input('value');
+                $isFalse = $value === false || $value === "false" || $value === "0" || $value === "" || $value === 0 || $value === null;
+
+                if ($isFalse) {
+                    // Remove from favorites
+                    if (($key = array_search($submission->ident, $preferences->sub_favorites)) !== false) {
                         unset($preferences->sub_favorites[$key]);
-                }
-                else
-                {
-                    $preferences->sub_favorites[] = $submission->ident;
+                        // Re-index array after removal
+                        $preferences->sub_favorites = array_values($preferences->sub_favorites);
+                    }
+                } else {
+                    // Add to favorites (avoid duplicates)
+                    if (!in_array($submission->ident, $preferences->sub_favorites)) {
+                        $preferences->sub_favorites[] = $submission->ident;
+                    }
                 }
                 Auth::user()->preferences = $preferences;
                 Auth::user()->save();
@@ -570,7 +587,7 @@ class SubmissionController extends Controller
                 $job = new Job(
                     ['user_id' => Auth::user()->id,
                      'submitter_id' => $effectiveSubmitterId,
-                     'submission_date' => Carbon::now(),
+                     // created_at is auto-set by Laravel
                      'status' => Job::STATUS_DRAFT ]
                 );
                 $job->save();
@@ -679,55 +696,99 @@ class SubmissionController extends Controller
                     'message' => 'Unauthorized'],
                     200);
 
-        // Prevent deletion of published submissions or submissions that were previously published (have publish_date)
-        if ($submission->status === Submission::STATUS_PUBLISHED ||
-            $submission->publish_date !== null)
-                return response()->json(['success' => 'false',
+        // Use state machine to check if deletion is allowed
+        // Only new (v1) submissions in draft state can be deleted
+        if (!SubmissionStateMachine::canDelete($submission->status)) {
+            return response()->json(['success' => 'false',
                     'status_code' => 3007,
-                    'message' => 'Cannot delete published submissions or submissions being updated'],
+                    'message' => 'Cannot delete submissions in this state. Only new submissions can be deleted.'],
                     200);
+        }
 
-        $job = $submission->job;
+        // Additional check: can only delete if job is in draft state
+        if ($submission->job && $submission->job->status !== Job::STATUS_DRAFT) {
+            return response()->json(['success' => 'false',
+                    'status_code' => 3008,
+                    'message' => 'Cannot delete submissions in a submitted job. Cancel the job submission first.'],
+                    200);
+        }
+
+        $jobIdent = $submission->job?->ident;
 
         $submission->delete();
 
         return response()->json(['success' => 'true',
                 'status_code' => 200,
-                'message' => 'Submission Removed'],
+                'message' => 'Submission Removed',
+                'job_ident' => $jobIdent],
                 200);
     }
 
 
     /**
      * Cancel a submission (V2 state transitions)
-     * Transitions draft_republish back to published/unpublished or draft_unpublish back to published
+     *
+     * NEW VERSIONING APPROACH:
+     * For draft_republish: Simply DELETE the draft version record.
+     *                      The original published version remains unchanged.
+     * For draft_unpublish: Transition back to published (no deletion needed,
+     *                      unpublish doesn't create a new version).
      */
     public function cancel(Request $request, string $id)
     {
+        // For versioned submissions, we need to find the draft version
+        // The $id is the SID which may have multiple versions
         $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                        ->where('sid', $id)->first();
+                        ->where('sid', $id)
+                        ->whereIn('status', [
+                            Submission::STATUS_DRAFT_REPUBLISH,
+                            Submission::STATUS_DRAFT_UNPUBLISH
+                        ])
+                        ->first();
 
         if ($submission === null)
                 return response()->json(['success' => 'false',
                     'status_code' => 3002,
-                    'message' => 'Unauthorized'],
+                    'message' => 'No draft submission found to cancel'],
                     200);
 
         try {
-            // Use state machine to cancel
-            SubmissionStateMachine::cancel($submission);
-            $submission->save();
+            $status = $submission->status;
+            $versionNumber = $submission->version_number ?? 1;
+            $sid = $submission->sid;
 
-            // Reload to get job relationship
-            $submission->load('job');
+            // NEW VERSIONING: Both draft_republish and draft_unpublish create new version records
+            // Simply delete the draft version - the original published version remains unchanged
+            $actionType = $status === Submission::STATUS_DRAFT_REPUBLISH ? 'republish' : 'unpublish';
+            Log::info("Cancelling draft_{$actionType}: Deleting version {$versionNumber} of {$id}");
+
+            // Get the job before deleting
+            $jobIdent = $submission->job->ident ?? null;
+
+            // Delete the draft version (soft delete)
+            $submission->delete();
+
+            // Restore is_most_recent=true on the previous version (the most recent remaining version)
+            $previousVersion = Submission::where('sid', $sid)
+                ->where('id', '!=', $submission->id)
+                ->orderBy('version_number', 'desc')
+                ->first();
+
+            if ($previousVersion && !$previousVersion->is_most_recent) {
+                $previousVersion->is_most_recent = true;
+                $previousVersion->save();
+                Log::info("Restored is_most_recent=true on previous version {$previousVersion->version_number} of {$sid}");
+            }
 
             return response()->json(['success' => 'true',
                     'status_code' => 200,
-                    'message' => 'Submission Cancelled',
-                    'status' => $submission->status,
-                    'job_ident' => $submission->job->ident ?? null],
+                    'message' => "Draft {$actionType} (version {$versionNumber}) deleted",
+                    'status' => 'deleted',
+                    'job_ident' => $jobIdent],
                     200);
+
         } catch (\Exception $e) {
+            Log::error("Cancel failed for {$id}: " . $e->getMessage());
             return response()->json(['success' => 'false',
                     'status_code' => 3008,
                     'message' => 'Cannot cancel: ' . $e->getMessage()],
@@ -738,17 +799,32 @@ class SubmissionController extends Controller
 
     /**
      * Initiate republish workflow for a published submission
-     * Transitions published → draft_republish and moves to draft job
+     *
+     * NEW VERSIONING APPROACH:
+     * Instead of transitioning the existing submission, we now:
+     * 1. Keep the original published submission unchanged
+     * 2. Create a NEW submission record with version_number + 1
+     * 3. The new record has status = draft_republish
+     *
+     * This preserves the complete version history.
      */
     public function republish(Request $request, string $id)
     {
-        $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                        ->where('sid', $id)->first();
+        // Find the current LIVE submission by SID (published OR unpublished)
+        // Must be is_live=true (the current released state for this SGC ID)
+        // Note: Both published and unpublished can be is_live=true because:
+        // - Published with is_live=true = visible in gencc-search
+        // - Unpublished with is_live=true = hidden in gencc-search (but that's the current state)
+        $originalSubmission = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                        ->where('sid', $id)
+                        ->whereIn('status', [Submission::STATUS_PUBLISHED, Submission::STATUS_UNPUBLISHED])
+                        ->where('is_live', true)
+                        ->first();
 
-        if ($submission === null)
+        if ($originalSubmission === null)
                 return response()->json(['success' => 'false',
                     'status_code' => 3002,
-                    'message' => 'Unauthorized'],
+                    'message' => 'Submission not found or not in a republishable state (must be the current live version)'],
                     200);
 
         try {
@@ -766,8 +842,20 @@ class SubmissionController extends Controller
                     200);
             }
 
+            // Check if there's already a draft version for this SID
+            $existingDraft = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                ->where('sid', $id)
+                ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                ->first();
+
+            if ($existingDraft) {
+                return response()->json(['success' => 'false',
+                    'status_code' => 3012,
+                    'message' => 'A draft version already exists for this submission'],
+                    200);
+            }
+
             // Find or create a draft job for this submitter
-            // Look for the most recent draft job
             $job = Job::where('submitter_id', $effectiveSubmitterId)
                 ->where('status', Job::STATUS_DRAFT)
                 ->orderBy('id', 'desc')
@@ -778,7 +866,7 @@ class SubmissionController extends Controller
                 $job = new Job([
                     'user_id' => Auth::user()->id,
                     'submitter_id' => $effectiveSubmitterId,
-                    'submission_date' => Carbon::now(),
+                    // created_at is auto-set by Laravel
                     'status' => Job::STATUS_DRAFT
                 ]);
                 $job->save();
@@ -787,26 +875,41 @@ class SubmissionController extends Controller
                 Log::info("Using existing draft job {$job->slug} for republishing submission {$id}");
             }
 
-            // Use state machine to transition to draft_republish
-            // This will automatically store origin_job_id and origin_state
-            SubmissionStateMachine::transition(
-                $submission,
-                Submission::STATUS_DRAFT_REPUBLISH,
-                $submission->status  // Store origin state
-            );
+            // Calculate the next version number
+            $maxVersion = Submission::where('sid', $id)->max('version_number') ?? 1;
+            $newVersionNumber = $maxVersion + 1;
 
-            // Move submission to the draft job
-            $submission->job_id = $job->id;
-            $submission->save();
+            // Create a NEW submission record as a copy of the original
+            // This preserves the original submission unchanged
+            // Exclude 'ident' from replication - it must be unique and will be auto-generated
+            $newSubmission = $originalSubmission->replicate(['ident']);
+            $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString(); // Generate new unique ident
+            $newSubmission->version_number = $newVersionNumber;
+            $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
+            $newSubmission->job_id = $job->id;
+            $newSubmission->released_at = null; // New version not yet released
+            $newSubmission->save();
+
+            // Mark the original submission as not most recent (new draft is now the most recent version)
+            $originalSubmission->is_most_recent = false;
+            $originalSubmission->save();
+
+            // Copy pubmed associations
+            $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
+            $newSubmission->pubmeds()->sync($pubmedIds);
+
+            Log::info("Created new version {$newVersionNumber} of submission {$id} (new id: {$newSubmission->id}), marked original as not most recent");
 
             return response()->json(['success' => 'true',
                     'status_code' => 200,
-                    'message' => 'Submission moved to draft for republishing',
-                    'status' => $submission->status,
+                    'message' => "Created new version {$newVersionNumber} for republishing",
+                    'status' => $newSubmission->status,
+                    'version_number' => $newVersionNumber,
                     'job' => $job->slug,
-                    'submission_ident' => $submission->ident],
+                    'submission_ident' => $newSubmission->ident],
                     200);
         } catch (\Exception $e) {
+            Log::error("Republish failed for {$id}: " . $e->getMessage());
             return response()->json(['success' => 'false',
                     'status_code' => 3009,
                     'message' => 'Cannot republish: ' . $e->getMessage()],
@@ -821,13 +924,19 @@ class SubmissionController extends Controller
      */
     public function unpublish(Request $request, string $id)
     {
-        $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                        ->where('sid', $id)->first();
+        // Find the current LIVE published submission by SID
+        // Must be is_live=true (the currently publicly accessible version)
+        // Only live published submissions can be unpublished
+        $originalSubmission = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                        ->where('sid', $id)
+                        ->where('status', Submission::STATUS_PUBLISHED)
+                        ->where('is_live', true)
+                        ->first();
 
-        if ($submission === null)
+        if ($originalSubmission === null)
                 return response()->json(['success' => 'false',
                     'status_code' => 3002,
-                    'message' => 'Unauthorized'],
+                    'message' => 'Submission not found or not in unpublishable state (must be the current live version)'],
                     200);
 
         try {
@@ -840,13 +949,30 @@ class SubmissionController extends Controller
 
             if ($hasSubmittedJob) {
                 return response()->json(['success' => 'false',
-                    'status_code' => 3012,
+                    'status_code' => 3011,
                     'message' => 'Cannot unpublish submission: A submitted job is currently being processed. Please wait until processing is complete before creating new draft submissions.'],
                     200);
             }
 
+            // Check if there's already a draft version for this SID (unpublish or republish)
+            $existingDraft = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                ->where('sid', $id)
+                ->whereIn('status', [
+                    Submission::STATUS_DRAFT_UNPUBLISH,
+                    Submission::STATUS_SUBMITTED_UNPUBLISH,
+                    Submission::STATUS_DRAFT_REPUBLISH,
+                    Submission::STATUS_SUBMITTED_REPUBLISH
+                ])
+                ->first();
+
+            if ($existingDraft) {
+                return response()->json(['success' => 'false',
+                    'status_code' => 3012,
+                    'message' => 'A draft version already exists for this submission'],
+                    200);
+            }
+
             // Find or create a draft job for this submitter
-            // Look for the most recent draft job
             $job = Job::where('submitter_id', $effectiveSubmitterId)
                 ->where('status', Job::STATUS_DRAFT)
                 ->orderBy('id', 'desc')
@@ -857,7 +983,7 @@ class SubmissionController extends Controller
                 $job = new Job([
                     'user_id' => Auth::user()->id,
                     'submitter_id' => $effectiveSubmitterId,
-                    'submission_date' => Carbon::now(),
+                    // created_at is auto-set by Laravel
                     'status' => Job::STATUS_DRAFT
                 ]);
                 $job->save();
@@ -866,23 +992,37 @@ class SubmissionController extends Controller
                 Log::info("Using existing draft job {$job->slug} for unpublishing submission {$id}");
             }
 
-            // Use state machine to transition to draft_unpublish
-            // This will automatically store origin_job_id and origin_state
-            SubmissionStateMachine::transition(
-                $submission,
-                Submission::STATUS_DRAFT_UNPUBLISH,
-                $submission->status  // Store origin state
-            );
+            // Calculate the next version number
+            $maxVersion = Submission::where('sid', $id)->max('version_number') ?? 1;
+            $newVersionNumber = $maxVersion + 1;
 
-            // Move submission to the draft job
-            $submission->job_id = $job->id;
-            $submission->save();
+            // Create a NEW submission record as a copy of the original
+            // This preserves the original submission unchanged
+            $newSubmission = $originalSubmission->replicate(['ident']);
+            $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString();
+            $newSubmission->version_number = $newVersionNumber;
+            $newSubmission->status = Submission::STATUS_DRAFT_UNPUBLISH;
+            $newSubmission->job_id = $job->id;
+            $newSubmission->released_at = null;
+            $newSubmission->save();
+
+            // Mark the original submission as not most recent (historical)
+            $originalSubmission->is_most_recent = false;
+            $originalSubmission->save();
+
+            // Copy pubmed associations
+            $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
+            $newSubmission->pubmeds()->sync($pubmedIds);
+
+            Log::info("Created new version {$newVersionNumber} of submission {$id} for unpublishing (new id: {$newSubmission->id}), marked original as not most recent");
 
             return response()->json(['success' => 'true',
                     'status_code' => 200,
-                    'message' => 'Submission moved to draft for unpublishing',
-                    'status' => $submission->status,
-                    'job' => $job->slug],
+                    'message' => "Created new version {$newVersionNumber} for unpublishing",
+                    'status' => $newSubmission->status,
+                    'version_number' => $newVersionNumber,
+                    'job' => $job->slug,
+                    'submission_ident' => $newSubmission->ident],
                     200);
         } catch (\Exception $e) {
             return response()->json(['success' => 'false',
@@ -909,29 +1049,51 @@ class SubmissionController extends Controller
 
         $action = $request->input('action');
         $sids = $request->input('sids');
+        $idents = $request->input('idents');
 
-        if (empty($action) || empty($sids) || !is_array($sids)) {
+        // Support both sids and idents - idents are used for delete to target specific versions
+        $useIdents = !empty($idents) && is_array($idents);
+        $ids = $useIdents ? $idents : $sids;
+
+        if (empty($action) || empty($ids) || !is_array($ids)) {
             return response()->json([
                 'success' => 'false',
                 'status_code' => 3002,
-                'message' => 'Invalid request: action and sids array required'
+                'message' => 'Invalid request: action and sids/idents array required'
             ], 200);
+        }
+
+        // Extend execution time for large bulk operations
+        $count = count($ids);
+        if ($count > 100) {
+            set_time_limit(max(300, $count)); // At least 1 second per item, minimum 5 minutes
+        }
+
+        // For delete action, use optimized bulk delete
+        if ($action === 'delete') {
+            return $this->executeBulkDelete($request, $ids, $useIdents);
         }
 
         $successCount = 0;
         $errorCount = 0;
         $errors = [];
 
-        foreach ($sids as $sid) {
+        foreach ($ids as $id) {
             try {
                 // Use getEffectiveSubmitterQuery to automatically scope to submissions
                 // the user has access to (same pattern as republish/unpublish endpoints)
-                $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
-                    ->where('sid', $sid)
-                    ->first();
+                // When using idents, query by ident to find the specific version
+                // When using sids, query by sid (for republish/unpublish operations)
+                $query = $this->getEffectiveSubmitterQuery($request, 'submissions');
+                if ($useIdents) {
+                    $query->where('ident', $id);
+                } else {
+                    $query->where('sid', $id);
+                }
+                $submission = $query->first();
 
                 if ($submission === null) {
-                    $errors[] = "Submission {$sid} not found or unauthorized";
+                    $errors[] = "Submission {$id} not found or unauthorized";
                     $errorCount++;
                     continue;
                 }
@@ -949,14 +1111,32 @@ class SubmissionController extends Controller
                         break;
 
                     case 'cancel':
-                    case 'restore':
-                        $this->executeSingleRestore($submission);
-                        $successCount++;
-                        break;
+                        // With versioning, cancel simply deletes the draft version
+                        // The original published version remains unchanged
+                        if (in_array($submission->status, [
+                            Submission::STATUS_DRAFT_REPUBLISH,
+                            Submission::STATUS_DRAFT_UNPUBLISH
+                        ])) {
+                            $submissionSid = $submission->sid;
+                            $submissionId = $submission->id;
+                            $submission->delete();
 
-                    case 'delete':
-                        $submission->delete();
-                        $successCount++;
+                            // Restore is_most_recent=true on the previous version
+                            $previousVersion = Submission::where('sid', $submissionSid)
+                                ->where('id', '!=', $submissionId)
+                                ->orderBy('version_number', 'desc')
+                                ->first();
+
+                            if ($previousVersion && !$previousVersion->is_most_recent) {
+                                $previousVersion->is_most_recent = true;
+                                $previousVersion->save();
+                            }
+
+                            $successCount++;
+                        } else {
+                            $errors[] = "Cannot cancel {$id}: not in a draft republish/unpublish state";
+                            $errorCount++;
+                        }
                         break;
 
                     default:
@@ -964,9 +1144,9 @@ class SubmissionController extends Controller
                         $errorCount++;
                 }
             } catch (\Exception $e) {
-                $errors[] = "Error processing {$sid}: " . $e->getMessage();
+                $errors[] = "Error processing {$id}: " . $e->getMessage();
                 $errorCount++;
-                Log::error("Bulk action error for {$sid}: " . $e->getMessage());
+                Log::error("Bulk action error for {$id}: " . $e->getMessage());
             }
         }
 
@@ -986,11 +1166,200 @@ class SubmissionController extends Controller
     }
 
     /**
+     * Optimized bulk delete - deletes all matching submissions in a single query
+     */
+    private function executeBulkDelete(Request $request, array $ids, bool $useIdents)
+    {
+        // Get all submissions that can be deleted
+        $query = $this->getEffectiveSubmitterQuery($request, 'submissions');
+        if ($useIdents) {
+            $query->whereIn('ident', $ids);
+        } else {
+            $query->whereIn('sid', $ids);
+        }
+
+        // Only allow deleting draft submissions (not published)
+        $draftStatuses = [
+            Submission::STATUS_DRAFT_NEW,
+            Submission::STATUS_DRAFT_REPUBLISH,
+            Submission::STATUS_DRAFT_UNPUBLISH
+        ];
+
+        $submissions = $query->whereIn('status', $draftStatuses)->get();
+        $foundIds = $useIdents
+            ? $submissions->pluck('ident')->toArray()
+            : $submissions->pluck('sid')->toArray();
+        $notFoundIds = array_diff($ids, $foundIds);
+
+        $successCount = $submissions->count();
+        if ($successCount > 0) {
+            // For draft_republish and draft_unpublish submissions, we need to restore
+            // is_most_recent=true on the previous version before deleting
+            $republishUnpublishSids = $submissions
+                ->whereIn('status', [
+                    Submission::STATUS_DRAFT_REPUBLISH,
+                    Submission::STATUS_DRAFT_UNPUBLISH
+                ])
+                ->pluck('sid')
+                ->unique()
+                ->toArray();
+
+            // Get the IDs of submissions being deleted (to exclude from the restore query)
+            $submissionIds = $submissions->pluck('id')->toArray();
+
+            // Bulk soft delete first
+            Submission::whereIn('id', $submissionIds)->delete();
+
+            // Now restore is_most_recent on the previous versions
+            // Find the most recent non-deleted version for each SID and mark it as most recent
+            if (!empty($republishUnpublishSids)) {
+                foreach ($republishUnpublishSids as $sid) {
+                    $previousVersion = Submission::where('sid', $sid)
+                        ->orderBy('version_number', 'desc')
+                        ->first();
+
+                    if ($previousVersion && !$previousVersion->is_most_recent) {
+                        $previousVersion->is_most_recent = true;
+                        $previousVersion->save();
+                    }
+                }
+            }
+        }
+
+        $errorCount = count($notFoundIds);
+        $message = "Bulk delete completed: {$successCount} deleted";
+        if ($errorCount > 0) {
+            $message .= ", {$errorCount} not found or not deletable";
+        }
+
+        return response()->json([
+            'success' => $errorCount === 0 ? 'true' : 'partial',
+            'status_code' => 200,
+            'message' => $message,
+            'success_count' => $successCount,
+            'error_count' => $errorCount,
+            'errors' => $errorCount > 0 ? ["Some submissions not found or not in draft status"] : []
+        ], 200);
+    }
+
+    /**
+     * Handle bulk favorites operation (separate from bulkAction due to different pattern)
+     * Updates favorites for multiple submissions in a single request
+     */
+    public function bulkFavorites(Request $request)
+    {
+        $user = Auth::user();
+
+        if ($user === null) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3001,
+                'message' => 'Unauthorized'
+            ], 200);
+        }
+
+        $action = $request->input('action'); // 'favorite' or 'unfavorite'
+        $idents = $request->input('idents');
+
+        if (empty($action) || !in_array($action, ['favorite', 'unfavorite'])) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3002,
+                'message' => 'Invalid request: action must be "favorite" or "unfavorite"'
+            ], 200);
+        }
+
+        if (empty($idents) || !is_array($idents)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3002,
+                'message' => 'Invalid request: idents array required'
+            ], 200);
+        }
+
+        // Get all submissions by idents that user has access to
+        $submissions = $this->getEffectiveSubmitterQuery($request, 'submissions')
+            ->whereIn('ident', $idents)
+            ->get();
+
+        $foundIdents = $submissions->pluck('ident')->toArray();
+        $notFoundIdents = array_diff($idents, $foundIdents);
+
+        // Update user preferences
+        $preferences = $user->preferences;
+        if (!isset($preferences->sub_favorites)) {
+            $preferences->sub_favorites = [];
+        }
+
+        // Ensure sub_favorites is always an array (not stdClass)
+        if (is_object($preferences->sub_favorites)) {
+            $preferences->sub_favorites = (array) $preferences->sub_favorites;
+        }
+        if (empty($preferences->sub_favorites)) {
+            $preferences->sub_favorites = [];
+        }
+
+        $successCount = 0;
+
+        if ($action === 'favorite') {
+            // Add all found idents to favorites (avoiding duplicates)
+            foreach ($foundIdents as $ident) {
+                if (!in_array($ident, $preferences->sub_favorites)) {
+                    $preferences->sub_favorites[] = $ident;
+                    $successCount++;
+                } else {
+                    // Already a favorite - still count as success
+                    $successCount++;
+                }
+            }
+        } else {
+            // Remove all found idents from favorites
+            foreach ($foundIdents as $ident) {
+                if (($key = array_search($ident, $preferences->sub_favorites)) !== false) {
+                    unset($preferences->sub_favorites[$key]);
+                    $successCount++;
+                } else {
+                    // Not in favorites - still count as success
+                    $successCount++;
+                }
+            }
+            // Re-index array after removals
+            $preferences->sub_favorites = array_values($preferences->sub_favorites);
+        }
+
+        $user->preferences = $preferences;
+        $user->save();
+
+        $errorCount = count($notFoundIdents);
+        $message = "Bulk {$action} completed: {$successCount} succeeded";
+        if ($errorCount > 0) {
+            $message .= ", {$errorCount} not found";
+        }
+
+        return response()->json([
+            'success' => $errorCount === 0 ? 'true' : 'partial',
+            'status_code' => 200,
+            'message' => $message,
+            'success_count' => $successCount,
+            'error_count' => $errorCount,
+            'not_found' => $notFoundIdents
+        ], 200);
+    }
+
+    /**
      * Execute republish for a single submission (used by bulk action)
+     * Creates a new version record and marks the original as historical
      */
     private function executeSingleRepublish($submission, $user, $request)
     {
         Log::info("executeSingleRepublish called for {$submission->sid}, current status: {$submission->status}");
+
+        // Validate submission can be republished:
+        // Both published and unpublished submissions must be is_live=true
+        // (the current released state for this SGC ID)
+        if (!$submission->is_live) {
+            throw new \Exception('Cannot republish archived submission (not the current live version)');
+        }
 
         $effectiveSubmitterId = $this->getEffectiveSubmitterId($request);
 
@@ -1003,6 +1372,20 @@ class SubmissionController extends Controller
             throw new \Exception('Cannot republish submission: A submitted job is currently being processed');
         }
 
+        // Check if there's already a draft version for this SID
+        $existingDraft = Submission::where('sid', $submission->sid)
+            ->whereIn('status', [
+                Submission::STATUS_DRAFT_REPUBLISH,
+                Submission::STATUS_SUBMITTED_REPUBLISH,
+                Submission::STATUS_DRAFT_UNPUBLISH,
+                Submission::STATUS_SUBMITTED_UNPUBLISH
+            ])
+            ->first();
+
+        if ($existingDraft) {
+            throw new \Exception("A draft version already exists for this submission ({$existingDraft->status})");
+        }
+
         // Find or create draft job for this submitter
         $job = Job::where('submitter_id', $effectiveSubmitterId)
             ->where('status', Job::STATUS_DRAFT)
@@ -1012,34 +1395,55 @@ class SubmissionController extends Controller
             $job = new Job([
                 'user_id' => $user->id,
                 'submitter_id' => $effectiveSubmitterId,
-                'submission_date' => Carbon::now(),
                 'status' => Job::STATUS_DRAFT
             ]);
             $job->save();
-            Log::info("Created new draft job {$job->slug} for republishing submission {$submission->sid}");
+            Log::info("Created new draft job {$job->slug} for bulk republishing submission {$submission->sid}");
         } else {
-            Log::info("Using existing draft job {$job->slug} for republishing submission {$submission->sid}");
+            Log::info("Using existing draft job {$job->slug} for bulk republishing submission {$submission->sid}");
         }
 
-        // Use state machine to transition to draft_republish
-        Log::info("About to transition {$submission->sid} to draft_republish");
-        $submission = SubmissionStateMachine::transition(
-            $submission,
-            Submission::STATUS_DRAFT_REPUBLISH
-        );
-        Log::info("After transition, {$submission->sid} status is: {$submission->status}");
+        // Calculate the next version number
+        $maxVersion = Submission::where('sid', $submission->sid)->max('version_number') ?? 1;
+        $newVersionNumber = $maxVersion + 1;
 
-        // Move submission to the draft job
-        $submission->job_id = $job->id;
+        // Create a NEW submission record as a copy of the original
+        // This preserves the original submission unchanged
+        $newSubmission = $submission->replicate(['ident']);
+        $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString();
+        $newSubmission->version_number = $newVersionNumber;
+        $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
+        $newSubmission->job_id = $job->id;
+        $newSubmission->released_at = null;
+        $newSubmission->save();
+
+        // Mark the original submission as not most recent (historical)
+        $submission->is_most_recent = false;
         $submission->save();
-        Log::info("Saved {$submission->sid} with job_id: {$submission->job_id}, status: {$submission->status}");
+
+        // Copy pubmed associations
+        $pubmedIds = $submission->pubmeds()->pluck('pubmeds.id')->toArray();
+        $newSubmission->pubmeds()->sync($pubmedIds);
+
+        Log::info("Created new version {$newVersionNumber} of submission {$submission->sid} for bulk republishing");
     }
 
     /**
      * Execute unpublish for a single submission (used by bulk action)
+     * Creates a new version record and marks the original as historical
      */
     private function executeSingleUnpublish($submission, $user, $request)
     {
+        // Validate submission can be unpublished:
+        // - Only published submissions can be unpublished
+        // - Published submissions must be is_live=true (current publicly accessible version)
+        if ($submission->status !== Submission::STATUS_PUBLISHED) {
+            throw new \Exception('Only published submissions can be unpublished');
+        }
+        if (!$submission->is_live) {
+            throw new \Exception('Cannot unpublish archived submission (not the current live version)');
+        }
+
         $effectiveSubmitterId = $this->getEffectiveSubmitterId($request);
 
         // Check for submitted jobs - cannot create/use draft job if submitted job exists
@@ -1051,6 +1455,20 @@ class SubmissionController extends Controller
             throw new \Exception('Cannot unpublish submission: A submitted job is currently being processed');
         }
 
+        // Check if there's already a draft version for this SID (unpublish or republish)
+        $existingDraft = Submission::where('sid', $submission->sid)
+            ->whereIn('status', [
+                Submission::STATUS_DRAFT_UNPUBLISH,
+                Submission::STATUS_SUBMITTED_UNPUBLISH,
+                Submission::STATUS_DRAFT_REPUBLISH,
+                Submission::STATUS_SUBMITTED_REPUBLISH
+            ])
+            ->first();
+
+        if ($existingDraft) {
+            throw new \Exception("A draft version already exists for this submission ({$existingDraft->status})");
+        }
+
         // Find or create draft job for this submitter
         $job = Job::where('submitter_id', $effectiveSubmitterId)
             ->where('status', Job::STATUS_DRAFT)
@@ -1060,31 +1478,94 @@ class SubmissionController extends Controller
             $job = new Job([
                 'user_id' => $user->id,
                 'submitter_id' => $effectiveSubmitterId,
-                'submission_date' => Carbon::now(),
                 'status' => Job::STATUS_DRAFT
             ]);
             $job->save();
+            Log::info("Created new draft job {$job->slug} for bulk unpublishing submission {$submission->sid}");
         }
 
-        // Use state machine to transition to draft_unpublish
-        $submission = SubmissionStateMachine::transition(
-            $submission,
-            Submission::STATUS_DRAFT_UNPUBLISH,
-            $submission->status  // Store origin state
-        );
+        // Calculate the next version number
+        $maxVersion = Submission::where('sid', $submission->sid)->max('version_number') ?? 1;
+        $newVersionNumber = $maxVersion + 1;
 
-        // Move submission to the draft job
-        $submission->job_id = $job->id;
+        // Create a NEW submission record as a copy of the original
+        // This preserves the original submission unchanged
+        $newSubmission = $submission->replicate(['ident']);
+        $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString();
+        $newSubmission->version_number = $newVersionNumber;
+        $newSubmission->status = Submission::STATUS_DRAFT_UNPUBLISH;
+        $newSubmission->job_id = $job->id;
+        $newSubmission->released_at = null;
+        $newSubmission->save();
+
+        // Mark the original submission as not most recent (historical)
+        $submission->is_most_recent = false;
         $submission->save();
+
+        // Copy pubmed associations
+        $pubmedIds = $submission->pubmeds()->pluck('pubmeds.id')->toArray();
+        $newSubmission->pubmeds()->sync($pubmedIds);
+
+        Log::info("Created new version {$newVersionNumber} of submission {$submission->sid} for bulk unpublishing (new id: {$newSubmission->id}), marked original as not most recent");
     }
 
     /**
-     * Execute restore for a single submission (used by bulk action)
+     * Export submissions to Excel using the template file
+     * Preserves template formatting and appends data starting at row 13
      */
-    private function executeSingleRestore($submission)
+    public function exportToTemplate(Request $request)
     {
-        // Use state machine cancel method to restore submission to previous state
-        SubmissionStateMachine::cancel($submission);
-        $submission->save();
+        Log::info('exportToTemplate called');
+
+        $user = Auth::user();
+
+        if ($user === null) {
+            Log::warning('exportToTemplate: No authenticated user');
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3001,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        Log::info('exportToTemplate: User authenticated: ' . $user->email);
+
+        $submissions = $request->input('submissions');
+        Log::info('exportToTemplate: Received ' . (is_array($submissions) ? count($submissions) : 0) . ' submissions');
+
+        if (empty($submissions) || !is_array($submissions)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3002,
+                'message' => 'No submissions provided'
+            ], 400);
+        }
+
+        try {
+            $export = new SubmissionsTemplateExport($submissions);
+            $spreadsheet = $export->generate();
+
+            // Create writer and output
+            $writer = new Xlsx($spreadsheet);
+
+            // Create response with proper headers
+            $filename = 'submissions_export_' . date('Y-m-d_His') . '.xlsx';
+
+            return response()->streamDownload(function() use ($writer) {
+                $writer->save('php://output');
+            }, $filename, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Cache-Control' => 'max-age=0',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Export to template failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 500,
+                'message' => 'Export failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

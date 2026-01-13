@@ -1,15 +1,19 @@
 {
-	"action": "{{ $action_type }}", 
 	"date": "{{ $timestamp }}",
 	"token": "{{ $token }}",
 	"job": "{{ $job->slug }}",
-	"publish_date": "{{ $job->submission_date }}",
+	"publish_date": "{{ $job->released_at }}",
+	@if($submission->unpublished_at)
+	"unpublished_at": "{{ $submission->unpublished_at->toIso8601String() }}",
+	@endif
 	"data":  {
 				"type": "Submission",
 				"submission_id": "{{ $submission->sid }}",
+				"version_number": {{ $submission->version_number ?? 1 }},
+				"is_most_recent": {{ $submission->is_most_recent ? 'true' : 'false' }},
 				"submission_label": "{{ $submission->friendly }}",
 				"local_key": "{{ $submission->local_key }}",
-				"submitted": "{{ $submission->submission_date }}",
+				"submitted": "{{ $submission->created_at }}",
 				"status": "{{ $submission->display_status }}",
 				"gene": {
 					"id": "{{ $submission->gene->hgnc_id }}",

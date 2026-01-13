@@ -8,8 +8,23 @@ import wind from "./Presets/wind";
 
 
 import { createApp, h } from 'vue';
-import { createInertiaApp } from '@inertiajs/vue3';
+import { createInertiaApp, router } from '@inertiajs/vue3';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
+
+// Handle session expiration and CSRF token mismatch errors
+// When a 419 (CSRF) or 401 (Unauthenticated) error occurs, refresh the page
+// to get a new session/token instead of showing a confusing error
+router.on('invalid', (event) => {
+    const status = event.detail.response.status;
+
+    // 419 = CSRF token mismatch (session expired)
+    // 401 = Unauthenticated
+    if (status === 419 || status === 401) {
+        event.preventDefault();
+        // Reload the page to get fresh CSRF token and redirect to login
+        window.location.reload();
+    }
+});
 import ConfirmationService from 'primevue/confirmationservice';
 import PrimeVue from "primevue/config";
 import DataTable from 'primevue/datatable';

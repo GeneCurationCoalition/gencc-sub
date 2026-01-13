@@ -34,6 +34,19 @@ use App\Http\Controllers\SubmissionDirectionsController;
         ]);
     });
 
+    // Download GenCC submission template (public - no auth required)
+    Route::get('/download/template', function () {
+        $templatePath = storage_path('app/templates/GenCC Submission Spreadsheet.xlsx');
+
+        // If local template exists, serve it
+        if (file_exists($templatePath)) {
+            return response()->download($templatePath, 'GenCC Submission Spreadsheet.xlsx');
+        }
+
+        // Fallback to external URL
+        return redirect('https://search.thegencc.org/download/gene-curations-template');
+    })->name('download.template');
+
     Route::middleware([
         'auth:sanctum',
         config('jetstream.auth_session'),

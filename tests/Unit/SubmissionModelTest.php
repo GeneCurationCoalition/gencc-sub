@@ -62,17 +62,30 @@ class SubmissionModelTest extends TestCase
 
     /**
      * Test status constants exist
+     *
+     * With the simplified status model (Phase 2), we have 5 status values:
+     * - Pending (action-based): new, republish, unpublish
+     * - Released (visibility-based): published, unpublished
+     *
+     * The deprecated compound constants (STATUS_DRAFT_*, STATUS_SUBMITTED_*) are
+     * aliased to the new simplified values for backwards compatibility.
      */
     public function test_status_constants_exist(): void
     {
-        $this->assertEquals('draft_new', Submission::STATUS_DRAFT_NEW);
-        $this->assertEquals('submitted_new', Submission::STATUS_SUBMITTED_NEW);
+        // New simplified status constants
+        $this->assertEquals('new', Submission::STATUS_NEW);
+        $this->assertEquals('republish', Submission::STATUS_REPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_UNPUBLISH);
         $this->assertEquals('published', Submission::STATUS_PUBLISHED);
-        $this->assertEquals('draft_republish', Submission::STATUS_DRAFT_REPUBLISH);
-        $this->assertEquals('submitted_republish', Submission::STATUS_SUBMITTED_REPUBLISH);
-        $this->assertEquals('draft_unpublish', Submission::STATUS_DRAFT_UNPUBLISH);
-        $this->assertEquals('submitted_unpublish', Submission::STATUS_SUBMITTED_UNPUBLISH);
         $this->assertEquals('unpublished', Submission::STATUS_UNPUBLISHED);
+
+        // Deprecated aliases should map to new values
+        $this->assertEquals('new', Submission::STATUS_DRAFT_NEW);
+        $this->assertEquals('new', Submission::STATUS_SUBMITTED_NEW);
+        $this->assertEquals('republish', Submission::STATUS_DRAFT_REPUBLISH);
+        $this->assertEquals('republish', Submission::STATUS_SUBMITTED_REPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_DRAFT_UNPUBLISH);
+        $this->assertEquals('unpublish', Submission::STATUS_SUBMITTED_UNPUBLISH);
     }
 
     /**
@@ -149,21 +162,30 @@ class SubmissionModelTest extends TestCase
 
     /**
      * Test scopeSubmittedStates works
+     *
+     * Note: With the simplified status model, scopeSubmittedStates is deprecated
+     * and now returns pending submissions (same as scopeDraftStates) because
+     * stage (draft/submitted) is derived from Job.status, not submission.status.
+     *
+     * To find submissions in a submitted job, join with jobs table.
      */
     public function test_scope_submitted_states_works(): void
     {
-        $submittedNew = Submission::factory()->create(['status' => Submission::STATUS_SUBMITTED_NEW]);
-        $submittedRepublish = Submission::factory()->create(['status' => Submission::STATUS_SUBMITTED_REPUBLISH]);
-        $submittedUnpublish = Submission::factory()->create(['status' => Submission::STATUS_SUBMITTED_UNPUBLISH]);
-        $draft = Submission::factory()->create(['status' => Submission::STATUS_DRAFT_NEW]);
+        // Create pending submissions (all use the same simplified statuses now)
+        $newSubmission = Submission::factory()->create(['status' => Submission::STATUS_NEW]);
+        $republishSubmission = Submission::factory()->create(['status' => Submission::STATUS_REPUBLISH]);
+        $unpublishSubmission = Submission::factory()->create(['status' => Submission::STATUS_UNPUBLISH]);
+        $published = Submission::factory()->create(['status' => Submission::STATUS_PUBLISHED]);
 
+        // With simplified model, submittedStates returns all pending submissions
+        // (same as draftStates - both are deprecated and map to pending)
         $results = Submission::submittedStates()->get();
 
         $this->assertCount(3, $results);
-        $this->assertTrue($results->contains($submittedNew));
-        $this->assertTrue($results->contains($submittedRepublish));
-        $this->assertTrue($results->contains($submittedUnpublish));
-        $this->assertFalse($results->contains($draft));
+        $this->assertTrue($results->contains($newSubmission));
+        $this->assertTrue($results->contains($republishSubmission));
+        $this->assertTrue($results->contains($unpublishSubmission));
+        $this->assertFalse($results->contains($published));
     }
 
     /**
@@ -346,45 +368,6 @@ class SubmissionModelTest extends TestCase
     }
 
     /**
-     * Test restoreFromSnapshot restores values
-     */
-    public function test_restore_from_snapshot(): void
-    {
-        $submission = Submission::factory()->create([
-            'gene_id' => 999,
-            'disease_id' => 888,
-            'local_key' => 'CHANGED',
-            'origin_snapshot' => [
-                'gene_id' => 123,
-                'disease_id' => 456,
-                'local_key' => 'ORIGINAL'
-            ]
-        ]);
-
-        $submission->restoreFromSnapshot();
-
-        $this->assertEquals(123, $submission->gene_id);
-        $this->assertEquals(456, $submission->disease_id);
-        $this->assertEquals('ORIGINAL', $submission->local_key);
-    }
-
-    /**
-     * Test restoreFromSnapshot does nothing when no snapshot
-     */
-    public function test_restore_from_snapshot_does_nothing_when_empty(): void
-    {
-        $submission = Submission::factory()->create([
-            'gene_id' => 999,
-            'origin_snapshot' => null
-        ]);
-
-        $originalGeneId = $submission->gene_id;
-        $submission->restoreFromSnapshot();
-
-        $this->assertEquals($originalGeneId, $submission->gene_id);
-    }
-
-    /**
      * Test soft delete works
      */
     public function test_soft_delete_works(): void
@@ -399,38 +382,38 @@ class SubmissionModelTest extends TestCase
     }
 
     /**
-     * Test published_at is set when status changes to published
+     * Test released_at is set when status changes to published
      */
-    public function test_published_at_set_on_publish(): void
+    public function test_released_at_set_on_publish(): void
     {
         $submission = Submission::factory()->create([
             'status' => Submission::STATUS_SUBMITTED_NEW,
-            'published_at' => null
+            'released_at' => null
         ]);
 
         $submission->status = Submission::STATUS_PUBLISHED;
         $submission->save();
 
-        $this->assertNotNull($submission->published_at);
+        $this->assertNotNull($submission->released_at);
     }
 
     /**
-     * Test published_at not overwritten if already set
+     * Test released_at not overwritten if already set
      */
-    public function test_published_at_not_overwritten(): void
+    public function test_released_at_not_overwritten(): void
     {
         $originalDate = Carbon::now()->subMonth();
 
         $submission = Submission::factory()->create([
             'status' => Submission::STATUS_PUBLISHED,
-            'published_at' => $originalDate
+            'released_at' => $originalDate
         ]);
 
         // Force a re-save
         $submission->status = Submission::STATUS_PUBLISHED;
         $submission->save();
 
-        $this->assertEquals($originalDate->format('Y-m-d H:i:s'), $submission->published_at->format('Y-m-d H:i:s'));
+        $this->assertEquals($originalDate->format('Y-m-d H:i:s'), $submission->released_at->format('Y-m-d H:i:s'));
     }
 
     /**
@@ -456,5 +439,225 @@ class SubmissionModelTest extends TestCase
         $this->assertCount(2, $submission->pubmeds);
         $this->assertTrue($submission->pubmeds->contains($pubmed1));
         $this->assertTrue($submission->pubmeds->contains($pubmed2));
+    }
+
+    /**
+     * Test is_live defaults to false for new submissions
+     */
+    public function test_is_live_defaults_to_false(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_NEW
+        ]);
+
+        $this->assertFalse($submission->is_live);
+    }
+
+    /**
+     * Test is_live can be set to true for published submissions
+     */
+    public function test_is_live_can_be_set_to_true(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true
+        ]);
+
+        $this->assertTrue($submission->is_live);
+    }
+
+    /**
+     * Test isArchived returns false for live published submission
+     */
+    public function test_is_archived_false_for_live_published(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true
+        ]);
+
+        $this->assertFalse($submission->isArchived());
+        $this->assertFalse($submission->is_archived);
+    }
+
+    /**
+     * Test isArchived returns true for non-live published submission
+     */
+    public function test_is_archived_true_for_non_live_published(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false
+        ]);
+
+        $this->assertTrue($submission->isArchived());
+        $this->assertTrue($submission->is_archived);
+    }
+
+    /**
+     * Test isArchived returns true for non-live unpublished submission (archived by newer release)
+     */
+    public function test_is_archived_true_for_non_live_unpublished(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_UNPUBLISHED,
+            'is_live' => false
+        ]);
+
+        $this->assertTrue($submission->isArchived());
+        $this->assertTrue($submission->is_archived);
+    }
+
+    /**
+     * Test isArchived returns false for live unpublished submission
+     *
+     * An unpublished submission that is live represents the current state
+     * of that SGC ID (hidden from public view, but that IS the live state).
+     */
+    public function test_is_archived_false_for_live_unpublished(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_UNPUBLISHED,
+            'is_live' => true
+        ]);
+
+        $this->assertFalse($submission->isArchived());
+        $this->assertFalse($submission->is_archived);
+        $this->assertTrue($submission->isLive());
+    }
+
+    /**
+     * Test isArchived returns false for draft submissions (regardless of is_live)
+     */
+    public function test_is_archived_false_for_draft_submissions(): void
+    {
+        $draftNew = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_NEW,
+            'is_live' => false
+        ]);
+        $draftRepublish = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_REPUBLISH,
+            'is_live' => false
+        ]);
+        $draftUnpublish = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_UNPUBLISH,
+            'is_live' => false
+        ]);
+
+        $this->assertFalse($draftNew->isArchived());
+        $this->assertFalse($draftRepublish->isArchived());
+        $this->assertFalse($draftUnpublish->isArchived());
+    }
+
+    /**
+     * Test isArchived returns false for submitted submissions (regardless of is_live)
+     */
+    public function test_is_archived_false_for_submitted_submissions(): void
+    {
+        $submittedNew = Submission::factory()->create([
+            'status' => Submission::STATUS_SUBMITTED_NEW,
+            'is_live' => false
+        ]);
+        $submittedRepublish = Submission::factory()->create([
+            'status' => Submission::STATUS_SUBMITTED_REPUBLISH,
+            'is_live' => false
+        ]);
+        $submittedUnpublish = Submission::factory()->create([
+            'status' => Submission::STATUS_SUBMITTED_UNPUBLISH,
+            'is_live' => false
+        ]);
+
+        $this->assertFalse($submittedNew->isArchived());
+        $this->assertFalse($submittedRepublish->isArchived());
+        $this->assertFalse($submittedUnpublish->isArchived());
+    }
+
+    /**
+     * Test isLive helper method
+     */
+    public function test_is_live_helper_method(): void
+    {
+        $liveSubmission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true
+        ]);
+        $archivedSubmission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false
+        ]);
+
+        $this->assertTrue($liveSubmission->isLive());
+        $this->assertFalse($archivedSubmission->isLive());
+    }
+
+    /**
+     * Test scopeLive returns only live submissions
+     */
+    public function test_scope_live(): void
+    {
+        $live = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true
+        ]);
+        $archived = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false
+        ]);
+        $draft = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_NEW,
+            'is_live' => false
+        ]);
+
+        $results = Submission::live()->get();
+
+        $this->assertCount(1, $results);
+        $this->assertEquals($live->id, $results->first()->id);
+    }
+
+    /**
+     * Test scopeArchived returns only archived released submissions
+     */
+    public function test_scope_archived(): void
+    {
+        $live = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true
+        ]);
+        $archivedPublished = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false
+        ]);
+        $archivedUnpublished = Submission::factory()->create([
+            'status' => Submission::STATUS_UNPUBLISHED,
+            'is_live' => false
+        ]);
+        $draft = Submission::factory()->create([
+            'status' => Submission::STATUS_DRAFT_NEW,
+            'is_live' => false
+        ]);
+
+        $results = Submission::archived()->get();
+
+        $this->assertCount(2, $results);
+        $this->assertTrue($results->contains($archivedPublished));
+        $this->assertTrue($results->contains($archivedUnpublished));
+        $this->assertFalse($results->contains($live));
+        $this->assertFalse($results->contains($draft));
+    }
+
+    /**
+     * Test is_archived is included in JSON serialization
+     */
+    public function test_is_archived_in_json(): void
+    {
+        $submission = Submission::factory()->create([
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => false
+        ]);
+
+        $json = $submission->toArray();
+
+        $this->assertArrayHasKey('is_archived', $json);
+        $this->assertTrue($json['is_archived']);
     }
 }

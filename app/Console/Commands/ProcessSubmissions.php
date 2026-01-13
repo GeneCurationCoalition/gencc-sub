@@ -52,15 +52,15 @@ class ProcessSubmissions extends Command
                 if ($submission->status === Submission::STATUS_SUBMITTED_NEW) {
                     // New submission -> published
                     $submission->status = Submission::STATUS_PUBLISHED;
-                    $submission->published_at = now();
+                    $submission->released_at = now();
                 } elseif ($submission->status === Submission::STATUS_SUBMITTED_REPUBLISH) {
                     // Republish -> published
                     $submission->status = Submission::STATUS_PUBLISHED;
-                    $submission->published_at = now();
+                    $submission->released_at = now();
                 } elseif ($submission->status === Submission::STATUS_SUBMITTED_UNPUBLISH) {
                     // Unpublish -> unpublished
                     $submission->status = Submission::STATUS_UNPUBLISHED;
-                    $submission->published_at = null;
+                    $submission->released_at = null;
                 }
                 $submission->save();
             }

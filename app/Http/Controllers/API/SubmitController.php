@@ -90,7 +90,7 @@ class SubmitController extends Controller
                 200);
         }
 
-        $submission_date = Carbon::now();
+        // created_at is auto-set by Laravel when saving
 
         // build a new job entry
         // TODO: LEGACY STATUS - Migrate to V2 status in Phase 2
@@ -100,7 +100,7 @@ class SubmitController extends Controller
                     'type' => Job::TYPE_API_SUBMISSION,
                     'user_id' => $user->id,
                     'submitter_id' => $submitter->id,
-                    'submission_date' => $submission_date,
+                    // created_at is auto-set by Laravel
                     'submission_data' => $packet,
                     'status' => Job::STATUS_PROCESSING
         ]);
@@ -114,7 +114,7 @@ class SubmitController extends Controller
                     switch ($data->action)
                     {
                         case "new":
-                            $submission = new Submission(['submission_date' => $submission_date]);
+                            $submission = new Submission();
                             $submission->submitter_id = $submitter->id;
                             break;
                         case "update":

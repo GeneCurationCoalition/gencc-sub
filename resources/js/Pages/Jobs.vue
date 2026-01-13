@@ -154,7 +154,7 @@ onUnmounted(() => {
                 Jobs
                 <div v-if="canCreateJob || canUploadToExisting" class="float-right mt-2 flex gap-3">
                     <Button label="Upload Submissions" severity="success" @click="createJobAndUpload" icon="pi pi-upload"/>
-                    <Button v-if="canCreateJob" label="Create a New Job" severity="info" @click="createJobDirectly"/>
+                    <Button v-if="canCreateJob" label="Create a New Job" severity="info" icon="pi pi-plus-circle" @click="createJobDirectly"/>
                 </div>
             </h2>
         </template>

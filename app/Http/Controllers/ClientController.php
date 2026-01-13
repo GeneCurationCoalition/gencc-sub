@@ -238,14 +238,14 @@ class ClientController extends Controller
     {
         // create a new job object
         $job = new Nodal();
-        $job->submission_date = Carbon::now();
+        $job->created_at = Carbon::now();
         $job->gencc_submitter_id = "GENCC:000102";
         $job->submitter_organization_name = "ClinGen";
 
 
         // create a submission data object
         $data = new Nodal();
-        $data->submission_date = Carbon::now();
+        $data->created_at = Carbon::now();
         $data->submission_label = "325ca62f-064b-4013-978b-6f9400a9ae74";
         $data->local_key = "12345";
         $data->uuid = "GENCC_000101-HGNC_26182-MONDO_0100105-HP_0000007-GENCC_100003";

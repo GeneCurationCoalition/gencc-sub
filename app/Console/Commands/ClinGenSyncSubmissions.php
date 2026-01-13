@@ -28,8 +28,16 @@ class ClinGenSyncSubmissions extends Command
     {
         $this->info('Starting ClinGen GCI Sync process...');
 
-        // Path to the pipeline script
-        $scriptPath = base_path('scripts/clingen_pipeline/run_clingen_full_process.py');
+        // Path to the pipeline script (v2.0 - uses modular Python package)
+        $scriptPath = base_path('scripts/run_clingen_pipeline.py');
+
+        // Fall back to archived scripts if new one doesn't exist
+        if (!file_exists($scriptPath)) {
+            $scriptPath = base_path('scripts/archived_clingen_scripts/run_clingen_pipeline.py');
+        }
+        if (!file_exists($scriptPath)) {
+            $scriptPath = base_path('scripts/archived_clingen_scripts/run_clingen_full_process.py');
+        }
 
         if (!file_exists($scriptPath)) {
             $this->error("Pipeline script not found: {$scriptPath}");
@@ -38,6 +46,7 @@ class ClinGenSyncSubmissions extends Command
 
         // Run the pipeline script
         $this->info('Running ClinGen pipeline...');
+        $this->info("Script: {$scriptPath}");
         $output = [];
         $returnCode = 0;
 

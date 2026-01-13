@@ -48,8 +48,12 @@ class Submission extends Model
         'evidence' => 'object',
         'history' => 'array',
         'tags' => 'array',
-        'published_at' => 'datetime',
-        'origin_snapshot' => 'array'
+        'submitted_at' => 'datetime',
+        'released_at' => 'datetime',
+        'unpublished_at' => 'datetime',
+        'version_number' => 'integer',
+        'is_most_recent' => 'boolean',
+        'is_live' => 'boolean'
     ];
 
     /**
@@ -59,29 +63,56 @@ class Submission extends Model
      */
 	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
-                            'uuid', 'sid', 'job_id', 'user_id', 'evidence', 'original_submission_data',
-                            'submission_date', 'submission_data', 'submission_errors', 'history', 'tags',
-                            'status', 'origin_state', 'origin_job_id', 'local_key', 'last_edited_by',
-                            'document_id'];
+                            'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'original_submission_data',
+                            'submission_data', 'submission_errors', 'history', 'tags',
+                            'status', 'action', 'origin_state', 'local_key', 'last_edited_by',
+                            'document_id', 'submitted_at', 'released_at', 'unpublished_at'];
 
 	/**
      * Non-persistent storage model attributes.
      *
      * @var array
      */
-    protected $appends = ['last_edited_by_admin'];
+    protected $appends = ['last_edited_by_admin', 'display_id', 'is_archived'];
 
     /**
-     * String-based status constants for submission workflow
+     * String-based status constants for submission workflow (simplified)
+     *
+     * Pending statuses (action-based):
+     * - new: First submission for this SGC ID (v1)
+     * - republish: Update to existing submission (v2+)
+     * - unpublish: Hide existing submission (v2+)
+     *
+     * Released statuses (visibility-based):
+     * - published: Visible in gencc-search
+     * - unpublished: Hidden from gencc-search
+     *
+     * Stage (draft/submitted) is derived from Job.status, not stored here.
      */
-    public const STATUS_DRAFT_NEW = 'draft_new';
-    public const STATUS_SUBMITTED_NEW = 'submitted_new';
+    public const STATUS_NEW = 'new';
+    public const STATUS_REPUBLISH = 'republish';
+    public const STATUS_UNPUBLISH = 'unpublish';
     public const STATUS_PUBLISHED = 'published';
-    public const STATUS_DRAFT_REPUBLISH = 'draft_republish';
-    public const STATUS_SUBMITTED_REPUBLISH = 'submitted_republish';
-    public const STATUS_DRAFT_UNPUBLISH = 'draft_unpublish';
-    public const STATUS_SUBMITTED_UNPUBLISH = 'submitted_unpublish';
     public const STATUS_UNPUBLISHED = 'unpublished';
+
+    /**
+     * @deprecated Legacy compound status constants - use simple STATUS_* constants above.
+     * These are kept for backwards compatibility during migration.
+     */
+    public const STATUS_DRAFT_NEW = 'new';
+    public const STATUS_SUBMITTED_NEW = 'new';
+    public const STATUS_DRAFT_REPUBLISH = 'republish';
+    public const STATUS_SUBMITTED_REPUBLISH = 'republish';
+    public const STATUS_DRAFT_UNPUBLISH = 'unpublish';
+    public const STATUS_SUBMITTED_UNPUBLISH = 'unpublish';
+
+    /**
+     * Action constants for audit trail
+     * These represent the original intent of the submission
+     */
+    public const ACTION_NEW = 'new';
+    public const ACTION_REPUBLISH = 'republish';
+    public const ACTION_UNPUBLISH = 'unpublish';
 
     /**
      * @deprecated Legacy integer status constants - only kept for migration commands.
@@ -95,19 +126,43 @@ class Submission extends Model
     public const LEGACY_STATUS_PUBLISHED = 20;
 
     /*
-     * Status strings for display methods (string-based status)
+     * Status strings for display methods (simplified status)
+     * For pending statuses, stage is derived from Job.status
      *
      * @var array
      * */
     protected $status_strings = [
+        // Pending statuses (stage derived from Job)
+        'new' => 'New',
+        'republish' => 'Republish',
+        'unpublish' => 'Unpublish',
+        // Released statuses
+        'published' => 'Published',
+        'unpublished' => 'Unpublished',
+        // Legacy compound statuses (backwards compatibility)
         'draft_new' => 'Draft (New)',
         'submitted_new' => 'Submitted (New)',
-        'published' => 'Published',
         'draft_republish' => 'Draft (Republish)',
         'submitted_republish' => 'Submitted (Republish)',
         'draft_unpublish' => 'Draft (Unpublish)',
-        'submitted_unpublish' => 'Submitted (Unpublish)',
-        'unpublished' => 'Unpublished'
+        'submitted_unpublish' => 'Submitted (Unpublish)'
+    ];
+
+    /**
+     * Pending status values (action-based)
+     */
+    protected static $pendingStatuses = [
+        self::STATUS_NEW,
+        self::STATUS_REPUBLISH,
+        self::STATUS_UNPUBLISH,
+    ];
+
+    /**
+     * Released status values (visibility-based)
+     */
+    protected static $releasedStatuses = [
+        self::STATUS_PUBLISHED,
+        self::STATUS_UNPUBLISHED,
     ];
 
     public const TYPE_NONE = 0;
@@ -153,47 +208,61 @@ class Submission extends Model
 
 
     /**
-     * To guarantee uniqueness of generated submission ids (sids), we base them off the
-     * tables id field.  This means a quick update after a record is newly
-     * created.  Since the record is still cached, the update is immediate.
+     * Generate a new unique SID using the sgc_sequences table.
+     * This ensures sequential SIDs even when versioned submissions share the same SID.
      *
+     * @return string The new SID in format SGC-1XXXXX
+     */
+    public static function generateNewSid(): string
+    {
+        $sequenceId = \DB::table('sgc_sequences')->insertGetId(['created_at' => now()]);
+        return 'SGC-1' . str_pad($sequenceId, 5, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Auto-generate SID for new submissions using the sequence table.
+     * Only generates a new SID if one is not already set (versioned submissions
+     * inherit their SID from the original submission).
      */
     public static function booted(): void
     {
         static::created(function (Model $model) {
             if ($model->sid === null || $model->sid == '') {
+                // Generate a new SID using the sequence table
+                $newSid = self::generateNewSid();
+
                 // Update sid without triggering timestamp updates to preserve historical dates during imports
                 // Use a direct DB update to avoid any issues with model save() overwriting other attributes
                 // (e.g., document_id was being lost when $model->save() was called here)
                 \DB::table('submissions')
                     ->where('id', $model->id)
-                    ->update(['sid' => 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT)]);
+                    ->update(['sid' => $newSid]);
 
                 // Update the model in memory to reflect the change
-                $model->sid = 'SGC-1' . str_pad($model->id, 5, '0', STR_PAD_LEFT);
+                $model->sid = $newSid;
                 $model->syncOriginal(); // Reset dirty tracking to match DB state
             }
         });
 
-        // Set published_at when submission status changes to PUBLISHED (for non-import workflows)
+        // Set released_at when submission status changes to PUBLISHED (for non-import workflows)
         // Only set if:
         // - status is changing to PUBLISHED
-        // - published_at is not already set
-        // - we're not just updating published_at (backfill scenario)
+        // - released_at is not already set
+        // - we're not just updating released_at (backfill scenario)
         static::updating(function (Model $model) {
             $dirty = $model->getDirty();
 
-            // Skip if we're updating published_at (backfill scenario)
-            if ($model->isDirty('published_at')) {
-                \Log::info("Skipping published_at auto-set for submission {$model->id} - published_at is dirty (backfill)");
+            // Skip if we're updating released_at (backfill scenario)
+            if ($model->isDirty('released_at')) {
+                \Log::info("Skipping released_at auto-set for submission {$model->id} - released_at is dirty (backfill)");
                 return;
             }
 
             if ($model->isDirty('status') &&
                 $model->status == self::STATUS_PUBLISHED &&
-                $model->published_at === null) {
-                \Log::info("Setting published_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
-                $model->published_at = Carbon::now();
+                $model->released_at === null) {
+                \Log::info("Setting released_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
+                $model->released_at = Carbon::now();
             }
         });
     }
@@ -238,13 +307,6 @@ class Submission extends Model
     }
 
 
-    /**
-     * Get the origin job this submission can be restored to (V2 state model)
-     */
-    public function originJob()
-    {
-       return $this->belongsTo('App\Models\Job', 'origin_job_id');
-    }
 
 
     /**
@@ -410,6 +472,29 @@ class Submission extends Model
 
 
     /**
+     * Query scope for live submissions (publicly accessible)
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeLive($query)
+    {
+		return $query->where('is_live', true);
+    }
+
+
+    /**
+     * Query scope for archived submissions (released but superseded by newer release)
+     *
+     * @return Illuminate\Database\Eloquent\Collection
+     */
+	public function scopeArchived($query)
+    {
+		return $query->whereIn('status', [self::STATUS_PUBLISHED, self::STATUS_UNPUBLISHED])
+                     ->where('is_live', false);
+    }
+
+
+    /**
      * Query scope by specific status
      *
      * @param string $status
@@ -434,8 +519,9 @@ class Submission extends Model
 	public function scopeForListing($query)
     {
 		return $query->select('id', 'gene_id', 'user_id', 'disease_id', 'original_disease_id', 'inheritance_id',
-                              'classification_id', 'submitter_id', 'job_id', 'origin_job_id', 'ident', 'sid',
-                              'local_key', 'friendly', 'submission_date', 'publish_date',
+                              'classification_id', 'submitter_id', 'job_id', 'ident', 'sid',
+                              'version_number', 'is_most_recent', 'is_live', // Required for display_id accessor and historical/archived version styling
+                              'local_key', 'friendly', 'created_at', 'submitted_at', 'released_at', 'unpublished_at', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
                               // Removed: 'original_submission_data', 'evidence' - too large for listing
                               'submission_data', 'submission_errors', 'status', 'origin_state')
@@ -445,25 +531,60 @@ class Submission extends Model
                      ->with('inheritance:id,curie,name')
                      ->with('classification:id,curie,name')
                      ->with('submitter:id,curie,name')
-                     ->with('job:id,status')
-                     ->with('originJob:id,slug');
-    }
-
-
-    /**
-     * Get a display formatted form of job status
-     *
-     * @@param
-     * @return
-     */
-    public function getDisplayStatusAttribute()
-    {
-       return $this->status_strings[$this->status] ?? 'Unknown';
+                     ->with('job:id,ident,slug,status');
     }
 
 
     /**
      * Get a display formatted form of submission status
+     * For pending submissions, includes stage derived from Job.status
+     *
+     * @return string
+     */
+    public function getDisplayStatusAttribute()
+    {
+        // For pending statuses, prefix with stage from Job
+        if ($this->isPending() && $this->job) {
+            $stage = $this->job->status === 'submitted' ? 'Submitted' : 'Draft';
+            $statusLabel = $this->status_strings[$this->status] ?? ucfirst($this->status);
+            return "{$stage} ({$statusLabel})";
+        }
+
+        return $this->status_strings[$this->status] ?? 'Unknown';
+    }
+
+    /**
+     * Check if this submission is in a pending state (not yet released)
+     *
+     * @return bool
+     */
+    public function isPending(): bool
+    {
+        return in_array($this->status, self::$pendingStatuses);
+    }
+
+    /**
+     * Check if this submission is in a released state
+     *
+     * @return bool
+     */
+    public function isReleased(): bool
+    {
+        return in_array($this->status, self::$releasedStatuses);
+    }
+
+    /**
+     * Get the stage of this submission (derived from Job.status)
+     *
+     * @return string|null
+     */
+    public function getStageAttribute(): ?string
+    {
+        return $this->job?->status;
+    }
+
+    /**
+     * Get a display formatted form of submission status for JSON
      *
      * @@param
      * @return
@@ -510,6 +631,86 @@ class Submission extends Model
 
         // submission_errors is cast as object, check if it has any properties
         return count((array) $this->submission_errors) > 0;
+    }
+
+    /**
+     * Get the display ID (SGC ID with version number).
+     * Format: SGC-XXXXXX.N (e.g., SGC-100001.2)
+     *
+     * @return string
+     */
+    public function getDisplayIdAttribute(): string
+    {
+        return $this->sid . '.' . ($this->version_number ?? 1);
+    }
+
+
+    /**
+     * Check if this submission is archived (superseded by a newer released version).
+     *
+     * A submission is archived if:
+     * - It has been released (published or unpublished status)
+     * - It is not currently live (is_live = false)
+     *
+     * Note: Archived is different from "historical" - a published submission
+     * with a pending draft_republish is NOT archived because it's still the
+     * publicly accessible version.
+     *
+     * @return bool
+     */
+    public function isArchived(): bool
+    {
+        // Only released submissions can be archived
+        if (!in_array($this->status, [self::STATUS_PUBLISHED, self::STATUS_UNPUBLISHED])) {
+            return false;
+        }
+
+        return !$this->is_live;
+    }
+
+
+    /**
+     * Check if this submission is currently live (publicly accessible).
+     *
+     * @return bool
+     */
+    public function isLive(): bool
+    {
+        return (bool) $this->is_live;
+    }
+
+
+    /**
+     * Accessor for is_archived to allow use in Blade templates and Vue components
+     *
+     * @return bool
+     */
+    public function getIsArchivedAttribute(): bool
+    {
+        return $this->isArchived();
+    }
+
+    /**
+     * Scope to get all versions of a specific SGC ID.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @param string $sid The SGC ID (sid)
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeAllVersions($query, string $sid)
+    {
+        return $query->where('sid', '=', $sid)->orderBy('version_number', 'desc');
+    }
+
+    /**
+     * Scope to get only the current (latest published) version of submissions.
+     *
+     * @param \Illuminate\Database\Eloquent\Builder $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function scopeCurrentVersion($query)
+    {
+        return $query->where('status', '=', self::STATUS_PUBLISHED);
     }
 
     /**
@@ -917,9 +1118,10 @@ class Submission extends Model
     /**
      * Validate that submission state is consistent with job state
      * Rules:
-     * - draft_xxx submissions ONLY in draft jobs
-     * - submitted_xxx submissions ONLY in submitted jobs
-     * - published/unpublished submissions ONLY in processed jobs
+     * - Pending submissions (new/republish/unpublish) must be in active (draft/submitted) jobs
+     * - Released submissions (published/unpublished) must be in released jobs
+     *
+     * Note: Stage (draft vs submitted) is derived from Job.status, not stored in submission.
      *
      * @return bool
      * @throws \Exception if inconsistent
@@ -939,79 +1141,20 @@ class Submission extends Model
         $submissionState = $this->status;
         $jobState = $this->job->status;
 
-        // Draft submissions must be in draft jobs
-        if (in_array($submissionState, [
-            self::STATUS_DRAFT_NEW,
-            self::STATUS_DRAFT_REPUBLISH,
-            self::STATUS_DRAFT_UNPUBLISH
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_DRAFT) {
-                throw new \Exception("Draft submission {$this->sid} (state: {$submissionState}) cannot be in non-draft job {$this->job->slug} (state: {$jobState})");
+        // Pending submissions must be in active (draft or submitted) jobs
+        if ($this->isPending()) {
+            if (!in_array($jobState, [\App\Models\Job::STATUS_DRAFT, \App\Models\Job::STATUS_SUBMITTED])) {
+                throw new \Exception("Pending submission {$this->sid} (state: {$submissionState}) cannot be in released job {$this->job->slug} (state: {$jobState})");
             }
         }
 
-        // Submitted submissions must be in submitted jobs
-        if (in_array($submissionState, [
-            self::STATUS_SUBMITTED_NEW,
-            self::STATUS_SUBMITTED_REPUBLISH,
-            self::STATUS_SUBMITTED_UNPUBLISH
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_SUBMITTED) {
-                throw new \Exception("Submitted submission {$this->sid} (state: {$submissionState}) cannot be in non-submitted job {$this->job->slug} (state: {$jobState})");
-            }
-        }
-
-        // Published/unpublished submissions must be in processed jobs
-        if (in_array($submissionState, [
-            self::STATUS_PUBLISHED,
-            self::STATUS_UNPUBLISHED
-        ])) {
-            if ($jobState !== \App\Models\Job::STATUS_PROCESSED) {
-                throw new \Exception("Published/unpublished submission {$this->sid} (state: {$submissionState}) cannot be in non-processed job {$this->job->slug} (state: {$jobState})");
+        // Released submissions (published/unpublished) must be in released jobs
+        if ($this->isReleased()) {
+            if ($jobState !== \App\Models\Job::STATUS_RELEASED) {
+                throw new \Exception("Released submission {$this->sid} (state: {$submissionState}) cannot be in non-released job {$this->job->slug} (state: {$jobState})");
             }
         }
 
         return true;
-    }
-
-    /**
-     * Restore submission fields from origin_snapshot
-     * Used when cancelling a republish/unpublish operation
-     *
-     * @return void
-     */
-    public function restoreFromSnapshot(): void
-    {
-        if (!$this->origin_snapshot) {
-            return;
-        }
-
-        $snapshot = is_object($this->origin_snapshot) ? (array) $this->origin_snapshot : $this->origin_snapshot;
-
-        // Restore basic fields
-        if (isset($snapshot['local_key'])) {
-            $this->local_key = $snapshot['local_key'];
-        }
-        if (isset($snapshot['gene_id'])) {
-            $this->gene_id = $snapshot['gene_id'];
-        }
-        if (isset($snapshot['disease_id'])) {
-            $this->disease_id = $snapshot['disease_id'];
-        }
-        if (isset($snapshot['inheritance_id'])) {
-            $this->inheritance_id = $snapshot['inheritance_id'];
-        }
-        if (isset($snapshot['classification_id'])) {
-            $this->classification_id = $snapshot['classification_id'];
-        }
-        if (isset($snapshot['report_date'])) {
-            $this->report_date = $snapshot['report_date'];
-        }
-        if (isset($snapshot['report_url'])) {
-            $this->report_url = $snapshot['report_url'];
-        }
-        if (isset($snapshot['submission_data'])) {
-            $this->submission_data = $snapshot['submission_data'];
-        }
     }
 }

@@ -1,6 +1,6 @@
 {
 	"action": "create", 
-	"date": "{{ $job->submission_date }}",
+	"date": "{{ $job->created_at }}",
 	"submitter": {
 		"id": "{{ $job->gencc_submitter_id }}",
 		"name": "{{ $job->submitter_organization_name }}"

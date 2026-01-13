@@ -252,7 +252,8 @@ class SubmissionFileValidationTest extends TestCase
         $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
 
         $this->assertNotEmpty($errors);
-        $this->assertEquals('minimum_rows_requirement', $errors[0]['error_type']);
+        $this->assertEquals('invalid_file_format', $errors[0]['error_type']);
+        $this->assertTrue($errors[0]['is_file_format_error']);
     }
 
     /**
@@ -270,6 +271,7 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_header_columns', $errors[0]['error_type']);
+        $this->assertTrue($errors[0]['is_file_format_error']);
     }
 
     /**
@@ -577,7 +579,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -587,7 +589,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => Gene::where('hgnc_id', 'HGNC:9673')->first()->id,
             'disease_id' => $diseaseId,
@@ -595,6 +597,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => Classification::where('curie', 'GENCC:100001')->first()->id,
             'moi_id' => Inheritance::where('curie', 'HP:0000006')->first()->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Try to republish with different gene (use HGNC:5 which is A1BG, different from BRCA1)
@@ -628,7 +631,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -642,7 +645,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -650,6 +653,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'moi_id' => $moi->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Republish with same gene (no HGNC: prefix in file)
@@ -723,7 +727,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -737,7 +741,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -745,6 +749,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'inheritance_id' => $moi->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Try to upload a NEW submission with the same gene-disease-MOI
@@ -784,7 +789,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -798,7 +803,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -806,6 +811,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'inheritance_id' => $moi->id,
             'status' => Submission::STATUS_UNPUBLISHED, // UNPUBLISHED - should be warning only
+            'is_live' => true,
         ]);
 
         // Try to upload a NEW submission with the same gene-disease-MOI
@@ -847,7 +853,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -861,7 +867,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
@@ -869,6 +875,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'inheritance_id' => $moiAD->id, // Autosomal dominant
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Try to upload a NEW submission with DIFFERENT MOI
@@ -908,7 +915,7 @@ class SubmissionFileValidationTest extends TestCase
         $job = Job::create([
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'status' => Job::STATUS_PROCESSED
         ]);
 
@@ -931,7 +938,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease1->id,
@@ -939,6 +946,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'inheritance_id' => $moi->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Second submission with disease2 (same gene and MOI)
@@ -947,7 +955,7 @@ class SubmissionFileValidationTest extends TestCase
             'job_id' => $job->id,
             'submitter_id' => $this->submitter->id,
             'user_id' => 1,
-            'submission_date' => now(),
+            // created_at is auto-set by Laravel
             'submission_data' => json_encode([]),
             'gene_id' => $gene->id,
             'disease_id' => $disease2->id,
@@ -955,6 +963,7 @@ class SubmissionFileValidationTest extends TestCase
             'classification_id' => $classification->id,
             'inheritance_id' => $moi->id,
             'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
         ]);
 
         // Try to republish SGC-100005 with disease1 (which would duplicate SGC-100004)

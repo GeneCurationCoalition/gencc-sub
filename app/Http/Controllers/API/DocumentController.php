@@ -308,8 +308,8 @@ class DocumentController extends Controller
 
     /**
      * Clear a valid document and handle associated submissions
-     * - Deletes new submissions created from this upload
-     * - Restores previously existing submissions that were modified
+     * - Deletes all draft submissions created from this upload
+     * - Original published versions remain unchanged (versioning)
      * - Deletes the document file
      *
      * @param int $documentId
@@ -344,58 +344,50 @@ class DocumentController extends Controller
         ]);
 
         $deletedCount = 0;
-        $restoredCount = 0;
+        $draftSids = []; // Track SIDs that need is_most_recent restored
 
         foreach ($submissions as $submission) {
-            // Check if this is a draft unpublish or draft republish submission
-            // These should be restored to their origin job
-            if (in_array($submission->status, [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_DRAFT_REPUBLISH])
-                && $submission->origin_job_id) {
+            // With versioning, draft_republish and draft_unpublish are NEW version records
+            // that should be deleted when the file is removed (the original version is preserved)
+            if (in_array($submission->status, [
+                Submission::STATUS_DRAFT_NEW,
+                Submission::STATUS_DRAFT_REPUBLISH,
+                Submission::STATUS_DRAFT_UNPUBLISH
+            ])) {
+                // Track SIDs that need is_most_recent restored (only for republish/unpublish drafts)
+                if ($submission->status !== Submission::STATUS_DRAFT_NEW) {
+                    $draftSids[$submission->sid] = $submission->id;
+                }
 
-                // Restore submission to its origin job
-                $snapshot = $submission->origin_snapshot;
-                $submission->update([
-                    'job_id' => $submission->origin_job_id,
-                    'status' => $submission->origin_state ?: Submission::STATUS_PUBLISHED,
-                    'submission_data' => $snapshot['submission_data'] ?? $submission->submission_data,
-                    'original_submission_data' => null,
-                    'submission_errors' => null,
-                    'origin_job_id' => null,
-                    'origin_state' => null,
-                    'origin_snapshot' => null,
-                    'document_id' => null  // Clear document association
-                ]);
-                $restoredCount++;
-                \Log::info('DocumentController@clearValidDocument: Restored unpublish/republish submission to origin job', [
-                    'sid' => $submission->sid,
-                    'origin_job_id' => $submission->origin_job_id,
-                    'origin_state' => $submission->origin_state
-                ]);
-            }
-            // Check if this is a brand new submission (draft_new status means never published)
-            elseif ($submission->status === Submission::STATUS_DRAFT_NEW) {
-                // This is a new submission created from this upload - delete it
+                // Delete this draft version record
                 $submission->forceDelete();
                 $deletedCount++;
-                \Log::info('DocumentController@clearValidDocument: Deleted new submission', ['sid' => $submission->sid]);
-            }
-            // Otherwise this is a republish that needs to be restored
-            elseif ($submission->origin_snapshot) {
-                // Restore from snapshot
-                $snapshot = $submission->origin_snapshot;
-                $submission->update([
-                    'submission_data' => $snapshot['submission_data'] ?? $submission->submission_data,
-                    'original_submission_data' => null,
-                    'submission_errors' => null,
-                    'origin_snapshot' => null,
-                    'document_id' => null  // Clear document association
+                \Log::info('DocumentController@clearValidDocument: Deleted draft submission', [
+                    'sid' => $submission->sid,
+                    'status' => $submission->status,
+                    'version_number' => $submission->version_number
                 ]);
-                $restoredCount++;
-                \Log::info('DocumentController@clearValidDocument: Restored submission data from snapshot', ['sid' => $submission->sid]);
             } else {
-                // Fallback - just clear the document association
+                // For any other status (shouldn't happen normally), just clear the document association
                 $submission->update(['document_id' => null]);
-                \Log::info('DocumentController@clearValidDocument: Cleared document association only', ['sid' => $submission->sid]);
+                \Log::info('DocumentController@clearValidDocument: Cleared document association only', [
+                    'sid' => $submission->sid,
+                    'status' => $submission->status
+                ]);
+            }
+        }
+
+        // Restore is_most_recent=true on the previous versions
+        foreach ($draftSids as $sid => $deletedId) {
+            $previousVersion = Submission::where('sid', $sid)
+                ->where('id', '!=', $deletedId)
+                ->orderBy('version_number', 'desc')
+                ->first();
+
+            if ($previousVersion && !$previousVersion->is_most_recent) {
+                $previousVersion->is_most_recent = true;
+                $previousVersion->save();
+                \Log::info("DocumentController@clearValidDocument: Restored is_most_recent on {$sid}");
             }
         }
 
@@ -411,14 +403,12 @@ class DocumentController extends Controller
         $job->update(['is_processing' => false]);
 
         \Log::info('DocumentController@clearValidDocument: Complete', [
-            'deleted_submissions' => $deletedCount,
-            'restored_submissions' => $restoredCount
+            'deleted_submissions' => $deletedCount
         ]);
 
         return response()->json([
             'success' => true,
-            'deleted_submissions' => $deletedCount,
-            'restored_submissions' => $restoredCount
+            'deleted_submissions' => $deletedCount
         ], 200);
     }
 
@@ -530,9 +520,10 @@ class DocumentController extends Controller
         set_time_limit(3600); // 1 hour for large files
         ini_set('max_execution_time', 3600);
 
-        // Wall-clock timeout for testing (measures real time, not just CPU time)
+        // Wall-clock timeout (measures real time, not just CPU time)
+        // Configurable via UPLOAD_TIMEOUT_SECONDS env variable, defaults to 10 minutes
         $startTime = microtime(true);
-        $wallClockTimeoutSeconds = 300; // 5 minutes - should be enough with caching optimizations
+        $wallClockTimeoutSeconds = (int) env('UPLOAD_TIMEOUT_SECONDS', 600);
 
         // Variables for shutdown handler
         $processedRows = 0;
@@ -690,6 +681,37 @@ class DocumentController extends Controller
             'pubmeds' => $lookupCaches['pubmeds']->count(),
         ]);
 
+        // Pre-load all SGC IDs from the worksheet for batch lookup
+        // This avoids N+1 queries when processing republish/unpublish actions
+        $sgcIdsInFile = [];
+        $preloadRowNum = 0;
+        foreach ($firstsheet as $row) {
+            if ($preloadRowNum++ < 6) continue; // Skip header rows
+            if (empty(implode('', $row->toArray()))) continue; // Skip blank rows
+
+            $sgcId = trim($row['sgc_id'] ?? '');
+            if (!empty($sgcId)) {
+                $sgcIdsInFile[] = $sgcId;
+            }
+        }
+        $sgcIdsInFile = array_unique($sgcIdsInFile);
+
+        // Batch query all existing submissions for these SGC IDs
+        // This single query replaces potentially thousands of individual queries
+        $existingSubmissionsCache = collect();
+        if (!empty($sgcIdsInFile)) {
+            $existingSubmissionsCache = Submission::where('submitter_id', $document->submitter_id)
+                ->whereIn('sid', $sgcIdsInFile)
+                ->where('is_live', true) // Only get live submissions for republish/unpublish
+                ->get()
+                ->keyBy('sid');
+
+            \Log::info('DocumentController@parser: Pre-loaded existing submissions', [
+                'sgc_ids_in_file' => count($sgcIdsInFile),
+                'submissions_found' => $existingSubmissionsCache->count(),
+            ]);
+        }
+
         // process the rows
         foreach ($firstsheet as $row)
         {
@@ -759,8 +781,9 @@ class DocumentController extends Controller
                 }
 
                 \Log::info('DocumentController@parser looking up submission sid by sgc_id: ' . $row['sgc_id']);
-                $submission = $submitter->submissions()->where('sid', $row['sgc_id'])->first();
-                if ($submission === null) {
+                // Use pre-loaded cache for O(1) lookup instead of per-row database query
+                $originalSubmission = $existingSubmissionsCache->get($row['sgc_id']);
+                if ($originalSubmission === null) {
                     $message = [
                         'ident' => $document->job->ident,
                         'status' => 'header_error',
@@ -775,14 +798,64 @@ class DocumentController extends Controller
                 // (see SubmissionFileValidation::validate_sgc_ids_batch)
 
                 // Store the current status to determine state transition
-                $existingSubmissionState = $submission->status;
+                $existingSubmissionState = $originalSubmission->status;
+
+                if ($action === 'R') {
+                    // For Republish: Create a NEW submission record with incremented version_number
+                    // This matches the API behavior in SubmissionController@republish
+                    $maxVersion = Submission::where('sid', $row['sgc_id'])->max('version_number') ?? 1;
+                    $newVersionNumber = $maxVersion + 1;
+
+                    // Check if there's already a draft version being processed
+                    $existingDraft = $submitter->submissions()
+                        ->where('sid', $row['sgc_id'])
+                        ->whereIn('status', [Submission::STATUS_DRAFT_REPUBLISH, Submission::STATUS_SUBMITTED_REPUBLISH])
+                        ->first();
+
+                    if ($existingDraft) {
+                        // Use the existing draft instead of creating a new one
+                        \Log::info("DocumentController@parser: Using existing draft version for {$row['sgc_id']} (version {$existingDraft->version_number})");
+                        $submission = $existingDraft;
+                    } else {
+                        // Create a new version record
+                        $submission = $originalSubmission->replicate(['ident']);
+                        $submission->ident = \Illuminate\Support\Str::uuid()->toString();
+                        $submission->version_number = $newVersionNumber;
+                        $submission->released_at = null;
+                        \Log::info("DocumentController@parser: Created new version {$newVersionNumber} for republish of {$row['sgc_id']}");
+                    }
+                } else {
+                    // For Unpublish: Also create a NEW version record (same as republish)
+                    // This preserves the original published record and creates an audit trail
+                    $maxVersion = Submission::where('sid', $row['sgc_id'])->max('version_number') ?? 1;
+                    $newVersionNumber = $maxVersion + 1;
+
+                    // Check if there's already a draft unpublish version being processed
+                    $existingDraft = $submitter->submissions()
+                        ->where('sid', $row['sgc_id'])
+                        ->whereIn('status', [Submission::STATUS_DRAFT_UNPUBLISH, Submission::STATUS_SUBMITTED_UNPUBLISH])
+                        ->first();
+
+                    if ($existingDraft) {
+                        // Use the existing draft instead of creating a new one
+                        \Log::info("DocumentController@parser: Using existing unpublish draft for {$row['sgc_id']} (version {$existingDraft->version_number})");
+                        $submission = $existingDraft;
+                    } else {
+                        // Create a new version record for unpublish
+                        $submission = $originalSubmission->replicate(['ident']);
+                        $submission->ident = \Illuminate\Support\Str::uuid()->toString();
+                        $submission->version_number = $newVersionNumber;
+                        $submission->released_at = null;
+                        \Log::info("DocumentController@parser: Created new version {$newVersionNumber} for unpublish of {$row['sgc_id']}");
+                    }
+                }
             } else {
                 // Invalid action
                 \Log::error('DocumentController@parser: Invalid action ' . $action . ', skipping row ' . $rownum);
                 continue;
             }
 
-            $submission->submission_date = Carbon::now();
+            // created_at is auto-set by Laravel when saving
 
             $data = new Nodal();
             $data->sgc_id = $row['sgc_id'];
@@ -859,24 +932,32 @@ class DocumentController extends Controller
 
             $job = $document->job;
 
-            // For Unpublish action, skip data loading and just do state transition
+            // For Unpublish action, skip data loading and just set status
             if ($action === 'U') {
-                \Log::info('DocumentController@parser: Unpublish action - skipping data load, just transitioning state');
+                \Log::info('DocumentController@parser: Unpublish action - new version already created, setting status');
 
-                // Transition to draft_unpublish BEFORE changing job association
-                // This ensures origin_job_id captures the correct original job
-                \Log::info('DocumentController@parser: Transitioning to draft_unpublish from ' . $existingSubmissionState);
-                $submission = \App\Services\SubmissionStateMachine::transition(
-                    $submission,
-                    Submission::STATUS_DRAFT_UNPUBLISH,
-                    $existingSubmissionState
-                );
+                // Set status to draft_unpublish (new version record was already created above)
+                $submission->status = Submission::STATUS_DRAFT_UNPUBLISH;
 
                 // Now associate with draft job and document, then save
                 $submission->user_id = $document->user_id;
                 $submission->job_id = $job->id;
                 $submission->document_id = $document->id;
                 $submission->save();
+
+                // Mark the original submission as not most recent (new draft is now the most recent version)
+                if (isset($originalSubmission) && $originalSubmission->is_most_recent) {
+                    $originalSubmission->is_most_recent = false;
+                    $originalSubmission->save();
+                    \Log::info("DocumentController@parser: Marked original submission as not most recent");
+                }
+
+                // Copy pubmed associations from original submission
+                if (isset($originalSubmission)) {
+                    $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
+                    $submission->pubmeds()->sync($pubmedIds);
+                    \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to unpublish version");
+                }
 
                 $successfulSubmissions++;
             } else {
@@ -886,28 +967,36 @@ class DocumentController extends Controller
                 {
                     $submission->user_id = $document->user_id;
 
-                    // Apply state transition BEFORE saving to job
-                    // This ensures origin_job_id captures the correct original job
-                    if ($action === 'R' && isset($existingSubmissionState)) {
-                        // Republish: transition to draft_republish
-                        // Skip if already in target state (e.g., partial upload restart)
-                        if ($existingSubmissionState !== Submission::STATUS_DRAFT_REPUBLISH) {
-                            \Log::info('DocumentController@parser: Transitioning to draft_republish from ' . $existingSubmissionState);
-                            $submission = \App\Services\SubmissionStateMachine::transition(
-                                $submission,
-                                Submission::STATUS_DRAFT_REPUBLISH,
-                                $existingSubmissionState
-                            );
-                        } else {
-                            \Log::info('DocumentController@parser: Already in draft_republish, skipping transition');
-                        }
+                    // Set status based on action type
+                    if ($action === 'R') {
+                        // Republish: Set status to draft_republish
+                        // New version record was already created above with version_number incremented
+                        $submission->status = Submission::STATUS_DRAFT_REPUBLISH;
+                        \Log::info('DocumentController@parser: Setting republish status to draft_republish');
+                    } elseif ($action === 'N') {
+                        // New submission: set status to draft_new
+                        \Log::info('DocumentController@parser: Setting new submission status to draft_new');
+                        $submission->status = Submission::STATUS_DRAFT_NEW;
                     }
-                    // For action 'N' (new), no state transition needed - it's already draft_new by default
 
                     // Now associate with draft job and document, then save
                     $submission->job_id = $job->id;
                     $submission->document_id = $document->id;
                     $submission->save();
+
+                    // For republish, mark the original submission as not most recent
+                    if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
+                        $originalSubmission->is_most_recent = false;
+                        $originalSubmission->save();
+                        \Log::info("DocumentController@parser: Marked original submission as not most recent");
+                    }
+
+                    // For republish, copy pubmed associations from original submission
+                    if ($action === 'R' && isset($originalSubmission)) {
+                        $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
+                        $submission->pubmeds()->sync($pubmedIds);
+                        \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to new version");
+                    }
 
                     $successfulSubmissions++;
                 }

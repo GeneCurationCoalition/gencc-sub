@@ -67,7 +67,11 @@ class JobStateMachineTest extends TestCase
     }
 
     /**
-     * Test submit() method transitions job and all submissions
+     * Test submit() method transitions job and sets submitted_at on submissions
+     *
+     * With the simplified status model, submission status does NOT change when
+     * the job transitions from draft to submitted. Stage (draft/submitted) is
+     * derived from Job.status. Only submitted_at timestamp is set.
      */
     public function test_submit_method_transitions_all_submissions(): void
     {
@@ -75,22 +79,25 @@ class JobStateMachineTest extends TestCase
             'status' => Job::STATUS_DRAFT
         ]);
 
-        // Create submissions in different draft states
+        // Create submissions in different pending states (using new simplified statuses)
         $sub1 = Submission::factory()->create([
             'job_id' => $job->id,
-            'status' => Submission::STATUS_DRAFT_NEW
+            'status' => Submission::STATUS_NEW,
+            'submitted_at' => null
         ]);
 
         $sub2 = Submission::factory()->create([
             'job_id' => $job->id,
-            'status' => Submission::STATUS_DRAFT_REPUBLISH,
-            'origin_state' => 'published'
+            'status' => Submission::STATUS_REPUBLISH,
+            'origin_state' => 'published',
+            'submitted_at' => null
         ]);
 
         $sub3 = Submission::factory()->create([
             'job_id' => $job->id,
-            'status' => Submission::STATUS_DRAFT_UNPUBLISH,
-            'origin_state' => 'published'
+            'status' => Submission::STATUS_UNPUBLISH,
+            'origin_state' => 'published',
+            'submitted_at' => null
         ]);
 
         JobStateMachine::submit($job);
@@ -98,14 +105,20 @@ class JobStateMachineTest extends TestCase
         // Job should be submitted
         $this->assertEquals(Job::STATUS_SUBMITTED, $job->status);
 
-        // All submissions should transition to their submitted states
+        // Refresh submissions
         $sub1->refresh();
         $sub2->refresh();
         $sub3->refresh();
 
-        $this->assertEquals(Submission::STATUS_SUBMITTED_NEW, $sub1->status);
-        $this->assertEquals(Submission::STATUS_SUBMITTED_REPUBLISH, $sub2->status);
-        $this->assertEquals(Submission::STATUS_SUBMITTED_UNPUBLISH, $sub3->status);
+        // With simplified model, status does NOT change (stage derived from Job)
+        $this->assertEquals(Submission::STATUS_NEW, $sub1->status);
+        $this->assertEquals(Submission::STATUS_REPUBLISH, $sub2->status);
+        $this->assertEquals(Submission::STATUS_UNPUBLISH, $sub3->status);
+
+        // But submitted_at should be set
+        $this->assertNotNull($sub1->submitted_at);
+        $this->assertNotNull($sub2->submitted_at);
+        $this->assertNotNull($sub3->submitted_at);
     }
 
     /**
@@ -198,10 +211,10 @@ class JobStateMachineTest extends TestCase
             'status' => Job::STATUS_DRAFT
         ]);
 
-        // Create submission with errors
+        // Create submission with errors (using new simplified status)
         Submission::factory()->create([
             'job_id' => $job->id,
-            'status' => Submission::STATUS_DRAFT_NEW,
+            'status' => Submission::STATUS_NEW,
             'submission_errors' => ['gene_hgnc_id' => 'Invalid gene']
         ]);
 
@@ -212,7 +225,9 @@ class JobStateMachineTest extends TestCase
     }
 
     /**
-     * Test submit() blocks if not all submissions are draft
+     * Test submit() blocks if not all submissions are pending (draft state)
+     *
+     * Note: "draft state" now means "pending state" in the simplified model
      */
     public function test_submit_blocks_if_submissions_not_draft(): void
     {
@@ -220,7 +235,7 @@ class JobStateMachineTest extends TestCase
             'status' => Job::STATUS_DRAFT
         ]);
 
-        // Create submission that's already published
+        // Create submission that's already published (released, not pending)
         Submission::factory()->create([
             'job_id' => $job->id,
             'status' => Submission::STATUS_PUBLISHED

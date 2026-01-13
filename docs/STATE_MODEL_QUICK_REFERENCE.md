@@ -334,7 +334,7 @@ foreach ($job->submissions as $submission) {
 
             // Update state
             $submission->status = Submission::STATUS_PUBLISHED;
-            $submission->published_at = now();
+            $submission->released_at = now();
             $submission->origin_state = null;
             $submission->original_job_id = null;
             $submission->save();
@@ -346,7 +346,7 @@ foreach ($job->submissions as $submission) {
 
             // Update state
             $submission->status = Submission::STATUS_UNPUBLISHED;
-            $submission->published_at = null;
+            $submission->released_at = null;
             $submission->save();
             break;
     }

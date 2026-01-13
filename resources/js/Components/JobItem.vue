@@ -16,37 +16,6 @@ import Button from 'primevue/button';
 
 const props = defineProps(['job', 'submissions', 'errors', 'favorites', 'hasSubmittedJob'])
 
-// State for expanding/collapsing submitted SGC IDs
-const expandedGroups = ref({
-    published: false,
-    republished: false,
-    unpublished: false,
-    error: false
-})
-
-// State for collapsing the entire Submitted SGC IDs section
-const submittedIdsExpanded = ref(false)
-
-// Group submitted submissions by action type
-const groupedProcessedSubmissions = computed(() => {
-    if (!props.job.processed_submission_ids) return null;
-
-    const groups = {
-        published: [],
-        republished: [],
-        unpublished: [],
-        error: []
-    };
-
-    props.job.processed_submission_ids.forEach(item => {
-        if (groups[item.action]) {
-            groups[item.action].push(item.sid);
-        }
-    });
-
-    return groups;
-});
-
 const newid = ref(0);
 const axios = window.axios;
 
@@ -113,7 +82,8 @@ function displayStatusV2(status) {
     const statusMap = {
         'draft': 'Draft',
         'submitted': 'Submitted',
-        'processed': 'Processed'
+        'released': 'Released',
+        'processed': 'Released'  // Backwards compatibility
     };
     return statusMap[status] || status;
 }
@@ -124,7 +94,8 @@ function getStatusSeverity(status) {
     const severityMap = {
         'draft': 'warning',       // Yellow
         'submitted': 'info',       // Blue
-        'processed': 'success'     // Green
+        'released': 'success',     // Green
+        'processed': 'success'     // Green (backwards compatibility)
     };
     return severityMap[status] || 'secondary';
 }
@@ -134,9 +105,42 @@ function getJobStatusClass(status) {
     const classMap = {
         'draft': 'job-status-draft',
         'submitted': 'job-status-submitted',
-        'processed': 'job-status-processed'
+        'released': 'job-status-released',
+        'processed': 'job-status-released'  // Backwards compatibility
     };
     return classMap[status] || '';
+}
+
+// Get the status date based on job status
+// Draft: created_at, Submitted: submitted_at, Released: released_at
+function getStatusDate(job) {
+    if (!job.status) return null;
+
+    let dateStr = null;
+    switch (job.status) {
+        case 'draft':
+            dateStr = job.created_at;
+            break;
+        case 'submitted':
+            dateStr = job.submitted_at || job.created_at;
+            break;
+        case 'released':
+        case 'processed':  // Backwards compatibility
+            dateStr = job.released_at || job.submitted_at || job.created_at;
+            break;
+        default:
+            dateStr = job.created_at;
+    }
+
+    if (!dateStr) return null;
+    return dateStr;
+}
+
+// Format date as YYYY-MM-DD
+function formatDateTimestamp(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(Date.parse(dateStr));
+    return date.toISOString().split('T')[0];
 }
 
 // Computed property to check if job has any errors (submission errors or invalid file)
@@ -164,6 +168,44 @@ const hasPartialUpload = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
     const doc = props.job.documents[0];
     return doc.upload_state === 'upload_partial';
+});
+
+// Helper to detect file format errors (by flag or by error_type for backwards compatibility)
+const isFileFormatError = (err) => {
+    // Check the explicit flag first
+    if (err.is_file_format_error) return true;
+    // Fallback: check error_type for known file format error types
+    const fileFormatErrorTypes = [
+        'invalid_file_format',
+        'missing_header_row',
+        'invalid_header_columns',
+        'no_header_row_found',      // legacy
+        'minimum_rows_requirement'   // legacy
+    ];
+    return fileFormatErrorTypes.includes(err.error_type);
+};
+
+// Generate user-friendly message for file format errors (fallback for old errors without user_message)
+const getFileFormatUserMessage = (err) => {
+    // If user_message exists and differs from message, use it
+    if (err.user_message && err.user_message !== err.message) {
+        return err.user_message;
+    }
+    // Generate a friendly message based on error type
+    const defaultMessage = 'The uploaded file does not appear to be a valid GenCC submission template. ' +
+        'Please download the official template from the GenCC website and ensure your data is formatted correctly.';
+    return defaultMessage;
+};
+
+// Computed: Separate file format errors from data row errors
+// File format errors are displayed in a clean, user-friendly card
+const fileFormatErrors = computed(() => {
+    return uploadErrors.value.filter(err => isFileFormatError(err));
+});
+
+// Data row errors are displayed in the table format
+const dataRowErrors = computed(() => {
+    return uploadErrors.value.filter(err => !isFileFormatError(err));
 });
 
 // Computed: Check if document can be cleared (validation failed OR partial upload, but NOT during active processing)
@@ -490,6 +532,19 @@ onUnmounted(() => {
 });
 
 // -----------------------------
+// Handle file selection from custom upload button
+// -----------------------------
+const handleFileSelect = (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    // Call uploadFile with the file wrapped in the same format FileUpload used
+    uploadFile({ files: [file] });
+    // Reset the input so the same file can be selected again if needed
+    event.target.value = '';
+  }
+};
+
+// -----------------------------
 // Single-step upload handler with background processing
 // -----------------------------
 const uploadFile = async (event) => {
@@ -737,7 +792,7 @@ const clearValidDocument = (event) => {
   confirm.require({
     group: 'confirmclearvalid',
     header: 'Remove File and Handle Submissions',
-    message: 'Are you sure you want to remove this file?\n\nThis will:\n• Delete NEW submissions created from this upload\n• Restore PREVIOUSLY EXISTING submissions to their original state',
+    message: 'Are you sure you want to remove this file?\n\nThis will delete all draft submissions created from this upload.',
     icon: 'pi pi-exclamation-triangle',
     acceptLabel: 'Remove File',
     rejectLabel: 'Cancel',
@@ -748,17 +803,6 @@ const clearValidDocument = (event) => {
         const response = await axios.delete(`/api/documents/${documentId}/clear-valid`);
 
         console.log('[Upload] Valid document deleted successfully', response.data);
-
-        // Show success message with counts
-        const deletedCount = response.data.deleted_submissions || 0;
-        const restoredCount = response.data.restored_submissions || 0;
-
-        toast.add({
-          severity: 'success',
-          summary: 'File Removed',
-          detail: `${deletedCount} submission(s) deleted, ${restoredCount} submission(s) restored`,
-          life: 5000
-        });
 
         // Reload page to show updated state
         router.reload();
@@ -811,7 +855,7 @@ const formatDate = (dateString) => {
             <!-- header - V2 Status Banners -->
             <!-- Upload processing banner - job is read-only while processing -->
             <div v-if="uploadProgress.is_processing"
-                 class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mb-2" role="alert">
+                 class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold flex items-center gap-2">
                     <i class="pi pi-spin pi-spinner"></i>
                     Uploading submissions in background ({{ uploadProgress.processed_submissions || 0 }} of {{ uploadProgress.total_submissions || 0 }}) - You can navigate away, the job will continue uploading.
@@ -819,50 +863,50 @@ const formatDate = (dateString) => {
             </div>
             <!-- Draft status: show submit button if no errors and not processing -->
             <div v-else-if="job.status === 'draft' && job.type == 0 && submissions.length > 0 && !submissions.some(s => s.submission_errors)"
-                 class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-2" role="alert">
+                 class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold">There are no errors.
-                <Button class="float-right" label="Submit" @click="publishConfirmation()" severity="info" raised /></p>
+                <Button class="float-right !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" label="Submit" icon="pi pi-send" @click="publishConfirmation()" raised /></p>
             </div>
 
             <!-- Submitted status: show submitted message, no unstage button -->
-            <div v-if="job.status === 'submitted'" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mb-2" role="alert">
+            <div v-if="job.status === 'submitted'" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Job has been submitted and will be processed automatically.</p>
             </div>
 
-            <!-- Processed status -->
-            <div v-if="job.status === 'processed'" class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-2" role="alert">
-                <p class="font-bold">Job has been processed.</p>
+            <!-- Released status -->
+            <div v-if="job.status === 'released' || job.status === 'processed'" class="bg-green-100 border-l-4 border-green-700 text-green-800 p-4 mb-2" role="alert">
+                <p class="font-bold">Job has been released.</p>
             </div>
 
             <!-- Legacy status banners (for backwards compatibility) -->
-            <div v-if="!job.status && (job.status == 2 && job.type == 0) && !uploadProgress.is_processing" class="bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4 mb-2" role="alert">
+            <div v-if="!job.status && (job.status == 2 && job.type == 0) && !uploadProgress.is_processing" class="bg-blue-100 border-l-4 border-blue-700 text-blue-800 p-4 mb-2" role="alert">
                 <p class="font-bold">There are no errors.
-                <Button v-if="submissions.length > 0" class="float-right" label="Submit" @click="publishConfirmation()" severity="info" raised /></p>
+                <Button v-if="submissions.length > 0" class="float-right !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" label="Submit" @click="publishConfirmation()" raised /></p>
             </div>
-            <div v-if="!job.status && (job.status == 5 && job.type == 0)" class="bg-slate-100 border-l-4 border-slate-500 text-black-700 p-4 mb-2" role="alert">
+            <div v-if="!job.status && (job.status == 5 && job.type == 0)" class="bg-slate-100 border-l-4 border-slate-700 text-slate-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Job is staged for Publication.
                 <Button class="float-right" label="Unstage" @click="unpublishConfirmation()" severity="secondary" raised /></p>
             </div>
-            <div v-if="!job.status && (job.status == 3)" class="bg-slate-100 border-l-4 border-slate-500 text-black-700 p-4 mb-2" role="alert">
+            <div v-if="!job.status && (job.status == 3)" class="bg-slate-100 border-l-4 border-slate-700 text-slate-800 p-4 mb-2" role="alert">
                 <p class="font-bold">Job has been Completed.</p>
             </div>
 
             <!-- Error banner (applies to both V2 and legacy) -->
-            <div v-if="hasErrors" class="bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-4 mt-2" role="alert">
+            <div v-if="hasErrors" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">There are submission errors present</p>
             </div>
             
             <ConfirmDialog group="confirmsub">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-green-500 dark:bg-green-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-amber-600 dark:bg-amber-500 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-question text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button label="Add A Submission" @click="acceptCallback" class="bg-green-500 ring-green-500"></Button>
-                            <Button label="Cancel" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button label="Add A Submission" @click="acceptCallback" class="!bg-amber-600 !ring-amber-600 hover:!bg-amber-700"></Button>
+                            <Button label="Cancel" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
@@ -900,7 +944,7 @@ const formatDate = (dateString) => {
                     :style="{ width: '600px' }">
               <template v-if="partialUploadWarningDialog.error">
                 <div :class="['p-4 rounded mb-4 border-l-4',
-                              partialUploadWarningDialog.error.severity === 'error' ? 'bg-red-50 border-red-500' : 'bg-orange-50 border-orange-500']">
+                              partialUploadWarningDialog.error.severity === 'error' ? 'bg-red-50 border-red-500' : 'bg-amber-50 border-amber-500']">
                   <div class="flex items-start gap-3">
                     <i :class="['pi text-2xl mt-1',
                                 partialUploadWarningDialog.error.severity === 'error' ? 'pi-times-circle text-red-600' : 'pi-exclamation-triangle text-orange-600']"></i>
@@ -934,14 +978,14 @@ const formatDate = (dateString) => {
             <ConfirmDialog group="confirmunpub">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-question text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button label="Unstage Job" @click="acceptCallback" class="bg-red-500 ring-red-500"></Button>
-                            <Button label="Cancel" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button label="Unstage Job" @click="acceptCallback" class="!bg-red-700 !ring-red-700 hover:!bg-red-800"></Button>
+                            <Button label="Cancel" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
@@ -950,14 +994,14 @@ const formatDate = (dateString) => {
             <ConfirmDialog group="confirmpub">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-green-500 dark:bg-green-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-amber-600 dark:bg-amber-500 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-question text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button :label="message.acceptLabel || 'Submit'" @click="acceptCallback" class="bg-green-500 ring-green-500"></Button>
-                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button :label="message.acceptLabel || 'Submit'" @click="acceptCallback" class="!bg-amber-600 !ring-amber-600 hover:!bg-amber-700"></Button>
+                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
@@ -966,14 +1010,14 @@ const formatDate = (dateString) => {
             <ConfirmDialog group="confirmclear">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-exclamation-triangle text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0 text-center">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button :label="message.acceptLabel || 'Remove'" @click="acceptCallback" class="bg-red-500 ring-red-500"></Button>
-                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button :label="message.acceptLabel || 'Remove'" @click="acceptCallback" severity="danger"></Button>
+                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
@@ -982,14 +1026,14 @@ const formatDate = (dateString) => {
             <ConfirmDialog group="confirmclearvalid">
                 <template #container="{ message, acceptCallback, rejectCallback }">
                     <div class="flex flex-col items-center p-5 bg-surface-0 dark:bg-surface-700 rounded-md">
-                        <div class="rounded-full bg-red-500 dark:bg-red-400 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
+                        <div class="rounded-full bg-red-700 dark:bg-red-600 text-surface-0 dark:text-surface-900 inline-flex justify-center items-center h-[6rem] w-[6rem] -mt-[3rem]">
                             <i class="pi pi-exclamation-triangle text-5xl"></i>
                         </div>
                         <span class="font-bold text-2xl block mb-2 mt-4">{{ message.header }}</span>
                         <p class="mb-0 text-center whitespace-pre-line">{{ message.message }}</p>
                         <div class="flex items-center gap-8 mt-4">
-                            <Button :label="message.acceptLabel || 'Remove'" @click="acceptCallback" class="bg-red-500 ring-red-500"></Button>
-                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="info"></Button>
+                            <Button :label="message.acceptLabel || 'Remove'" @click="acceptCallback" severity="danger"></Button>
+                            <Button :label="message.rejectLabel || 'Cancel'" outlined @click="rejectCallback" severity="secondary"></Button>
                         </div>
                     </div>
                 </template>
@@ -1013,11 +1057,11 @@ const formatDate = (dateString) => {
                             <div class="text-xs">{{ job.user.email }}</div>
                         </div>
                         <div class="col-span-2 py-1 my-2 mr-5">
-                            <div v-show="job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))" class="text-left"><Button label="New" severity="info" @click="requireConfirmation()" icon="pi pi-plus" class="w-28" /></div>
+                            <div v-show="job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))" class="text-left"><Button label="New" @click="requireConfirmation()" icon="pi pi-plus" class="w-28 !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" /></div>
                         </div>
-                        <div class="col-span-2 pt-3 text-right pr-3">Submitted Date:</div>
+                        <div class="col-span-2 pt-3 text-right pr-3">Status Date:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3">
-                            <div class="">{{ new Date(Date.parse(job.submission_date)).toISOString().split('T')[0] }}</div>
+                            <div class="">{{ formatDateTimestamp(getStatusDate(job)) }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Status:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3">
@@ -1026,7 +1070,11 @@ const formatDate = (dateString) => {
                         </div>
                         <div class="col-span-2 py-1 my-2 mr-5">
                             <!-- Only show upload button if job is draft AND has no documents AND no preview -->
-                            <div v-show="(job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))) && job.documents_count === 0 && !showUploadedFilePreview"><FileUpload mode="basic" auto name="file" :url="'/api/documents/' + job.ident" accept=".xlsx" :maxFileSize="10000000" @upload="onUpload" chooseLabel="Upload" severity="warning" customUpload @uploader="uploadFile" class="w-28" /></div>
+                            <!-- Using custom Button + hidden input since FileUpload doesn't support color customization -->
+                            <div v-show="(job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))) && job.documents_count === 0 && !showUploadedFilePreview">
+                                <input type="file" ref="fileInput" accept=".xlsx" @change="handleFileSelect" class="hidden" />
+                                <Button label="Upload" icon="pi pi-upload" class="w-28 !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" @click="$refs.fileInput.click()" />
+                            </div>
                         </div>
 
                         <!-- Show uploaded file preview when validation fails (before reload) -->
@@ -1064,57 +1112,60 @@ const formatDate = (dateString) => {
                         <!-- Show uploaded filename as download link if a document exists -->
                         <template v-if="job.documents && job.documents.length > 0">
                             <div class="col-span-2 pt-3 text-right pr-3">Uploaded File:</div>
-                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': hasValidationErrors, 'border-orange-500': hasPartialUpload && !hasValidationErrors, 'border-blue-500': uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload}">
+                            <div class="col-span-5 py-1 my-2 border-l-8 pl-3" :class="{'border-red-500': job.status === 'draft' && hasValidationErrors, 'border-orange-400': job.status === 'draft' && hasPartialUpload && !hasValidationErrors, 'border-yellow-400': job.status === 'draft' && uploadProgress.is_processing && !hasValidationErrors && !hasPartialUpload, 'border-green-500': job.status === 'released' || job.status === 'processed'}">
                                 <div class="flex items-center gap-2">
                                     <a :href="'/api/documents/' + job.documents[0].ident + '/download'" class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-2">
                                         <i class="pi pi-download text-sm"></i>
                                         <span>{{ job.documents[0].file_name }}</span>
                                     </a>
-                                    <!-- Uploading indicator badge with progress -->
-                                    <span v-if="uploadProgress.is_processing"
-                                          class="inline-flex items-center gap-2 px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-300"
-                                          title="Uploading submissions in background - you can navigate away">
-                                        <i class="pi pi-spin pi-spinner text-xs"></i>
-                                        Uploading {{ uploadProgress.processed_submissions || 0 }} of {{ uploadProgress.total_submissions || 0 }}
-                                    </span>
-                                    <!-- Error indicator badge - ONLY for validation errors, NOT partial uploads -->
-                                    <span v-else-if="hasValidationErrors"
-                                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 border border-red-300"
-                                          title="File has validation errors">
-                                        <i class="pi pi-exclamation-circle text-xs"></i>
-                                        Invalid
-                                    </span>
-                                    <!-- Partial upload badge - NOT a validation error, just incomplete -->
-                                    <span v-else-if="hasPartialUpload"
-                                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 border border-orange-300"
-                                          title="Upload partially completed - some submissions were processed">
-                                        <i class="pi pi-exclamation-triangle text-xs"></i>
-                                        Partial
-                                    </span>
-                                    <!-- Clear File icon button for failed/partial uploads (validation errors or partial upload) -->
-                                    <button v-if="(job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))) && canClearDocument"
-                                            @click.stop.prevent="clearDocument"
-                                            :class="['p-1.5 rounded-full transition-colors cursor-pointer',
-                                                     hasValidationErrors ? 'text-red-600 hover:bg-red-50 hover:text-red-700' : 'text-orange-600 hover:bg-orange-50 hover:text-orange-700']"
-                                            type="button"
-                                            :title="hasValidationErrors ? 'Remove this file (submissions will be preserved)' : 'Remove this file and its partial submissions'">
-                                        <i class="pi pi-trash text-sm"></i>
-                                    </button>
-                                    <!-- Clear File icon button for valid/complete files -->
-                                    <button v-else-if="(job.status === 'draft' || (!job.status && (job.status == 2 || job.status == 4))) && !uploadProgress.is_processing && !canClearDocument"
-                                            @click.stop.prevent="clearValidDocument"
-                                            class="p-1.5 rounded-full text-gray-600 hover:bg-gray-50 hover:text-gray-700 transition-colors cursor-pointer"
-                                            type="button"
-                                            title="Remove this file (new submissions will be deleted, existing submissions will be restored)">
-                                        <i class="pi pi-trash text-sm"></i>
-                                    </button>
+                                    <!-- Draft-only badges and buttons -->
+                                    <template v-if="job.status === 'draft'">
+                                        <!-- Uploading indicator badge with progress -->
+                                        <span v-if="uploadProgress.is_processing"
+                                              class="inline-flex items-center gap-2 px-2 py-0.5 rounded text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-300"
+                                              title="Uploading submissions in background - you can navigate away">
+                                            <i class="pi pi-spin pi-spinner text-xs"></i>
+                                            Uploading {{ uploadProgress.processed_submissions || 0 }} of {{ uploadProgress.total_submissions || 0 }}
+                                        </span>
+                                        <!-- Error indicator badge - ONLY for validation errors, NOT partial uploads -->
+                                        <span v-else-if="hasValidationErrors"
+                                              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 border border-red-300"
+                                              title="File has validation errors">
+                                            <i class="pi pi-exclamation-circle text-xs"></i>
+                                            Invalid
+                                        </span>
+                                        <!-- Partial upload badge - NOT a validation error, just incomplete -->
+                                        <span v-else-if="hasPartialUpload"
+                                              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-800 border border-orange-300"
+                                              title="Upload partially completed - some submissions were processed">
+                                            <i class="pi pi-exclamation-triangle text-xs"></i>
+                                            Partial
+                                        </span>
+                                        <!-- Clear File icon button for failed/partial uploads (validation errors or partial upload) -->
+                                        <button v-if="canClearDocument"
+                                                @click.stop.prevent="clearDocument"
+                                                :class="['p-1.5 rounded-full transition-colors cursor-pointer',
+                                                         hasValidationErrors ? 'text-red-600 hover:bg-red-50 hover:text-red-700' : 'text-orange-600 hover:bg-orange-50 hover:text-orange-700']"
+                                                type="button"
+                                                :title="hasValidationErrors ? 'Remove this file (submissions will be preserved)' : 'Remove this file and its partial submissions'">
+                                            <i class="pi pi-trash text-sm"></i>
+                                        </button>
+                                        <!-- Clear File icon button for valid/complete files -->
+                                        <button v-else-if="!uploadProgress.is_processing && !canClearDocument"
+                                                @click.stop.prevent="clearValidDocument"
+                                                class="p-1.5 rounded-full text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors cursor-pointer"
+                                                type="button"
+                                                title="Remove this file and delete all draft submissions">
+                                            <i class="pi pi-trash text-sm"></i>
+                                        </button>
+                                    </template>
                                 </div>
                                 <div class="text-xs text-gray-500 mt-1">
                                     {{ formatFileSize(job.documents[0].size) }} • Uploaded {{ formatDate(job.documents[0].created_at) }}
                                 </div>
 
-                                <!-- Inline progress bar during upload -->
-                                <div v-if="uploadProgress.is_processing" class="mt-2">
+                                <!-- Draft-only: Inline progress bar during upload -->
+                                <div v-if="job.status === 'draft' && uploadProgress.is_processing" class="mt-2">
                                     <div class="flex items-center gap-2 text-xs text-blue-700 mb-1">
                                         <span>{{ Math.round(uploadProgress.progress_percent || 0) }}% complete</span>
                                         <span class="text-gray-400">•</span>
@@ -1123,8 +1174,8 @@ const formatDate = (dateString) => {
                                     <ProgressBar :value="uploadProgress.progress_percent || 0" :showValue="false" class="h-2" />
                                 </div>
 
-                                <!-- Show compact partial upload badge if present -->
-                                <template v-if="job.documents[0].processing_errors && job.documents[0].processing_errors.length > 0">
+                                <!-- Draft-only: Show compact partial upload badge if present -->
+                                <template v-if="job.status === 'draft' && job.documents[0].processing_errors && job.documents[0].processing_errors.length > 0">
                                     <div v-for="(error, index) in job.documents[0].processing_errors" :key="index">
                                         <div v-if="error.error_type === 'partial_upload'" class="mt-2">
                                             <button
@@ -1140,126 +1191,51 @@ const formatDate = (dateString) => {
                                 </template>
                             </div>
                         </template>
-                        <template v-if="job.status === 'processed' && groupedProcessedSubmissions">
-                            <div class="col-span-2 pt-3 text-right pr-3">Submitted SGC IDs:</div>
-                            <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                <!-- Collapsed summary view -->
-                                <div v-if="!submittedIdsExpanded" class="flex items-center gap-3">
-                                    <span class="text-sm">
-                                        <span v-if="groupedProcessedSubmissions.published.length > 0" class="text-green-700 font-semibold">
-                                            Published: {{ groupedProcessedSubmissions.published.length }}
-                                        </span>
-                                        <span v-if="groupedProcessedSubmissions.republished.length > 0" class="text-blue-700 font-semibold ml-3">
-                                            Republished: {{ groupedProcessedSubmissions.republished.length }}
-                                        </span>
-                                        <span v-if="groupedProcessedSubmissions.unpublished.length > 0" class="text-red-700 font-semibold ml-3">
-                                            Unpublished: {{ groupedProcessedSubmissions.unpublished.length }}
-                                        </span>
-                                        <span v-if="groupedProcessedSubmissions.error.length > 0" class="text-orange-700 font-semibold ml-3">
-                                            Error: {{ groupedProcessedSubmissions.error.length }}
-                                        </span>
-                                    </span>
-                                    <button @click="submittedIdsExpanded = true" class="text-xs text-blue-600 hover:text-blue-800 underline">
-                                        show details
-                                    </button>
-                                </div>
-
-                                <!-- Expanded detailed view -->
-                                <div v-else class="space-y-3">
-                                    <div class="flex justify-end mb-2">
-                                        <button @click="submittedIdsExpanded = false" class="text-xs text-blue-600 hover:text-blue-800 underline">
-                                            hide details
-                                        </button>
-                                    </div>
-                                    <!-- Published group -->
-                                    <div v-if="groupedProcessedSubmissions.published.length > 0">
-                                        <div class="text-sm font-semibold mb-1 text-green-700">
-                                            Published ({{ groupedProcessedSubmissions.published.length }})
-                                        </div>
-                                        <div class="flex flex-wrap gap-1">
-                                            <template v-for="(sid, index) in groupedProcessedSubmissions.published" :key="sid">
-                                                <Tag v-if="index < 3 || expandedGroups.published"
-                                                     :value="sid"
-                                                     severity="success"
-                                                     class="text-xs" />
-                                            </template>
-                                            <button v-if="groupedProcessedSubmissions.published.length > 3"
-                                                    @click="expandedGroups.published = !expandedGroups.published"
-                                                    class="text-xs text-blue-600 hover:text-blue-800 underline ml-1">
-                                                {{ expandedGroups.published ? 'show less' : `+${groupedProcessedSubmissions.published.length - 3} more` }}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Republished group -->
-                                    <div v-if="groupedProcessedSubmissions.republished.length > 0">
-                                        <div class="text-sm font-semibold mb-1 text-blue-700">
-                                            Republished ({{ groupedProcessedSubmissions.republished.length }})
-                                        </div>
-                                        <div class="flex flex-wrap gap-1">
-                                            <template v-for="(sid, index) in groupedProcessedSubmissions.republished" :key="sid">
-                                                <Tag v-if="index < 3 || expandedGroups.republished"
-                                                     :value="sid"
-                                                     severity="info"
-                                                     class="text-xs" />
-                                            </template>
-                                            <button v-if="groupedProcessedSubmissions.republished.length > 3"
-                                                    @click="expandedGroups.republished = !expandedGroups.republished"
-                                                    class="text-xs text-blue-600 hover:text-blue-800 underline ml-1">
-                                                {{ expandedGroups.republished ? 'show less' : `+${groupedProcessedSubmissions.republished.length - 3} more` }}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Unpublished group -->
-                                    <div v-if="groupedProcessedSubmissions.unpublished.length > 0">
-                                        <div class="text-sm font-semibold mb-1 text-red-700">
-                                            Unpublished ({{ groupedProcessedSubmissions.unpublished.length }})
-                                        </div>
-                                        <div class="flex flex-wrap gap-1">
-                                            <template v-for="(sid, index) in groupedProcessedSubmissions.unpublished" :key="sid">
-                                                <Tag v-if="index < 3 || expandedGroups.unpublished"
-                                                     :value="sid"
-                                                     severity="danger"
-                                                     class="text-xs" />
-                                            </template>
-                                            <button v-if="groupedProcessedSubmissions.unpublished.length > 3"
-                                                    @click="expandedGroups.unpublished = !expandedGroups.unpublished"
-                                                    class="text-xs text-blue-600 hover:text-blue-800 underline ml-1">
-                                                {{ expandedGroups.unpublished ? 'show less' : `+${groupedProcessedSubmissions.unpublished.length - 3} more` }}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Error group -->
-                                    <div v-if="groupedProcessedSubmissions.error.length > 0">
-                                        <div class="text-sm font-semibold mb-1 text-orange-700">
-                                            Error ({{ groupedProcessedSubmissions.error.length }})
-                                        </div>
-                                        <div class="flex flex-wrap gap-1">
-                                            <template v-for="(sid, index) in groupedProcessedSubmissions.error" :key="sid">
-                                                <Tag v-if="index < 3 || expandedGroups.error"
-                                                     :value="sid"
-                                                     severity="warning"
-                                                     class="text-xs" />
-                                            </template>
-                                            <button v-if="groupedProcessedSubmissions.error.length > 3"
-                                                    @click="expandedGroups.error = !expandedGroups.error"
-                                                    class="text-xs text-blue-600 hover:text-blue-800 underline ml-1">
-                                                {{ expandedGroups.error ? 'show less' : `+${groupedProcessedSubmissions.error.length - 3} more` }}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </template>
 
                     </div>
                 </div>
             </div>
 
-            <!-- Error Display Card - Always visible when errors exist, collapsible -->
-            <Card v-if="uploadErrors.length > 0"
+            <!-- File Format Error Display - Clean, user-friendly message for template/format issues -->
+            <div v-if="fileFormatErrors.length > 0" class="mt-4">
+                <div v-for="(error, index) in fileFormatErrors" :key="'format-' + index"
+                     class="bg-red-50 border-2 border-red-400 rounded-lg p-6 mb-4">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0">
+                            <i class="pi pi-file-excel text-4xl text-red-500"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-lg font-bold text-red-800 mb-2">
+                                {{ error.user_title || 'Invalid File Format' }}
+                            </h3>
+                            <p class="text-red-700 mb-4">
+                                {{ getFileFormatUserMessage(error) }}
+                            </p>
+                            <div class="flex flex-wrap gap-3">
+                                <a href="/download/template"
+                                   class="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
+                                    <i class="pi pi-download"></i>
+                                    Download GenCC Template
+                                </a>
+                                <a href="/submission-directions"
+                                   target="_blank"
+                                   class="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium">
+                                    <i class="pi pi-book"></i>
+                                    View Submission Guide
+                                </a>
+                            </div>
+                            <!-- Technical details (collapsed by default) - only show if different from user message -->
+                            <details class="mt-4 text-sm text-gray-600">
+                                <summary class="cursor-pointer hover:text-gray-800">Technical Details</summary>
+                                <div class="mt-2 p-3 bg-gray-100 rounded font-mono text-xs whitespace-pre-wrap">{{ error.message }}</div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Row Error Display Card - For row-level validation errors -->
+            <Card v-if="dataRowErrors.length > 0"
                   class="mt-4 border-2 border-red-500"
                   :class="{'collapsed-card': !showErrorCard}"
                   :pt="{
@@ -1274,17 +1250,17 @@ const formatDate = (dateString) => {
                         <div class="flex items-center gap-2">
                             <i class="pi pi-exclamation-triangle text-2xl"></i>
                             <div class="flex flex-col">
-                                <span>{{ uploadErrors.length }} Validation Error(s){{ uploadedFilename ? ` - ${uploadedFilename}` : '' }}</span>
-                                <span v-if="MAX_VALIDATION_RESULTS > 0 && uploadErrors.length === MAX_VALIDATION_RESULTS" class="text-sm font-semibold">Maximum errors reached</span>
+                                <span>{{ dataRowErrors.length }} Data Validation Error(s){{ uploadedFilename ? ` - ${uploadedFilename}` : '' }}</span>
+                                <span v-if="MAX_VALIDATION_RESULTS > 0 && dataRowErrors.length === MAX_VALIDATION_RESULTS" class="text-sm font-semibold">Maximum errors reached</span>
                             </div>
                         </div>
                         <div class="flex gap-2">
                             <Button label="Download"
                                     icon="pi pi-download"
-                                    severity="danger"
                                     size="small"
                                     @click="downloadErrors"
-                                    class="w-28" />
+                                    class="w-28"
+                                    raised />
                             <Button :icon="showErrorCard ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
                                     :label="showErrorCard ? 'Hide' : 'Show'"
                                     severity="secondary"
@@ -1296,20 +1272,20 @@ const formatDate = (dateString) => {
                 </template>
                 <template #content>
                     <div v-show="showErrorCard" class="error-content">
-                        <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                            <p class="text-sm text-blue-900">
+                        <div class="mb-4 p-3 bg-yellow-100 border-l-4 border-yellow-500 rounded-lg">
+                            <p class="text-sm text-yellow-700">
                                 <i class="pi pi-info-circle mr-2"></i>
                                 Please review and correct the errors below. For detailed guidance on submission requirements, refer to
                                 <a href="https://thegencc.org/submission-directions"
                                    target="_blank"
                                    rel="noopener noreferrer"
-                                   class="text-blue-700 hover:text-blue-900 underline font-medium">
+                                   class="text-yellow-700 hover:text-yellow-900 underline font-medium">
                                     GenCC Submission Directions
                                     <i class="pi pi-external-link text-xs ml-1"></i>
                                 </a>.
                             </p>
                         </div>
-                        <DataTable :value="uploadErrors"
+                        <DataTable :value="dataRowErrors"
                                    size="small"
                                    stripedRows
                                    scrollable
@@ -1355,7 +1331,7 @@ const formatDate = (dateString) => {
                 </template>
             </Card>
 
-            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" ></SubmissionsListing>
+            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />
         </div>
 
     </div>
