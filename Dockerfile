@@ -89,6 +89,7 @@ RUN chown -R www-data:www-data storage bootstrap/cache \
 
 # PHP configuration
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY docker/php-custom.ini $PHP_INI_DIR/conf.d/custom.ini
 
 # PHP-FPM configuration (log to files instead of /proc/self/fd/2 for PM2 compatibility)
 COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/zz-custom.conf
