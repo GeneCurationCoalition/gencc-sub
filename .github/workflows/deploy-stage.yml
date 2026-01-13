@@ -111,7 +111,6 @@ jobs:
               -p 127.0.0.1:8080:80 \
               -e DB_HOST=10.0.2.2 \
               -v /var/www/gencc-sub/.env:/var/www/html/.env:ro \
-              -v /var/www/gencc-sub/storage/logs:/var/www/html/storage/logs \
               ${IMAGE}:${VERSION}
 
             # Wait for container to be ready
