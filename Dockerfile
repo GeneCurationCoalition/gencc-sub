@@ -34,12 +34,18 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     nginx \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 # libzip-dev: required to build PHP zip extension
 # libonig-dev: required to build PHP mbstring extension
 # libpng/libjpeg/libfreetype: required for PHP gd extension
 # zip/unzip: required by Composer for extracting packages
 # nginx: web server to convert FastCGI to HTTP
+# python3/python3-pip: required for ClinGen sync pipeline
+
+# Install Python dependencies for ClinGen sync
+RUN pip3 install --break-system-packages openpyxl mysql-connector-python
 
 # Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \

@@ -1512,6 +1512,7 @@ class SubmissionController extends Controller
     /**
      * Export submissions to Excel using the template file
      * Preserves template formatting and appends data starting at row 13
+     * Accepts SIDs and fetches data from database to avoid POST size limits
      */
     public function exportToTemplate(Request $request)
     {
@@ -1530,34 +1531,80 @@ class SubmissionController extends Controller
 
         Log::info('exportToTemplate: User authenticated: ' . $user->email);
 
-        $submissions = $request->input('submissions');
-        Log::info('exportToTemplate: Received ' . (is_array($submissions) ? count($submissions) : 0) . ' submissions');
+        $sids = $request->input('sids');
+        Log::info('exportToTemplate: Received ' . (is_array($sids) ? count($sids) : 0) . ' SIDs');
 
-        if (empty($submissions) || !is_array($submissions)) {
+        if (empty($sids) || !is_array($sids)) {
             return response()->json([
                 'success' => 'false',
                 'status_code' => 3002,
-                'message' => 'No submissions provided'
+                'message' => 'No submission SIDs provided'
             ], 400);
         }
 
         try {
-            $export = new SubmissionsTemplateExport($submissions);
+            // Fetch submissions from database with relationships
+            // Use the effective submitter query to respect access control
+            $submissions = $this->getEffectiveSubmitterQuery($request, 'submissions')
+                ->whereIn('sid', $sids)
+                ->where('is_most_recent', true)
+                ->with(['gene', 'disease', 'inheritance', 'classification', 'submitter'])
+                ->get();
+
+            Log::info('exportToTemplate: Found ' . $submissions->count() . ' submissions in database');
+
+            // Transform submissions to the format expected by SubmissionsTemplateExport
+            $exportData = $submissions->map(function ($submission) {
+                // Convert submission_data from stdClass to array for array-style access in export
+                $submissionData = json_decode(json_encode($submission->submission_data), true);
+
+                return [
+                    'sid' => $submission->sid,
+                    'local_key' => $submission->local_key,
+                    'submission_data' => $submissionData,
+                    'gene' => [
+                        'hgnc_id' => $submission->gene?->hgnc_id,
+                        'symbol' => $submission->gene?->symbol,
+                    ],
+                    'disease' => [
+                        'curie' => $submission->disease?->curie,
+                        'name' => $submission->disease?->name,
+                    ],
+                    'inheritance' => [
+                        'curie' => $submission->inheritance?->curie,
+                        'name' => $submission->inheritance?->name,
+                    ],
+                    'classification' => [
+                        'curie' => $submission->classification?->curie,
+                        'name' => $submission->classification?->name,
+                    ],
+                    'submitter' => [
+                        'curie' => $submission->submitter?->curie,
+                        'name' => $submission->submitter?->name,
+                    ],
+                    'evidence' => $submission->evidence ?? [],
+                ];
+            })->toArray();
+
+            $export = new SubmissionsTemplateExport($exportData);
             $spreadsheet = $export->generate();
 
-            // Create writer and output
+            // Create writer and save to temp file (more reliable than php://output)
             $writer = new Xlsx($spreadsheet);
-
-            // Create response with proper headers
             $filename = 'submissions_export_' . date('Y-m-d_His') . '.xlsx';
+            $tempFile = storage_path('app/temp/' . $filename);
 
-            return response()->streamDownload(function() use ($writer) {
-                $writer->save('php://output');
-            }, $filename, [
+            // Ensure temp directory exists
+            if (!file_exists(storage_path('app/temp'))) {
+                mkdir(storage_path('app/temp'), 0755, true);
+            }
+
+            $writer->save($tempFile);
+
+            // Return file download response and delete after sending
+            return response()->download($tempFile, $filename, [
                 'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-                'Cache-Control' => 'max-age=0',
-            ]);
+            ])->deleteFileAfterSend(true);
 
         } catch (\Exception $e) {
             Log::error('Export to template failed: ' . $e->getMessage());

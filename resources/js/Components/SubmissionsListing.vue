@@ -1090,6 +1090,9 @@
             const xsrfCookie = document.cookie.split('; ').find(row => row.startsWith('XSRF-TOKEN='));
             const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.split('=')[1]) : '';
 
+            // Send only SIDs to avoid POST size limits - server will fetch full data
+            const sids = filteredData.map(s => s.sid);
+
             const response = await fetch('/api/submissions/export-template', {
                 method: 'POST',
                 credentials: 'same-origin',  // Include cookies for session auth
@@ -1100,7 +1103,7 @@
                     'X-XSRF-TOKEN': xsrfToken
                 },
                 body: JSON.stringify({
-                    submissions: filteredData
+                    sids: sids
                 })
             });
 
