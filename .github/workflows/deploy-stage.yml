@@ -103,6 +103,7 @@ jobs:
             # - DB_HOST override: use 10.0.2.2 to connect to MySQL on host via slirp4netns
             # - Logs volume: persist logs outside container for debugging
             # - Network: allow_host_loopback enables connection to MySQL on host
+            # NOTE: Requires 'loginctl enable-linger' on server for rootless podman persistence
             podman run -d \
               --name gencc-sub \
               --restart=always \
