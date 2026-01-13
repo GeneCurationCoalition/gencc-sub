@@ -92,4 +92,9 @@ COPY docker/nginx.conf /etc/nginx/sites-available/default
 
 EXPOSE 80
 
+# Entrypoint script for startup initialization
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["pm2-runtime", "ecosystem.prod.config.cjs"]
