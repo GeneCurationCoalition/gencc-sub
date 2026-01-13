@@ -136,10 +136,12 @@ restore_database() {
     echo ""
 
     # Restore database (non-interactive - used in script context)
-    if gunzip -c "$BACKUP_FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE" 2>/dev/null; then
+    MYSQL_ERROR=$(gunzip -c "$BACKUP_FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE" 2>&1)
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}Database restored successfully!${NC}"
     else
         echo -e "${RED}Error restoring database${NC}"
+        echo -e "${RED}$MYSQL_ERROR${NC}"
         exit 1
     fi
     echo ""
