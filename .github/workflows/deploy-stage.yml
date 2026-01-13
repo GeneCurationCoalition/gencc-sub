@@ -110,6 +110,7 @@ jobs:
               --network=slirp4netns:allow_host_loopback=true \
               -p 127.0.0.1:8080:80 \
               -e DB_HOST=10.0.2.2 \
+              -e MYSQL_ATTR_SSL_CA= \
               -v /var/www/gencc-sub/.env:/var/www/html/.env:ro \
               -v /var/www/gencc-sub/storage/logs:/var/www/html/storage/logs \
               ${IMAGE}:${VERSION}
