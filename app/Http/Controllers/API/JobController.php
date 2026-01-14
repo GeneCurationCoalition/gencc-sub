@@ -267,8 +267,17 @@ class JobController extends Controller
             }
         }
 
+        // Delete any documents associated with this job
+        // Force delete to remove blob data from database
+        $job->documents()->forceDelete();
+
         // Delete the job itself
-        $job->delete();
+        // Force delete draft jobs since they have no published data to preserve
+        if ($job->status === Job::STATUS_DRAFT) {
+            $job->forceDelete();
+        } else {
+            $job->delete();
+        }
 
         return response()->json(['success' => 'true',
                 'status_code' => 200,

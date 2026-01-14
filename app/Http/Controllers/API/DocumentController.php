@@ -122,12 +122,13 @@ class DocumentController extends Controller
         // Now allowing uploads even if manually-created submissions exist
         // since Clear File no longer deletes submissions
 
-        // Delete any existing documents for this job
+        // Delete any existing documents for this job (limit to 1 file per job)
         // This cleans up:
         // - Documents with validation errors (failed uploads)
         // - Documents from cancelled uploads (orphaned documents)
         // - Previous file uploads that weren't cleared
-        \App\Models\Document::where('job_id', $job->id)->delete();
+        // Using forceDelete to remove blob data from database
+        \App\Models\Document::where('job_id', $job->id)->forceDelete();
 
         $file = $request->file('file');
 
