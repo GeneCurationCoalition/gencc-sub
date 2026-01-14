@@ -24,7 +24,7 @@ class SubmissionsTemplateExport
         Log::info('SubmissionsTemplateExport::generate called with ' . count($this->submissions) . ' submissions');
 
         // Load the template file
-        $templatePath = storage_path('app/templates/GenCC Submission Spreadsheet.xlsx');
+        $templatePath = public_path('documents/GenCC Submission Spreadsheet.xlsx');
 
         Log::info('Template path: ' . $templatePath);
 

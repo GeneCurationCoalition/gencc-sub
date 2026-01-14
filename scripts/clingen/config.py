@@ -15,7 +15,7 @@ import os
 SCRIPTS_DIR = Path(__file__).parent.parent
 PROJECT_ROOT = SCRIPTS_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data" / "clingen"
-TEMPLATE_DIR = PROJECT_ROOT / "storage" / "app" / "templates"
+TEMPLATE_DIR = PROJECT_ROOT / "public" / "documents"
 COMPARISON_DIR = DATA_DIR / "comparison"
 
 
