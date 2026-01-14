@@ -370,6 +370,53 @@ class SubmissionModelTest extends TestCase
     }
 
     /**
+     * Test normalizeJsonField handles stdClass (from DB load)
+     */
+    public function test_normalize_json_field_handles_object(): void
+    {
+        $obj = new \stdClass();
+        $obj->version = new \stdClass();
+        $obj->version->internal = '1.0.0';
+        $obj->version->description = 'test';
+
+        $result = Submission::normalizeJsonField($obj);
+
+        $this->assertIsArray($result);
+        $this->assertEquals('1.0.0', $result['version']['internal']);
+        $this->assertEquals('test', $result['version']['description']);
+    }
+
+    /**
+     * Test normalizeJsonField handles array (from programmatic set)
+     */
+    public function test_normalize_json_field_handles_array(): void
+    {
+        $array = [
+            'version' => [
+                'internal' => '2.0.0',
+                'description' => 'array test'
+            ]
+        ];
+
+        $result = Submission::normalizeJsonField($array);
+
+        $this->assertIsArray($result);
+        $this->assertEquals('2.0.0', $result['version']['internal']);
+        $this->assertEquals('array test', $result['version']['description']);
+    }
+
+    /**
+     * Test normalizeJsonField handles null
+     */
+    public function test_normalize_json_field_handles_null(): void
+    {
+        $result = Submission::normalizeJsonField(null);
+
+        $this->assertIsArray($result);
+        $this->assertEmpty($result);
+    }
+
+    /**
      * Test soft delete works
      */
     public function test_soft_delete_works(): void
