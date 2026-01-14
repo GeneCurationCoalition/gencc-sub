@@ -13,7 +13,7 @@
     import ChangeEvidence from './ChangeEvidence.vue';
     import ChangeReport from './ChangeReport.vue';
     import ChangeCriteria from './ChangeCriteria.vue';
-    import ChangeVersion from './ChangeVersion.vue';
+    import ChangeDescription from './ChangeDescription.vue';
     import ChangeMechanism from './ChangeMechanism.vue';
     import ChangeLocalKey from './ChangeLocalKey.vue';
     import MarkdownDisplay from './MarkdownDisplay.vue';
@@ -122,7 +122,7 @@
     const showReportDialog = ref(false);
     const showCriteriaDialog = ref(false);
     const showContributorDialog = ref(false);
-    const showVersionDialog = ref(false);
+    const showDescriptionDialog = ref(false);
     const showMechanismDialog = ref(false);
     const showLocalKeyDialog = ref(false);
 
@@ -319,7 +319,7 @@
         {
             dialogTitle.value = 'Edit the Version Information';
             dialogLabel.value = '';
-            showVersionDialog.value = true;
+            showDescriptionDialog.value = true;
         }
         else if (type == 'mech_of_disease')
         {
@@ -470,7 +470,7 @@
     }
 
 
-    async function updateVersion(value) {
+    async function updateDescription(value) {
 
         try {
             const response = await axios.post('/api/submissions/' + props.submission.sid, {
@@ -491,7 +491,7 @@
                 router.reload();
 
                 // close the dialog
-                showVersionDialog.value = false;
+                showDescriptionDialog.value = false;
             }
         } catch (error) {
             console.error(error);
@@ -1487,28 +1487,17 @@ console.log(props.submission)
                           </div>
                         </div>
 
-                        <!-- Version -->
-                        <div class="col-span-2 pt-3 text-right pr-3">Version:</div>
-                        <div class="col-span-3 py-1 my-2 border-l-8 pl-3">
-                            <div class="font-normal">{{ submission.submission_data?.version?.display }}  (Public)
-                                <span class="ml-5">{{ submission.submission_data?.version?.internal }}  (Internal)</span>
-                            </div>
-                        </div>
-                        <div class="col-span-2 pt-3 text-right pr-3">Reasons:</div>
-                        <div class="col-span-4 py-1 my-2 border-l-8 pl-3">
-                            <div class="font-normal">{{ submission.submission_data?.version?.reasons?.join(', ') }}</div>
-                        </div>
-
-                        <div class="flex col-span-1 py-1 pl-4 my-2 items-center">
-                          <div v-if="jobHasStatusProcessingOrError()">
-                            <Button icon="pi pi-check" @click="openDialog('version')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
-                        </div>
+                        <!-- Description of Change -->
                         <div class="col-span-2 pt-3 text-right pr-3">Description of Change:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3">
                             <div class="font-normal">{{ submission.submission_data?.version?.description }}</div>
                         </div>
+                        <div class="flex col-span-1 py-1 pl-4 my-2 items-center">
+                          <div v-if="jobHasStatusProcessingOrError()">
+                            <Button icon="pi pi-check" @click="openDialog('version')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
+                        </div>
                         <div class="col-span-12 ">
-                            <ChangeVersion v-model:visible="showVersionDialog" @input_version_close="showVersionDialog = false" @input_version_item="updateVersion" v-bind:input="submission.submission_data?.version" v-model:input2="dialogInput2" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '60rem' }"></ChangeVersion>
+                            <ChangeDescription v-model:visible="showDescriptionDialog" @input_description_close="showDescriptionDialog = false" @input_description_item="updateDescription" v-bind:input="submission.submission_data?.version" v-model:input2="dialogInput2" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '60rem' }"></ChangeDescription>
                         </div>
 
                         <!-- Workflow -->

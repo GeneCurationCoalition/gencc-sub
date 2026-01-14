@@ -888,6 +888,14 @@ class SubmissionController extends Controller
             $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
             $newSubmission->job_id = $job->id;
             $newSubmission->released_at = null; // New version not yet released
+
+            // Clear "description of change" field - user should enter a new one for this version
+            $submissionData = $newSubmission->submission_data;
+            if (isset($submissionData['version'])) {
+                $submissionData['version']['description'] = '';
+                $newSubmission->submission_data = $submissionData;
+            }
+
             $newSubmission->save();
 
             // Mark the original submission as not most recent (new draft is now the most recent version)
@@ -1004,6 +1012,14 @@ class SubmissionController extends Controller
             $newSubmission->status = Submission::STATUS_DRAFT_UNPUBLISH;
             $newSubmission->job_id = $job->id;
             $newSubmission->released_at = null;
+
+            // Clear "description of change" field - user should enter a new one for this version
+            $submissionData = $newSubmission->submission_data;
+            if (isset($submissionData['version'])) {
+                $submissionData['version']['description'] = '';
+                $newSubmission->submission_data = $submissionData;
+            }
+
             $newSubmission->save();
 
             // Mark the original submission as not most recent (historical)

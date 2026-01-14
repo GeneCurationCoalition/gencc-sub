@@ -347,7 +347,9 @@ class SubmissionModelTest extends TestCase
      */
     public function test_newversion_increments(): void
     {
-        $submission = Submission::factory()->create(['version' => '1.0.0']);
+        $submission = Submission::factory()->create([
+            'submission_data' => ['version' => ['internal' => '1.0.0', 'display' => '1.0']]
+        ]);
 
         $newVersion = $submission->newversion();
 
@@ -360,7 +362,7 @@ class SubmissionModelTest extends TestCase
     public function test_newversion_default_for_empty(): void
     {
         $submission = new Submission();
-        $submission->version = null;
+        $submission->submission_data = [];
 
         $newVersion = $submission->newversion();
 

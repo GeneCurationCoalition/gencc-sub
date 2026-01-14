@@ -905,11 +905,6 @@ class Submission extends Model
         }
 
         /**
-         * The version is optional, but we set a default if excluded
-         */
-        $this->version = $obj->version->internal ?? '1.0';
-
-        /**
          * We save the entire submission packet, unmodified, for future use
          */
         $this->original_submission_data = $obj;
@@ -1086,15 +1081,25 @@ class Submission extends Model
     }
 
 
-    /** 
+    /**
      * Return an updated version number based on the reason code.
      */
     public function newversion($code = null)
     {
-        if (empty($this->version))
+        // Get version from submission_data JSON (handle both array and object)
+        $data = $this->submission_data;
+        $internalVersion = null;
+
+        if (is_array($data)) {
+            $internalVersion = $data['version']['internal'] ?? null;
+        } elseif (is_object($data)) {
+            $internalVersion = $data->version->internal ?? null;
+        }
+
+        if (empty($internalVersion))
             return "1.0.0";
 
-        $version = explode('.', $this->version);
+        $version = explode('.', $internalVersion);
 
         $version[0]++;
 
