@@ -1053,6 +1053,22 @@ class Submission extends Model
 
 
     /**
+     * Normalize a JSON cast field to an associative array for safe manipulation.
+     * Laravel's 'object' cast can return stdClass, but setting values as arrays works.
+     * This helper ensures consistent array access regardless of how the data was loaded.
+     *
+     * @param mixed $data The cast field value (stdClass or array)
+     * @return array Normalized associative array
+     */
+    public static function normalizeJsonField($data): array
+    {
+        if ($data === null) {
+            return [];
+        }
+        return json_decode(json_encode($data), true);
+    }
+
+    /**
      * Initialize the submission_data structure for a blank submission
      * Uses empty placeholders when foreign keys are null
      */
@@ -1086,15 +1102,8 @@ class Submission extends Model
      */
     public function newversion($code = null)
     {
-        // Get version from submission_data JSON (handle both array and object)
-        $data = $this->submission_data;
-        $internalVersion = null;
-
-        if (is_array($data)) {
-            $internalVersion = $data['version']['internal'] ?? null;
-        } elseif (is_object($data)) {
-            $internalVersion = $data->version->internal ?? null;
-        }
+        $data = self::normalizeJsonField($this->submission_data);
+        $internalVersion = $data['version']['internal'] ?? null;
 
         if (empty($internalVersion))
             return "1.0.0";
