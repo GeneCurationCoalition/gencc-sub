@@ -1,13 +1,20 @@
 #!/bin/bash
 # scripts/version.sh - Generate application version based on git status
 #
-# Output:
+# If APP_VERSION environment variable is already set, returns that value.
+# Otherwise generates version from git:
 #   - Tagged release: v1.2.3
 #   - Tagged pre-release: pre-v1.3.0-beta
 #   - Committed, no tag: PR-abc1234
 #   - Uncommitted changes: dev-2026-01-14T13:45:00Z
 
 get_version() {
+    # If APP_VERSION is already set in environment, use it
+    if [ -n "$APP_VERSION" ]; then
+        echo "$APP_VERSION"
+        return
+    fi
+
     # Check for uncommitted changes first
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo "dev-$(date -u +%Y-%m-%dT%H:%M:%SZ)"

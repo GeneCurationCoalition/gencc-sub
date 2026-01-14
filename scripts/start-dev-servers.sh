@@ -235,8 +235,10 @@ start_docker() {
     echo -e "${YELLOW}Using container runtime: ${CONTAINER_CMD}${NC}"
     echo ""
 
-    # Generate and export application version
-    APP_VERSION=$("$SCRIPT_DIR/version.sh")
+    # Use existing APP_VERSION if set, otherwise generate from git
+    if [ -z "$APP_VERSION" ]; then
+        APP_VERSION=$("$SCRIPT_DIR/version.sh")
+    fi
     export APP_VERSION
     echo -e "${YELLOW}Application version: ${APP_VERSION}${NC}"
     echo ""
