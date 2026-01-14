@@ -24,6 +24,10 @@ RUN npm run build
 # Production image
 FROM php:8.1-fpm
 
+# Build argument for application version (set via --build-arg APP_VERSION=...)
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     libzip-dev \

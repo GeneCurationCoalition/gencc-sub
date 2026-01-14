@@ -347,7 +347,9 @@ class SubmissionModelTest extends TestCase
      */
     public function test_newversion_increments(): void
     {
-        $submission = Submission::factory()->create(['version' => '1.0.0']);
+        $submission = Submission::factory()->create([
+            'submission_data' => ['version' => ['internal' => '1.0.0', 'display' => '1.0']]
+        ]);
 
         $newVersion = $submission->newversion();
 
@@ -360,11 +362,58 @@ class SubmissionModelTest extends TestCase
     public function test_newversion_default_for_empty(): void
     {
         $submission = new Submission();
-        $submission->version = null;
+        $submission->submission_data = [];
 
         $newVersion = $submission->newversion();
 
         $this->assertEquals('1.0.0', $newVersion);
+    }
+
+    /**
+     * Test normalizeJsonField handles stdClass (from DB load)
+     */
+    public function test_normalize_json_field_handles_object(): void
+    {
+        $obj = new \stdClass();
+        $obj->version = new \stdClass();
+        $obj->version->internal = '1.0.0';
+        $obj->version->description = 'test';
+
+        $result = Submission::normalizeJsonField($obj);
+
+        $this->assertIsArray($result);
+        $this->assertEquals('1.0.0', $result['version']['internal']);
+        $this->assertEquals('test', $result['version']['description']);
+    }
+
+    /**
+     * Test normalizeJsonField handles array (from programmatic set)
+     */
+    public function test_normalize_json_field_handles_array(): void
+    {
+        $array = [
+            'version' => [
+                'internal' => '2.0.0',
+                'description' => 'array test'
+            ]
+        ];
+
+        $result = Submission::normalizeJsonField($array);
+
+        $this->assertIsArray($result);
+        $this->assertEquals('2.0.0', $result['version']['internal']);
+        $this->assertEquals('array test', $result['version']['description']);
+    }
+
+    /**
+     * Test normalizeJsonField handles null
+     */
+    public function test_normalize_json_field_handles_null(): void
+    {
+        $result = Submission::normalizeJsonField(null);
+
+        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     /**

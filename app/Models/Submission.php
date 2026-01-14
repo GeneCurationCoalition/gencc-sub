@@ -905,11 +905,6 @@ class Submission extends Model
         }
 
         /**
-         * The version is optional, but we set a default if excluded
-         */
-        $this->version = $obj->version->internal ?? '1.0';
-
-        /**
          * We save the entire submission packet, unmodified, for future use
          */
         $this->original_submission_data = $obj;
@@ -1058,6 +1053,22 @@ class Submission extends Model
 
 
     /**
+     * Normalize a JSON cast field to an associative array for safe manipulation.
+     * Laravel's 'object' cast can return stdClass, but setting values as arrays works.
+     * This helper ensures consistent array access regardless of how the data was loaded.
+     *
+     * @param mixed $data The cast field value (stdClass or array)
+     * @return array Normalized associative array
+     */
+    public static function normalizeJsonField($data): array
+    {
+        if ($data === null) {
+            return [];
+        }
+        return json_decode(json_encode($data), true);
+    }
+
+    /**
      * Initialize the submission_data structure for a blank submission
      * Uses empty placeholders when foreign keys are null
      */
@@ -1086,15 +1097,18 @@ class Submission extends Model
     }
 
 
-    /** 
+    /**
      * Return an updated version number based on the reason code.
      */
     public function newversion($code = null)
     {
-        if (empty($this->version))
+        $data = self::normalizeJsonField($this->submission_data);
+        $internalVersion = $data['version']['internal'] ?? null;
+
+        if (empty($internalVersion))
             return "1.0.0";
 
-        $version = explode('.', $this->version);
+        $version = explode('.', $internalVersion);
 
         $version[0]++;
 

@@ -3,6 +3,10 @@
 
 FROM php:8.1-fpm
 
+# Build argument for application version (set via --build-arg APP_VERSION=...)
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     libzip-dev \
@@ -46,8 +50,9 @@ WORKDIR /var/www/html
 # PHP development configuration
 RUN cp "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini"
 
-# Increase memory limit for development (2GB needed for UniProt import)
-RUN echo "memory_limit = 2048M" >> "$PHP_INI_DIR/conf.d/docker-php-memlimit.ini"
+# Copy custom PHP settings (memory limit, upload limits)
+# Uses dev-specific settings with higher memory limit for large imports
+COPY docker/php-custom-dev.ini $PHP_INI_DIR/conf.d/custom.ini
 
 # Create storage directories and set permissions
 RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \

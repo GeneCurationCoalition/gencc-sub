@@ -1,14 +1,22 @@
 <script setup>
 import AppLayout from '@/Layouts/AppLayout.vue';
 import Help from '@/Components/Help.vue';
+import { usePage } from '@inertiajs/vue3';
+
+const page = usePage();
 </script>
 
 <template>
     <AppLayout title="Help">
         <template #header>
-            <h2 class="font-semibold text-4xl text-white leading-tight">
-                Help & Documentation
-            </h2>
+            <div class="flex justify-between items-center">
+                <h2 class="font-semibold text-4xl text-white leading-tight">
+                    Help & Documentation
+                </h2>
+                <span class="text-sm font-normal text-white/70">
+                    version: {{ page.props.appVersion }}
+                </span>
+            </div>
         </template>
 
         <div class="pb-12">

@@ -235,6 +235,14 @@ start_docker() {
     echo -e "${YELLOW}Using container runtime: ${CONTAINER_CMD}${NC}"
     echo ""
 
+    # Use existing APP_VERSION if set, otherwise generate from git
+    if [ -z "$APP_VERSION" ]; then
+        APP_VERSION=$("$SCRIPT_DIR/version.sh")
+    fi
+    export APP_VERSION
+    echo -e "${YELLOW}Application version: ${APP_VERSION}${NC}"
+    echo ""
+
     # Restore database if --restore flag was passed
     if [ "$RESTORE_DB" = true ]; then
         restore_database

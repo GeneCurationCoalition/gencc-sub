@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Auth;
 
 use App\Models\Alias;
+use App\Models\Submission;
 use App\Models\Submitter;
 use App\Services\SubmissionDuplicateDetection;
 /**
@@ -100,9 +101,12 @@ class SubmissionController extends Controller
             ->where('status', \App\Models\Job::STATUS_SUBMITTED)
             ->exists();
 
-        // Check for unpublished duplicates (only for non-unpublished submissions)
+        // Check for unpublished duplicates (only for NEW submissions, not unpublished or republish)
+        // Republish submissions are intentionally republishing an unpublished submission,
+        // so they shouldn't see a warning about the unpublished submission they're replacing
         $unpublishedDuplicateWarning = null;
-        if ($submission->status !== 'unpublished' &&
+        if ($submission->status !== Submission::STATUS_UNPUBLISHED &&
+            $submission->status !== Submission::STATUS_REPUBLISH &&
             $submission->gene_id &&
             $submission->original_disease_id &&
             $submission->inheritance_id) {
