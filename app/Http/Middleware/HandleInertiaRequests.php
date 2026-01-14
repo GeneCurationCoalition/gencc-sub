@@ -38,6 +38,9 @@ class HandleInertiaRequests extends Middleware
     {
         return array_merge(parent::share($request), [
 
+            // Application version (from config/app.php)
+            'appVersion' => config('app.version'),
+
             // Lazily...
             'mine' => fn () => $request->user()
                 ? $request->user()->id
