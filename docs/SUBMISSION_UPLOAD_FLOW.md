@@ -42,7 +42,7 @@ This document provides a comprehensive explanation of what happens when a user u
       'ident' => generated_unique_id
   ])
   ```
-- File is stored: `storage/app/spreadsheets/{submitter_curie}/{document_ident}.xlsx`
+- File contents are stored in the database as base64 in the `file_contents` column of the `documents` table
 - Broadcasts 'begin' event via WebSocket (Ably) to start UI progress tracking
 
 **Request Parameters**:

@@ -46,7 +46,7 @@ class Document extends Model
      */
 	protected $fillable = [	'ident', 'type',
                             'user_id', 'submitter_id', 'job_id', 'file_name', 'extension', 'mime_type',
-                            'size', 'original_path', 'disk', 'local_path',
+                            'size', 'original_path', 'disk', 'local_path', 'file_contents',
                             'status', 'processing_errors',
                             'upload_state', 'processed_submissions', 'total_submissions',
                             'upload_started_at', 'upload_completed_at' ];

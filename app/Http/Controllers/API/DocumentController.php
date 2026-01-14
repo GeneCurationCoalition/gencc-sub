@@ -4,7 +4,6 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Events\SpreadsheetUpdate;
 
@@ -49,6 +48,55 @@ class DocumentController extends Controller
     public function index()
     {
         //
+    }
+
+    /**
+     * Get a temporary file path for the document's file contents
+     * Creates a temp file from the database blob for use with Excel library
+     *
+     * @param Document $document
+     * @return string|null The path to the temporary file, or null if no file contents
+     */
+    private function getTempFilePath(Document $document): ?string
+    {
+        if (empty($document->file_contents)) {
+            return null;
+        }
+
+        // Create temp directory if it doesn't exist
+        $tempDir = storage_path('app/temp');
+        if (!is_dir($tempDir)) {
+            mkdir($tempDir, 0775, true);
+        }
+
+        // Create a temporary file with the document's extension
+        $tempPath = $tempDir . '/' . $document->ident . '.' . $document->extension;
+
+        // Decode base64 and write to temp file
+        $contents = base64_decode($document->file_contents);
+        if ($contents === false) {
+            \Log::error('DocumentController: Failed to decode file contents for document: ' . $document->id);
+            return null;
+        }
+
+        if (file_put_contents($tempPath, $contents) === false) {
+            \Log::error('DocumentController: Failed to write temp file for document: ' . $document->id);
+            return null;
+        }
+
+        return $tempPath;
+    }
+
+    /**
+     * Clean up a temporary file after use
+     *
+     * @param string|null $tempPath
+     */
+    private function cleanupTempFile(?string $tempPath): void
+    {
+        if ($tempPath && file_exists($tempPath)) {
+            unlink($tempPath);
+        }
     }
 
 
@@ -131,15 +179,17 @@ class DocumentController extends Controller
         ];
         SpreadsheetUpdate::dispatch((object) $message);
 
-        // upload file
-        $status = Storage::put("spreadsheets/{$effectiveSubmitter->curie}/{$document->ident}.{$document->extension}", file_get_contents($file));
-        $document->local_path = "spreadsheets/{$effectiveSubmitter->curie}/{$document->ident}.{$document->extension}";
-
-        if ($status === false)
+        // Store file contents in database as base64
+        $fileContents = file_get_contents($file);
+        if ($fileContents === false) {
             return response()->json(['success' => 'false',
                         'status_code' => 6001,
-                        'message' => 'Upload Failed'],
+                        'message' => 'Upload Failed - Could not read file'],
                         200);
+        }
+
+        $document->file_contents = base64_encode($fileContents);
+        $document->local_path = null; // No longer using filesystem storage
 
         $document->save();
 
@@ -391,10 +441,8 @@ class DocumentController extends Controller
             }
         }
 
-        // Delete the document file from storage
-        if (Storage::exists($document->local_path)) {
-            Storage::delete($document->local_path);
-        }
+        // File contents are stored in database, so deleting the document record
+        // will automatically delete the file blob - no filesystem cleanup needed
 
         // Delete the document record
         $document->delete();
@@ -423,9 +471,30 @@ class DocumentController extends Controller
     {
         \Log::info('DocumentController@validateFile: Starting validation for document: ' . $document->id);
 
-        // Import raw data for header validation
-        $rawWorksheets = Excel::toArray([], storage_path('app/') . $document->local_path);
-        $rawFirstsheet = collect($rawWorksheets[0]);
+        // Create temp file from database blob for Excel library
+        $tempPath = $this->getTempFilePath($document);
+        if ($tempPath === null) {
+            \Log::error('DocumentController@validateFile: Failed to create temp file for document: ' . $document->id);
+            return [
+                'has_errors' => true,
+                'errors' => [[
+                    'error_type' => 'system_error',
+                    'severity' => 'error',
+                    'message' => 'Failed to read file contents from database',
+                    'rows' => 'N/A'
+                ]],
+                'row_count' => 0
+            ];
+        }
+
+        try {
+            // Import raw data for header validation
+            $rawWorksheets = Excel::toArray([], $tempPath);
+            $rawFirstsheet = collect($rawWorksheets[0]);
+        } finally {
+            // Always clean up temp file
+            $this->cleanupTempFile($tempPath);
+        }
 
         // Spreadsheet structure: Rows 1-6 are headers, rows 7-12 are info/help text, row 13+ is data
         // Count rows after skipping the first 12 rows AND filtering out empty rows
@@ -600,9 +669,24 @@ class DocumentController extends Controller
             }
         });
 
+        // Create temp file from database blob for Excel library
+        $tempPath = $this->getTempFilePath($document);
+        if ($tempPath === null) {
+            \Log::error('DocumentController@parser: Failed to create temp file for document: ' . $document->id);
+            $shutdownHandled = true;
+            return [
+                'processed_rows' => 0,
+                'total_rows' => 0,
+                'errors' => [['message' => 'Failed to read file contents from database']]
+            ];
+        }
+
         // Import Excel file with processed headers for data processing
-        $worksheets = Excel::toCollection(new SubmissionImport, storage_path('app/') . $document->local_path);
+        $worksheets = Excel::toCollection(new SubmissionImport, $tempPath);
         $firstsheet = $worksheets[0];
+
+        // Clean up temp file now that we've loaded it into memory
+        $this->cleanupTempFile($tempPath);
 
         $rownum = 0;
         $submitter = $document->submitter;
@@ -1191,15 +1275,23 @@ class DocumentController extends Controller
             ->where('submitter_id', $effectiveSubmitterId)
             ->firstOrFail();
 
-        // Verify the file exists in storage
-        $filePath = storage_path('app/' . $document->local_path);
-
-        if (!file_exists($filePath)) {
+        // Verify file contents exist in database
+        if (empty($document->file_contents)) {
             abort(404, 'File not found');
         }
 
+        // Decode base64 file contents
+        $contents = base64_decode($document->file_contents);
+        if ($contents === false) {
+            abort(500, 'Failed to decode file contents');
+        }
+
         // Return the file as a download
-        return response()->download($filePath, $document->file_name);
+        return response($contents, 200, [
+            'Content-Type' => $document->mime_type ?? 'application/octet-stream',
+            'Content-Disposition' => 'attachment; filename="' . $document->file_name . '"',
+            'Content-Length' => strlen($contents),
+        ]);
     }
 
     /**
@@ -1207,14 +1299,13 @@ class DocumentController extends Controller
      */
     public function process($document)
     {
-        // quick check if file exists
-        $file = Storage::get("spreadsheets/{$document->local_path}/{$document->ident}.{$document->extension}");
-
-        if ($file === null || $file === false)
+        // quick check if file exists in database
+        if (empty($document->file_contents)) {
             return;
+        }
 
         // quick check to see if this is still a valid work job or has another process completed it
-        if (self::ident($document->ident)->where('status', Document::STATUS_STORED_PROCESSED)->exists())
+        if (Document::ident($document->ident)->where('status', Document::STATUS_STORED_PROCESSED)->exists())
             return;
 
         // process the spreadsheet
@@ -1223,7 +1314,7 @@ class DocumentController extends Controller
         // send notification to user
         $message = [
             'ident' => $document->job->ident,
-            'size' => $file->getSize(),
+            'size' => $document->size,
             'status' => 'complete'
         ];
 
