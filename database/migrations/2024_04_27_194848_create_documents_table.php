@@ -23,7 +23,7 @@ return new class extends Migration
             $table->string('mime_type');
             $table->integer('size');
             $table->string('original_path')->nullable();
-            $table->string('local_path');
+            $table->string('local_path')->nullable();
             $table->string('disk')->default('local');
             $table->tinyInteger('status')->default(1);
             $table->timestamps();

@@ -36,7 +36,7 @@ use App\Http\Controllers\SubmissionDirectionsController;
 
     // Download GenCC submission template (public - no auth required)
     Route::get('/download/template', function () {
-        $templatePath = storage_path('app/templates/GenCC Submission Spreadsheet.xlsx');
+        $templatePath = public_path('documents/GenCC Submission Spreadsheet.xlsx');
 
         // If local template exists, serve it
         if (file_exists($templatePath)) {

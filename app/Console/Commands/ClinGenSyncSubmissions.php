@@ -64,12 +64,20 @@ class ClinGenSyncSubmissions extends Command
         $this->info('Creating zip file...');
 
         $comparisonDir = base_path('data/clingen/comparison');
-        $zipFileName = 'clingen_sync_' . date('Y-m-d_His') . '.zip';
+        $zipFileName = 'clingen_sync.zip';  // Use fixed filename to avoid accumulation
         $zipPath = storage_path('app/public/' . $zipFileName);
 
         // Ensure the public storage directory exists
         if (!file_exists(storage_path('app/public'))) {
             mkdir(storage_path('app/public'), 0755, true);
+        }
+
+        // Delete any existing clingen_sync zip files to avoid accumulation
+        $existingFiles = glob(storage_path('app/public/clingen_sync*.zip'));
+        foreach ($existingFiles as $existingFile) {
+            if (unlink($existingFile)) {
+                $this->info("  Removed old file: " . basename($existingFile));
+            }
         }
 
         $zip = new ZipArchive();
