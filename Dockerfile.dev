@@ -50,11 +50,9 @@ WORKDIR /var/www/html
 # PHP development configuration
 RUN cp "$PHP_INI_DIR/php.ini-development" "$PHP_INI_DIR/php.ini"
 
-# Increase memory limit for development (2GB needed for UniProt import)
-# Also increase upload limits for large submission files
-RUN echo "memory_limit = 2048M" >> "$PHP_INI_DIR/conf.d/docker-php-memlimit.ini" \
-    && echo "upload_max_filesize = 20M" >> "$PHP_INI_DIR/conf.d/docker-php-uploads.ini" \
-    && echo "post_max_size = 20M" >> "$PHP_INI_DIR/conf.d/docker-php-uploads.ini"
+# Copy custom PHP settings (memory limit, upload limits)
+# Uses dev-specific settings with higher memory limit for large imports
+COPY docker/php-custom-dev.ini $PHP_INI_DIR/conf.d/custom.ini
 
 # Create storage directories and set permissions
 RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \
