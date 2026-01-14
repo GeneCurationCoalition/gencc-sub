@@ -890,7 +890,8 @@ class SubmissionController extends Controller
             $newSubmission->released_at = null; // New version not yet released
 
             // Clear "description of change" field - user should enter a new one for this version
-            $submissionData = $newSubmission->submission_data;
+            // Convert to array for consistent manipulation (handles both stdClass and array)
+            $submissionData = json_decode(json_encode($newSubmission->submission_data), true);
             if (isset($submissionData['version'])) {
                 $submissionData['version']['description'] = '';
                 $newSubmission->submission_data = $submissionData;
@@ -1014,7 +1015,8 @@ class SubmissionController extends Controller
             $newSubmission->released_at = null;
 
             // Clear "description of change" field - user should enter a new one for this version
-            $submissionData = $newSubmission->submission_data;
+            // Convert to array for consistent manipulation (handles both stdClass and array)
+            $submissionData = json_decode(json_encode($newSubmission->submission_data), true);
             if (isset($submissionData['version'])) {
                 $submissionData['version']['description'] = '';
                 $newSubmission->submission_data = $submissionData;
