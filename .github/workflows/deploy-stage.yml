@@ -18,10 +18,13 @@ jobs:
       packages: write
     outputs:
       image: ${{ steps.version.outputs.image }}
-      version: ${{ steps.version.outputs.version }}
+      image_tag: ${{ steps.version.outputs.image_tag }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # Fetch full history for git describe
+          fetch-tags: true    # Ensure tags are available for version.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -36,18 +39,31 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          # Determine version: manual input > release tag > branch name
+          # Use scripts/version.sh for consistent version generation
+          # Pass manual input as APP_VERSION env var if provided
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          elif [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"  # Strip 'v' prefix: v1.2.3 -> 1.2.3
-          else
-            VERSION="${GITHUB_REF_NAME}"  # Use branch name
+            export APP_VERSION="${{ inputs.version }}"
           fi
+          APP_VERSION=$(./scripts/version.sh)
+
+          # Docker image tag for registry
+          if [ -n "${{ inputs.version }}" ]; then
+            IMAGE_TAG="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            IMAGE_TAG="${GITHUB_REF_NAME#v}"  # Strip 'v' prefix: v1.2.3 -> 1.2.3
+          else
+            IMAGE_TAG="${GITHUB_REF_NAME}"  # Use branch name
+          fi
+
           IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
 
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+
+          # Debug: Show what will be passed to Docker build
+          echo "::notice::APP_VERSION=${APP_VERSION}"
+          echo "::notice::IMAGE_TAG=${IMAGE_TAG}"
 
       - name: Build and push Docker image
         id: build
@@ -55,12 +71,14 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.app_version }}
           tags: |
-            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.image_tag }}
             ${{ steps.version.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ steps.version.outputs.app_version }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=registry,ref=${{ steps.version.outputs.image }}:buildcache
           cache-to: type=registry,ref=${{ steps.version.outputs.image }}:buildcache,mode=max
@@ -87,7 +105,7 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
           IMAGE: ${{ needs.build-and-push.outputs.image }}
-          VERSION: ${{ needs.build-and-push.outputs.version }}
+          VERSION: ${{ needs.build-and-push.outputs.image_tag }}
         run: |
           ssh ${STAGING_USER}@${STAGING_HOST} << EOF
             set -e
