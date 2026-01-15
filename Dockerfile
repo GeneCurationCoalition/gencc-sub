@@ -10,6 +10,10 @@ RUN composer install --no-dev --no-scripts --ignore-platform-reqs --prefer-dist
 # Build frontend assets
 FROM node:22-alpine AS frontend
 
+# Build argument for app name (can be overridden via --build-arg)
+ARG VITE_APP_NAME="GenCC Submission Portal"
+ENV VITE_APP_NAME=${VITE_APP_NAME}
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
