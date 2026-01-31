@@ -117,15 +117,31 @@ restore_database() {
         exit 1
     fi
 
+    # Get database configuration from .env
+    ENV_FILE="$PROJECT_DIR/.env"
+    if [ ! -f "$ENV_FILE" ]; then
+        echo -e "${RED}Error: .env file not found: $ENV_FILE${NC}"
+        exit 1
+    fi
+
+    # Use environment variables if set, otherwise read from .env
+    DB_HOST="${DB_HOST:-$(grep "^DB_HOST=" "$ENV_FILE" | cut -d '=' -f2)}"
+    DB_PORT="${DB_PORT:-$(grep "^DB_PORT=" "$ENV_FILE" | cut -d '=' -f2)}"
+    DB_DATABASE="${DB_DATABASE:-$(grep "^DB_DATABASE=" "$ENV_FILE" | cut -d '=' -f2)}"
+    DB_USERNAME="${DB_USERNAME:-$(grep "^DB_USERNAME=" "$ENV_FILE" | cut -d '=' -f2)}"
+    DB_PASSWORD="${DB_PASSWORD:-$(grep "^DB_PASSWORD=" "$ENV_FILE" | cut -d '=' -f2)}"
+
     echo -e "${YELLOW}Restoring from: $BACKUP_FILE${NC}"
-    echo -e "${YELLOW}WARNING: This will overwrite all existing data in gencc_sub!${NC}"
+    echo -e "${YELLOW}WARNING: This will overwrite all existing data in $DB_DATABASE!${NC}"
     echo ""
 
     # Restore database (non-interactive - used in script context)
-    if gunzip -c "$BACKUP_FILE" | mysql -u root -ppassword gencc_sub 2>/dev/null; then
+    MYSQL_ERROR=$(gunzip -c "$BACKUP_FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE" 2>&1)
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}Database restored successfully!${NC}"
     else
         echo -e "${RED}Error restoring database${NC}"
+        echo -e "${RED}$MYSQL_ERROR${NC}"
         exit 1
     fi
     echo ""
