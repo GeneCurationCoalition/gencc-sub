@@ -35,6 +35,11 @@ class Submission extends Model
     use HasFactory;
     use SoftDeletes;
 
+    /**
+     * When true, bypasses immutability guards on published/unpublished/submitted submissions.
+     * Only set this temporarily in trusted system processes (e.g. release pipeline).
+     */
+    public static bool $bypassImmutability = false;
 
     /**
      * The attributes that should be cast to native types.
@@ -244,25 +249,54 @@ class Submission extends Model
             }
         });
 
-        // Set released_at when submission status changes to PUBLISHED (for non-import workflows)
-        // Only set if:
-        // - status is changing to PUBLISHED
-        // - released_at is not already set
-        // - we're not just updating released_at (backfill scenario)
-        static::updating(function (Model $model) {
-            $dirty = $model->getDirty();
+        // Combined updating guard: immutability check + auto-set released_at
+        static::updating(function (Submission $submission) {
+            // --- Immutability guard ---
+            // Prevent modifications to published, unpublished, or submitted submissions.
+            // Only whitelisted fields (status transitions, release metadata) are allowed through.
+            if (!static::$bypassImmutability) {
+                $immutableStatuses = [self::STATUS_PUBLISHED, self::STATUS_UNPUBLISHED];
+                $isImmutable = in_array($submission->getOriginal('status'), $immutableStatuses);
 
+                // Also check if submission is in a submitted job
+                if (!$isImmutable && $submission->job) {
+                    $isImmutable = $submission->job->status === Job::STATUS_SUBMITTED;
+                }
+
+                if ($isImmutable) {
+                    // Fields that the release process and system are allowed to change
+                    $allowedFields = [
+                        'status', 'released_at', 'unpublished_at',
+                        'is_most_recent', 'is_live',
+                        'original_submission_data',
+                        'job_id',              // failed publish moves submission to draft job
+                        'submission_errors',   // publish error recording
+                        'sid',                 // set by created event via raw DB update
+                    ];
+
+                    $dirty = array_keys($submission->getDirty());
+                    $disallowed = array_diff($dirty, $allowedFields);
+
+                    if (!empty($disallowed)) {
+                        throw new \RuntimeException(
+                            "Cannot modify immutable submission {$submission->sid} (status: {$submission->getOriginal('status')}). " .
+                            "Disallowed fields: " . implode(', ', $disallowed)
+                        );
+                    }
+                }
+            }
+
+            // --- Auto-set released_at ---
+            // Set released_at when submission status changes to PUBLISHED (for non-import workflows)
             // Skip if we're updating released_at (backfill scenario)
-            if ($model->isDirty('released_at')) {
-                \Log::info("Skipping released_at auto-set for submission {$model->id} - released_at is dirty (backfill)");
+            if ($submission->isDirty('released_at')) {
                 return;
             }
 
-            if ($model->isDirty('status') &&
-                $model->status == self::STATUS_PUBLISHED &&
-                $model->released_at === null) {
-                \Log::info("Setting released_at for submission {$model->id} (SID: {$model->sid}) to current datetime. Dirty: " . implode(', ', array_keys($dirty)));
-                $model->released_at = Carbon::now();
+            if ($submission->isDirty('status') &&
+                $submission->status == self::STATUS_PUBLISHED &&
+                $submission->released_at === null) {
+                $submission->released_at = Carbon::now();
             }
         });
     }

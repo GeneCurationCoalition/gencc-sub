@@ -31,6 +31,11 @@ class Job extends Model
     use HasFactory;
     use SoftDeletes;
 
+    /**
+     * When true, bypasses immutability guards on submitted/released jobs.
+     * Only set this temporarily in trusted system processes (e.g. release pipeline).
+     */
+    public static bool $bypassImmutability = false;
 
     /**
      * The attributes that should be cast to native types.
@@ -133,6 +138,36 @@ class Job extends Model
             $model->update(['slug' => 'J-1'
                     . str_pad($model->id ,5, '0', STR_PAD_LEFT)])
         );
+
+        // Immutability guard: prevent modifications to submitted or released jobs.
+        // Only whitelisted fields (status transitions, release metadata) are allowed through.
+        static::updating(function (Job $job) {
+            if (static::$bypassImmutability) {
+                return true;
+            }
+
+            $immutableStatuses = [self::STATUS_SUBMITTED, self::STATUS_RELEASED];
+            if (!in_array($job->getOriginal('status'), $immutableStatuses)) {
+                return true;
+            }
+
+            $allowedFields = [
+                'status', 'released_at', 'submitted_at',
+                'processed_submission_ids',
+                'is_publishing',  // flag toggled during release
+                'slug',           // auto-generated after create
+            ];
+
+            $dirty = array_keys($job->getDirty());
+            $disallowed = array_diff($dirty, $allowedFields);
+
+            if (!empty($disallowed)) {
+                throw new \RuntimeException(
+                    "Cannot modify immutable job {$job->slug} (status: {$job->getOriginal('status')}). " .
+                    "Disallowed fields: " . implode(', ', $disallowed)
+                );
+            }
+        });
 
         // Set submitted_at when job status changes to SUBMITTED
         // Set released_at when job status changes to PROCESSED
