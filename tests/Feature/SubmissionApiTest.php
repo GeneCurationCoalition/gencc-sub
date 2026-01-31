@@ -42,7 +42,6 @@ class SubmissionApiTest extends TestCase
     {
         // Create test submitter
         $this->submitter = Submitter::create([
-            'curie' => 'SUBMITTER:001',
             'name' => 'Test Submitter',
             'status' => 1,
             'type' => 0
@@ -1521,7 +1520,6 @@ class SubmissionApiTest extends TestCase
 
         // Create a different submitter
         $otherSubmitter = Submitter::create([
-            'curie' => 'GENCC_SUB:9999',
             'name' => 'Other Organization',
             'website' => 'https://other.org',
             'status' => Submitter::STATUS_ACTIVE,

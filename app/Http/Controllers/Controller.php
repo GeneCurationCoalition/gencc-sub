@@ -74,4 +74,38 @@ class Controller extends BaseController
 
         return $submitter->$relation();
     }
+
+    /**
+     * Check if admin user needs to select a submitter before accessing certain pages.
+     *
+     * Returns true if the user is an admin and has not selected a submitter to act as.
+     * Used to redirect admins to the dashboard when they try to access Jobs/Submissions
+     * without first selecting a submitter.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return bool
+     */
+    protected function adminNeedsSubmitterSelection(Request $request): bool
+    {
+        $user = Auth::user();
+
+        return $user?->isGenccAdmin() && !$request->session()->has('selected_submitter_id');
+    }
+
+    /**
+     * Redirect admin users who haven't selected a submitter to the dashboard.
+     *
+     * Call this at the start of controller methods that require a submitter context.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\RedirectResponse|null
+     */
+    protected function redirectAdminWithoutSubmitter(Request $request)
+    {
+        if ($this->adminNeedsSubmitterSelection($request)) {
+            return redirect()->route('dashboard')->with('warning', 'Please select a submitter to view Jobs or Submissions.');
+        }
+
+        return null;
+    }
 }

@@ -38,7 +38,7 @@ class Submitter extends Model
     protected $casts = [
         'counts' => 'object',
         'activity' => 'object',
-        'contacts' => 'object'
+        'contacts' => 'object',
     ];
 
     /**
@@ -46,8 +46,9 @@ class Submitter extends Model
      *
      * @var array
      */
-	protected $fillable = [	'ident', 'type', 
-                            'curie', 'name', 'description', 'logo',
+	protected $fillable = [	'ident', 'type',
+                            'name', 'description', 'logo',
+                            'logo_contents', 'logo_mime_type',
                             'website', 'assertion',
                             'counts', 'contacts', 'activity', 'notes',
                             'status' ];
@@ -103,11 +104,59 @@ class Submitter extends Model
 
 
     /**
-     * Get all the users associated with this submitter
+     * Boot method to auto-generate curie before record creation.
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function ($model) {
+            $model->curie = self::nextCurie();
+        });
+    }
+
+
+    /**
+     * Generate the next sequential GENCC curie.
+     *
+     * Finds the highest numeric suffix among existing GENCC:XXXXXX curies
+     * and returns the next one.
+     *
+     * @return string
+     */
+    public static function nextCurie(): string
+    {
+        $maxNum = self::withTrashed()
+            ->where('curie', 'like', 'GENCC:%')
+            ->pluck('curie')
+            ->map(fn ($curie) => (int) substr($curie, 6))
+            ->max();
+
+        $next = ($maxNum ?? 0) + 1;
+
+        return 'GENCC:' . sprintf('%06d', $next);
+    }
+
+
+    /**
+     * Get all the users associated with this submitter (via pivot)
      */
     public function users()
     {
-       return $this->hasMany('App\Models\User');
+       return $this->belongsToMany('App\Models\User', 'submitter_user')
+                   ->withPivot('is_contact')
+                   ->withTimestamps();
+    }
+
+    /**
+     * Get the contact user(s) for this submitter
+     */
+    public function contacts()
+    {
+       return $this->belongsToMany('App\Models\User', 'submitter_user')
+                   ->wherePivot('is_contact', true)
+                   ->withPivot('is_contact')
+                   ->withTimestamps();
     }
 
 
@@ -148,6 +197,15 @@ class Submitter extends Model
 
 
     /**
+     * Get all the teams associated with this submitter
+     */
+    public function teams()
+    {
+       return $this->hasMany('App\Models\Team');
+    }
+
+
+    /**
      * Query scope by ident
      *
      * @param	string	$ident
@@ -175,7 +233,6 @@ class Submitter extends Model
      * Factory method to create or update a submitter with standard settings.
      *
      * @param array $data Submitter data with keys:
-     *   - curie (required): Unique GENCC identifier (e.g., GENCC:000100)
      *   - name (required): Organization name
      *   - description (optional): Organization description
      *   - logo (optional): Path to logo image
@@ -184,33 +241,20 @@ class Submitter extends Model
      *   - contacts (optional): Contact information (array or string)
      *   - type (optional): Submitter type (default: TYPE_SUBMITTER)
      *   - status (optional): Submitter status (default: STATUS_ACTIVE)
-     *   - upsert (optional): If true, update existing submitter if found by curie
-     * @return Submitter The created or updated submitter
+     * @return Submitter The created submitter
      * @throws \InvalidArgumentException If required fields are missing
      */
     public static function createSubmitter(array $data): Submitter
     {
         // Validate required fields
-        $required = ['curie', 'name'];
-        foreach ($required as $field) {
-            if (empty($data[$field])) {
-                throw new \InvalidArgumentException("Missing required field: {$field}");
-            }
+        if (empty($data['name'])) {
+            throw new \InvalidArgumentException("Missing required field: name");
         }
 
-        $upsert = $data['upsert'] ?? false;
-
-        // Check for existing submitter
-        $existingSubmitter = self::where('curie', $data['curie'])->first();
-        if ($existingSubmitter && !$upsert) {
-            throw new \InvalidArgumentException("Submitter with curie '{$data['curie']}' already exists");
-        }
-
-        // Prepare submitter attributes
+        // Prepare submitter attributes (curie is always auto-assigned on create)
         $attributes = [
-            'curie' => $data['curie'],
             'name' => $data['name'],
-            'status' => $data['status'] ?? self::STATUS_ACTIVE,
+            'status' => $data['status'] ?? self::STATUS_INITIALIZING,
             'type' => $data['type'] ?? self::TYPE_SUBMITTER,
         ];
 
@@ -220,12 +264,6 @@ class Submitter extends Model
             if (isset($data[$field])) {
                 $attributes[$field] = $data[$field];
             }
-        }
-
-        if ($existingSubmitter) {
-            // Update existing submitter (upsert mode)
-            $existingSubmitter->update($attributes);
-            return $existingSubmitter->fresh();
         }
 
         // For new submitters, set counts if provided (constructor sets empty defaults)

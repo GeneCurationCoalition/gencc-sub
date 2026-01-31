@@ -7,10 +7,16 @@ use Illuminate\Console\Command;
 use App\Models\Disease;
 use App\Models\Submission;
 use App\Console\Traits\CachesFileHeaders;
+use App\Services\AdminProgressTracker;
 
 class UpdateDiseases extends Command
 {
     use CachesFileHeaders;
+
+    /**
+     * Operation identifier for progress tracking
+     */
+    public const PROGRESS_OPERATION = 'update_diseases';
 
     /**
      * The name and signature of the console command.
@@ -52,29 +58,58 @@ class UpdateDiseases extends Command
     {
         $this->info('Updating disease information with comprehensive reconciliation');
 
-        // MONDO must go first - it determines the canonical disease set and mappings
-        // Each method returns true if updates were made, false if skipped
-        $mondoUpdated = $this->mondo();
+        // Initialize progress tracking
+        AdminProgressTracker::start(self::PROGRESS_OPERATION, [
+            'mondo' => 'MONDO Diseases',
+            'omim' => 'OMIM Diseases',
+            'orphanet' => 'Orphanet Diseases',
+            'post_processing' => 'Post-processing',
+        ]);
 
-        // OMIM and Orphanet updates using MONDO mappings
-        $omimUpdated = $this->omim();
-        $orphanetUpdated = $this->orphanet();
+        try {
+            // MONDO must go first - it determines the canonical disease set and mappings
+            // Each method returns true if updates were made, false if skipped
+            $mondoUpdated = $this->mondo();
 
-        // Only run post-processing if at least one source was updated
-        if ($mondoUpdated || $omimUpdated || $orphanetUpdated) {
-            // Step 3: Assign mondo_id to OMIM diseases using Orphanet equivalence
-            $this->assignMondoIdViaOrphanet();
+            // OMIM and Orphanet updates using MONDO mappings
+            $omimUpdated = $this->omim();
+            $orphanetUpdated = $this->orphanet();
 
-            // Step 4: Assign mondo_id to Orphanet diseases using OMIM equivalence
-            $this->assignMondoIdViaOmim();
+            // Only run post-processing if at least one source was updated
+            if ($mondoUpdated || $omimUpdated || $orphanetUpdated) {
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 0, 3, 'Starting post-processing...');
 
-            // Reconcile all existing diseases not seen in this update
-            $this->reconcileUnseenDiseases();
-        } else {
-            $this->info('All source files unchanged - skipping post-processing');
+                // Step 3: Assign mondo_id to OMIM diseases using Orphanet equivalence
+                $this->assignMondoIdViaOrphanet();
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 1, 3, 'OMIM via Orphanet complete');
+
+                // Step 4: Assign mondo_id to Orphanet diseases using OMIM equivalence
+                $this->assignMondoIdViaOmim();
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 2, 3, 'Orphanet via OMIM complete');
+
+                // Reconcile all existing diseases not seen in this update
+                $this->reconcileUnseenDiseases();
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Reconciliation complete');
+            } else {
+                $this->info('All source files unchanged - skipping post-processing');
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Skipped - no changes');
+            }
+
+            $this->info('Disease update complete');
+
+            // Build summary
+            $summary = sprintf(
+                "MONDO: %d, OMIM: %d, Orphanet: %d diseases processed",
+                count($this->seenMondoIds),
+                count($this->seenOmimIds),
+                count($this->seenOrphanetIds)
+            );
+            AdminProgressTracker::complete(self::PROGRESS_OPERATION, $summary);
+
+        } catch (\Exception $e) {
+            AdminProgressTracker::fail(self::PROGRESS_OPERATION, $e->getMessage());
+            throw $e;
         }
-
-        $this->info('Disease update complete');
     }
 
 
@@ -89,6 +124,7 @@ class UpdateDiseases extends Command
     protected function mondo()
     {
         $this->info('...retrieving data from MONDO');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Checking MONDO source...');
 
         $url = 'http://purl.obolibrary.org/obo/mondo/mondo-with-equivalents.json';
         $fileIdentifier = "mondo_with_equivalents";
@@ -101,10 +137,13 @@ class UpdateDiseases extends Command
             // Still need to load mappings from existing MONDO diseases for OMIM/Orphanet phases
             $this->loadExistingMondoMappings();
 
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'mondo', 'Skipped - file unchanged');
+
             return false;
         }
 
         // Download and cache the file
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Downloading MONDO (~50MB)...');
         $data = $this->downloadAndCacheFile($url, $cacheFilename);
 
         if ($data === null) {
@@ -117,20 +156,30 @@ class UpdateDiseases extends Command
             }
         }
 
-        // Decode the JSON data
+        // Decode the JSON data (MONDO file is ~50MB, needs extra memory for decode)
+        $previousLimit = ini_get('memory_limit');
+        ini_set('memory_limit', '2G');
+
         $json = json_decode($data);
+        unset($data); // Free raw string immediately
 
         if ($json === null) {
+            ini_set('memory_limit', $previousLimit);
             $this->error('......FAILED to decode MONDO JSON');
             return false;
         }
 
         $this->info('...processing MONDO diseases and extracting mappings');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Processing MONDO diseases...');
 
         $deprecatedCount = 0;
+        $nodes = $json->graphs[0]->nodes;
+        $totalNodes = count($nodes);
+        $processedCount = 0;
+        $lastProgressUpdate = 0;
 
         // Loop through the nodes
-        foreach ($json->graphs[0]->nodes as $node)
+        foreach ($nodes as $node)
         {
             // MONDO uses underscore instead of colon
             $term = str_replace('_', ':', basename($node->id));
@@ -140,6 +189,13 @@ class UpdateDiseases extends Command
 
             // Track this MONDO ID as seen
             $this->seenMondoIds[] = $term;
+            $processedCount++;
+
+            // Update progress every 1000 items or 5%
+            if ($processedCount - $lastProgressUpdate >= 1000 || ($processedCount / $totalNodes * 100) - ($lastProgressUpdate / $totalNodes * 100) >= 5) {
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', $processedCount, $totalNodes);
+                $lastProgressUpdate = $processedCount;
+            }
 
             // Check if deprecated
             $is_deprecated = $node->meta->deprecated ?? false;
@@ -186,12 +242,22 @@ class UpdateDiseases extends Command
         // Update cached headers after successful processing
         $this->updateCachedHeaders($fileIdentifier, $url);
 
-        $this->info('...MONDO update complete (' . count($this->seenMondoIds) . ' diseases processed)');
+        $mondoCount = count($this->seenMondoIds);
+        $this->info('...MONDO update complete (' . $mondoCount . ' diseases processed)');
         if ($deprecatedCount > 0) {
             $this->info('...found ' . $deprecatedCount . ' deprecated MONDO diseases (deprecated: true)');
         }
         $this->info('...found ' . count($this->mondoExactMatchOmim) . ' OMIM exact_match relationships');
         $this->info('...found ' . count($this->mondoExactMatchOrphanet) . ' Orphanet exact_match relationships');
+
+        // Restore memory limit after MONDO processing
+        ini_set('memory_limit', $previousLimit);
+
+        AdminProgressTracker::completePhase(
+            self::PROGRESS_OPERATION,
+            'mondo',
+            sprintf('%d diseases processed (%d deprecated)', $mondoCount, $deprecatedCount)
+        );
 
         return true;
     }
@@ -333,6 +399,7 @@ class UpdateDiseases extends Command
     protected function omim()
     {
         $this->info('...retrieving data from OMIM');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', 0, 100, 'Checking OMIM source...');
 
         $key = env('OMIM_API_KEY');
         if (!$key)
@@ -348,6 +415,7 @@ class UpdateDiseases extends Command
         // Check if file needs updating
         if (!$this->shouldUpdateFile($fileIdentifier, $url)) {
             $this->info('...OMIM update skipped (file unchanged)');
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'omim', 'Skipped - file unchanged');
 
             // Still populate seenOmimIds for reconciliation
             $this->seenOmimIds = Disease::whereIn('type', [
@@ -364,6 +432,7 @@ class UpdateDiseases extends Command
         }
 
         // Download and cache the file
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', 0, 100, 'Downloading OMIM...');
         $data = $this->downloadAndCacheFile($url, $cacheFilename);
 
         if ($data === null) {
@@ -375,6 +444,7 @@ class UpdateDiseases extends Command
         }
 
         $this->info('...processing OMIM diseases');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', 0, 100, 'Processing OMIM diseases...');
 
         $deprecatedCount = 0;
 
@@ -463,10 +533,17 @@ class UpdateDiseases extends Command
         // Update cached headers
         $this->updateCachedHeaders($fileIdentifier, $url);
 
-        $this->info('...OMIM update complete (' . count($this->seenOmimIds) . ' diseases processed)');
+        $omimCount = count($this->seenOmimIds);
+        $this->info('...OMIM update complete (' . $omimCount . ' diseases processed)');
         if ($deprecatedCount > 0) {
             $this->info('...found ' . $deprecatedCount . ' deprecated/removed OMIM diseases (Caret prefix)');
         }
+
+        AdminProgressTracker::completePhase(
+            self::PROGRESS_OPERATION,
+            'omim',
+            sprintf('%d diseases processed', $omimCount)
+        );
 
         return true;
     }
@@ -503,6 +580,7 @@ class UpdateDiseases extends Command
     protected function orphanet()
     {
         $this->info('...retrieving data from Orphanet');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', 0, 100, 'Checking Orphanet source...');
 
         $url = 'https://www.orphadata.com/data/xml/en_product1.xml';
         $fileIdentifier = 'orphanet_product1';
@@ -511,6 +589,7 @@ class UpdateDiseases extends Command
         // Check if file needs updating
         if (!$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
             $this->info('...Orphanet update skipped (file unchanged)');
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'orphanet', 'Skipped - file unchanged');
 
             // Still need to track seen IDs from existing Orphanet diseases
             $this->seenOrphanetIds = Disease::where('type', Disease::TYPE_ORPHANET)
@@ -522,6 +601,7 @@ class UpdateDiseases extends Command
         }
 
         // Download and cache the file
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', 0, 100, 'Downloading Orphanet...');
         $data = $this->downloadAndCacheFile($url, $cacheFilename);
 
         if ($data === null) {
@@ -541,6 +621,7 @@ class UpdateDiseases extends Command
         }
 
         $this->info('...processing Orphanet diseases');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', 0, 100, 'Processing Orphanet diseases...');
 
         $deprecatedCount = 0;
 
@@ -622,10 +703,17 @@ class UpdateDiseases extends Command
         // Update cached headers after successful processing
         $this->updateCachedHeaders($fileIdentifier, $url);
 
-        $this->info('...Orphanet update complete (' . count($this->seenOrphanetIds) . ' diseases processed)');
+        $orphanetCount = count($this->seenOrphanetIds);
+        $this->info('...Orphanet update complete (' . $orphanetCount . ' diseases processed)');
         if ($deprecatedCount > 0) {
             $this->info('...found ' . $deprecatedCount . ' deprecated/inactive Orphanet diseases (DisorderFlag 495:8192)');
         }
+
+        AdminProgressTracker::completePhase(
+            self::PROGRESS_OPERATION,
+            'orphanet',
+            sprintf('%d diseases processed', $orphanetCount)
+        );
 
         return true;
     }

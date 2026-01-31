@@ -7,8 +7,7 @@
 
     // component side validations
     const schema = yup.object({
-        name: yup.string().required().label('Name').max(248),
-        creds: yup.string().label('Credentials').max(248),
+        name: yup.string().required().label('Team Name').max(248),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
@@ -16,7 +15,6 @@
     });
 
     const [name] = defineField('name');
-    const [creds] = defineField('creds');
 
     const disabled = computed(() => {
         return Object.keys(errors.value).length !== 0
@@ -30,7 +28,7 @@
         visible.value = first;
     });
 
-    const emit = defineEmits(['input_dialog_close', 'input_name_item'])
+    const emit = defineEmits(['input_dialog_close', 'input_team_item'])
 
     /**
      * Callback function when user clicks on the update button
@@ -38,21 +36,22 @@
     function closeCallback()
     {
         // one last check for errors
-        if (disabled.value  === true)
+        if (disabled.value === true)
             return;
 
         // send selection back to the parent
-        emit('input_name_item', {'name': name.value, 'credentials': creds.value});
+        emit('input_team_item', {
+            'name': name.value
+        });
         emit('input_dialog_close');
     }
 
     /**
      * Function to initialize the local models used in child components with props values
      */
-     function initializeInput()
+    function initializeInput()
     {
-        name.value = props.input.name;
-        creds.value = props.input.credentials
+        name.value = props.input?.name || '';
     }
 
 </script>
@@ -62,44 +61,32 @@
         <Dialog v-model:visible="visible" modal @show="initializeInput" header="header" class="ring-8 ring-sky-500" :style="{ width: '50rem' }">
             <template #header>
                 <div class="inline-flex align-items-center justify-content-center gap-2">
-                    <span class="font-bold text-2xl">Change Name</span>
+                    <span class="font-bold text-2xl">Edit Team</span>
                 </div>
             </template>
 
-            <div class="grid grid-cols-4">
+            <div class="grid grid-cols-4 gap-y-4">
+                <!-- Team Name -->
                 <div class="flex items-center gap-3">
-                    <label for="newInput" class="flex items-center font-semibold w-6rem">Enter Full Name</label>
+                    <label for="nameInput" class="flex items-center font-semibold w-6rem">Team Name</label>
                 </div>
                 <div class="flex items-center col-span-3 gap-3">
-                    <InputText type="text" v-model="name" class="flex-auto" autocomplete="off" required />
+                    <InputText id="nameInput" type="text" v-model="name" class="flex-auto" autocomplete="off" required />
                 </div>
                 <div class="flex items-center gap-3">
                     &nbsp;
                 </div>
                 <div class="flex items-center col-span-3">
-                    <small id="username-help" class="text-red-600">{{ errors.name }}</small>
-                </div>
-
-                <div class="flex items-center gap-3 mt-3">
-                    <label for="newInput" class="flex items-center font-semibold w-6rem">Enter Credentials</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3 mt-3">
-                    <InputText type="text" v-model="creds" class="flex-auto" autocomplete="off" required />
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small id="username-help" class="text-red-600">{{ errors.creds }}</small>
+                    <small class="text-red-600">{{ errors.name }}</small>
                 </div>
             </div>
-                
+
             <template #footer>
                 <div class="flex gap-8 bg-slate-50 m-0 p-4">
                     <Button label="Update" @click="closeCallback" outlined severity="info" class="ml-4 p-3" :disabled="disabled" />
                     <Button label="Cancel" @click="visible = false" severity="secondary" class="mr-4 p-3" />
                 </div>
-            </template>               
+            </template>
         </Dialog>
     </div>
 </template>

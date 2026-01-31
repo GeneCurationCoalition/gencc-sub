@@ -36,9 +36,8 @@ class SubmissionFileValidationTest extends TestCase
      */
     protected function seedTestData(): void
     {
-        // Create test submitter
+        // Create test submitter (curie is auto-assigned)
         $this->submitter = Submitter::create([
-            'curie' => 'SUBMITTER:001',
             'name' => 'Test Submitter',
             'status' => 1
         ]);
@@ -201,7 +200,7 @@ class SubmissionFileValidationTest extends TestCase
             'disease_name' => 'Test Disease',
             'moi_id' => 'HP:0000006',
             'moi_name' => 'Autosomal dominant',
-            'submitter_id' => 'SUBMITTER:001',
+            'submitter_id' => $this->submitter->curie,
             'submitter_name' => 'Test Submitter',
             'classification_id' => 'GENCC:100001',
             'classification_name' => 'Definitive',

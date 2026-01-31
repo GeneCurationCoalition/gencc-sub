@@ -20,11 +20,8 @@ class SubmitterFactory extends Factory
      */
     public function definition(): array
     {
-        $submitterNumber = fake()->unique()->numberBetween(1, 9999);
-
         return [
             'ident' => Str::uuid()->toString(),
-            'curie' => 'GENCC_SUB:' . str_pad($submitterNumber, 4, '0', STR_PAD_LEFT),
             'name' => fake()->company(),
             'website' => fake()->url(),
             'status' => Submitter::STATUS_ACTIVE,

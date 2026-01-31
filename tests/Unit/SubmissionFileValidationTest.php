@@ -116,9 +116,8 @@ class SubmissionFileValidationTest extends TestCase
             'status' => Inheritance::STATUS_ACTIVE,
         ]);
 
-        // Create test submitter
-        Submitter::create([
-            'curie' => 'SUBMITTER:001',
+        // Create test submitter (curie is auto-assigned)
+        $this->testSubmitter = Submitter::create([
             'name' => 'Test Submitter',
             'description' => 'Test submitter for validation',
         ]);
@@ -133,9 +132,8 @@ class SubmissionFileValidationTest extends TestCase
         // Create test job
         \App\Models\Job::create([
             'user_id' => 1,
-            'submitter_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
             'status' => \App\Models\Job::STATUS_DRAFT,
-            // created_at is auto-set by Laravel
         ]);
     }
 
@@ -202,7 +200,7 @@ class SubmissionFileValidationTest extends TestCase
             'disease_name' => 'disease',
             'moi_id' => 'HP:0000006',
             'moi_name' => 'Autosomal dominant',
-            'submitter_id' => 'SUBMITTER:001',
+            'submitter_id' => $this->testSubmitter->curie,
             'submitter_name' => 'Test Submitter',
             'classification_id' => 'GENCC:100001',
             'classification_name' => 'Definitive',
@@ -250,8 +248,8 @@ class SubmissionFileValidationTest extends TestCase
             $worksheet[] = array_fill(0, 18, '');
         }
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_file_format', $errors[0]['error_type']);
@@ -268,8 +266,8 @@ class SubmissionFileValidationTest extends TestCase
             $worksheet[] = array_fill(0, 18, ''); // All empty including row 6 (header)
         }
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         // Empty headers are treated as invalid headers, not missing headers
@@ -295,8 +293,8 @@ class SubmissionFileValidationTest extends TestCase
 
         $worksheet[] = $this->createValidDataRow();
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_header_columns', $errors[0]['error_type']);
@@ -311,8 +309,8 @@ class SubmissionFileValidationTest extends TestCase
             $this->createValidDataRow(['action' => 'X']) // Invalid action
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertStringContainsString('action', strtolower($errors[0]['message']));
@@ -330,8 +328,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('new_with_sgc_id', $errors[0]['error_type']);
@@ -349,8 +347,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('action_missing_sgc_id', $errors[0]['error_type']);
@@ -368,8 +366,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('missing_required_field', $errors[0]['error_type']);
@@ -390,8 +388,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('unpublish_has_data', $errors[0]['error_type']);
@@ -409,8 +407,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_sgc_id_format', $errors[0]['error_type']);
@@ -427,8 +425,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
@@ -445,8 +443,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
@@ -463,8 +461,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
@@ -481,8 +479,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
@@ -499,8 +497,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_pmid_format', $errors[0]['error_type']);
@@ -517,8 +515,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('missing_required_field', $errors[0]['error_type']);
@@ -540,8 +538,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('unique_column_requirement', $errors[0]['error_type']);
@@ -556,8 +554,8 @@ class SubmissionFileValidationTest extends TestCase
             $this->createValidDataRow()
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertEmpty($errors, 'Valid submission should not have errors. Errors: ' . json_encode($errors));
     }
@@ -590,12 +588,11 @@ class SubmissionFileValidationTest extends TestCase
             'original_disease_id' => 1,
             'classification_id' => 1,
             'inheritance_id' => 1,
-            'submitter_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
             'is_live' => true,
-            // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),
         ]);
@@ -608,8 +605,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('republish_gene_change', $errors[0]['error_type']);
@@ -632,12 +629,11 @@ class SubmissionFileValidationTest extends TestCase
             'original_disease_id' => 1,
             'classification_id' => 1,
             'inheritance_id' => 1,
-            'submitter_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
             'job_id' => 1,
             'user_id' => 1,
             'status' => 'published',
             'is_live' => true,
-            // created_at is auto-set by Laravel
             'submission_data' => json_encode(['test' => 'data']),
             'original_submission_data' => json_encode(['test' => 'data']),
         ]);
@@ -650,8 +646,8 @@ class SubmissionFileValidationTest extends TestCase
             ])
         ]);
 
-        SubmissionFileValidation::set_submitter_id(1);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, 1, true);
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
 
         // Should not have gene change error
         $geneChangeErrors = array_filter($errors, function($error) {

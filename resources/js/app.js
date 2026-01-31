@@ -43,6 +43,7 @@ import Tooltip from 'primevue/tooltip';
 import Dialog from 'primevue/dialog';
 import Card from 'primevue/card';
 import Calendar from 'primevue/calendar';
+import FileUpload from 'primevue/fileupload';
 import { ZiggyVue } from '../../vendor/tightenco/ziggy';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
@@ -72,6 +73,7 @@ createInertiaApp({
             .component('Dialog', Dialog)
             .component('Card', Card)
             .component('Calendar', Calendar)
+            .component('FileUpload', FileUpload)
             .mount(el);
     },
     progress: {

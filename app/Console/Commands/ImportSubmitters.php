@@ -72,9 +72,7 @@ class ImportSubmitters extends Command
                     continue;
                 }
 
-                // Create or update submitter
-                Submitter::createSubmitter([
-                    'curie' => $submitterData['curie'],
+                $attributes = [
                     'name' => $submitterData['name'],
                     'description' => $submitterData['description'] ?? null,
                     'logo' => $submitterData['logo'] ?? null,
@@ -83,8 +81,16 @@ class ImportSubmitters extends Command
                     'contacts' => $submitterData['contacts'] ?? null,
                     'type' => $submitterData['type'] ?? Submitter::TYPE_SUBMITTER,
                     'status' => $submitterData['status'] ?? Submitter::STATUS_ACTIVE,
-                    'upsert' => $upsert,
-                ]);
+                ];
+
+                if ($existingSubmitter) {
+                    $existingSubmitter->update($attributes);
+                } else {
+                    $submitter = Submitter::create($attributes);
+                    // Override auto-assigned curie with the one from the YAML file
+                    $submitter->curie = $submitterData['curie'];
+                    $submitter->save();
+                }
 
                 if ($existingSubmitter) {
                     $this->info("  Updated: {$name} ({$curie})");
