@@ -102,48 +102,13 @@ show_usage() {
     echo ""
 }
 
-# Function to restore database from baseline backup
+# Function to restore database using restore-db.sh (handles restore, migrations, logos)
 restore_database() {
-    BACKUP_FILE="$PROJECT_DIR/data/backups/gencc_sub_baseline_20260103.sql.gz"
-
     echo -e "${YELLOW}========================================${NC}"
     echo -e "${YELLOW}  Restoring Database from Baseline${NC}"
     echo -e "${YELLOW}========================================${NC}"
     echo ""
-
-    # Check if backup file exists
-    if [ ! -f "$BACKUP_FILE" ]; then
-        echo -e "${RED}Error: Backup file not found: $BACKUP_FILE${NC}"
-        exit 1
-    fi
-
-    # Get database configuration from .env
-    ENV_FILE="$PROJECT_DIR/.env"
-    if [ ! -f "$ENV_FILE" ]; then
-        echo -e "${RED}Error: .env file not found: $ENV_FILE${NC}"
-        exit 1
-    fi
-
-    # Use environment variables if set, otherwise read from .env
-    DB_HOST="${DB_HOST:-$(grep "^DB_HOST=" "$ENV_FILE" | cut -d '=' -f2)}"
-    DB_PORT="${DB_PORT:-$(grep "^DB_PORT=" "$ENV_FILE" | cut -d '=' -f2)}"
-    DB_DATABASE="${DB_DATABASE:-$(grep "^DB_DATABASE=" "$ENV_FILE" | cut -d '=' -f2)}"
-    DB_USERNAME="${DB_USERNAME:-$(grep "^DB_USERNAME=" "$ENV_FILE" | cut -d '=' -f2)}"
-    DB_PASSWORD="${DB_PASSWORD:-$(grep "^DB_PASSWORD=" "$ENV_FILE" | cut -d '=' -f2)}"
-
-    echo -e "${YELLOW}Restoring from: $BACKUP_FILE${NC}"
-    echo -e "${YELLOW}WARNING: This will overwrite all existing data in $DB_DATABASE!${NC}"
-    echo ""
-
-    # Restore database (non-interactive - used in script context)
-    MYSQL_ERROR=$(gunzip -c "$BACKUP_FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE" 2>&1)
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Database restored successfully!${NC}"
-    else
-        echo -e "${RED}Error restoring database${NC}"
-        echo -e "${RED}$MYSQL_ERROR${NC}"
-        exit 1
-    fi
+    "$PROJECT_DIR/restore-db.sh" --no-confirm
     echo ""
 }
 
@@ -194,13 +159,20 @@ start_pm2() {
 
     cd "$PROJECT_DIR"
 
-    # Restore database if --restore flag was passed
+    # Restore database if --restore flag was passed (includes migrations + logos)
     if [ "$RESTORE_DB" = true ]; then
         restore_database
+    else
+        run_migrations_local
     fi
 
-    run_migrations_local
     clear_caches
+
+    # Ensure storage symlink points to local path (Docker mode overwrites it)
+    echo -e "${YELLOW}Ensuring storage symlink...${NC}"
+    rm -f "$PROJECT_DIR/public/storage"
+    php artisan storage:link
+    echo ""
 
     # Stop existing PM2 processes
     echo -e "${YELLOW}Stopping existing PM2 processes...${NC}"
@@ -259,14 +231,13 @@ start_docker() {
     echo -e "${YELLOW}Application version: ${APP_VERSION}${NC}"
     echo ""
 
-    # Restore database if --restore flag was passed
+    # Restore database if --restore flag was passed (includes migrations + logos)
     if [ "$RESTORE_DB" = true ]; then
         restore_database
+    else
+        # Run migrations locally (since Docker uses host MySQL via host.docker.internal)
+        run_migrations_local
     fi
-
-    # Run migrations locally first (since Docker uses host MySQL)
-    # The docker-compose.dev.yml connects to host.docker.internal for MySQL
-    run_migrations_local
 
     # Stop any existing containers
     echo -e "${YELLOW}Stopping existing containers...${NC}"

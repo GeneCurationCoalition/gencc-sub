@@ -266,10 +266,9 @@ server {
 Add to crontab for scheduled commands:
 
 ```cron
-# Laravel scheduler (runs all scheduled commands)
-* * * * * cd /var/www/gencc-sub && php artisan schedule:run >> /dev/null 2>&1
+# Release pending submissions to gencc-search every Friday at midnight
+0 0 * * 5 cd /var/www/gencc-sub && php artisan gencc:release >> /var/log/gencc-release.log 2>&1
 
-# Or run individual commands manually:
 # Update PubMed data every 6 hours
 0 */6 * * * cd /var/www/gencc-sub && php artisan pubmed:sync >> /dev/null 2>&1
 
@@ -278,6 +277,30 @@ Add to crontab for scheduled commands:
 
 # Update gene data daily at 3 AM
 0 3 * * * cd /var/www/gencc-sub && php artisan update:genes >> /dev/null 2>&1
+```
+
+#### Container Deployments
+
+For containerized deployments on a VM, run cron on the host to exec into the container:
+
+```cron
+# Release pending submissions every Friday at midnight
+0 0 * * 5 docker exec gencc-sub php artisan gencc:release >> /var/log/gencc-release.log 2>&1
+```
+
+#### Log Rotation
+
+To prevent log files from growing unbounded, configure logrotate:
+
+```bash
+# /etc/logrotate.d/gencc
+/var/log/gencc-release.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+}
 ```
 
 ### Queue Workers

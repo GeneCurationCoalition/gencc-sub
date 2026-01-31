@@ -2,11 +2,22 @@
 
 # GenCC-Sub Database Restore Script
 # Restores the database from the baseline backup for development
+#
+# Usage:
+#   ./restore-db.sh               # Interactive mode (prompts for confirmation)
+#   ./restore-db.sh --no-confirm  # Non-interactive mode (skips confirmation)
 
-# Get the directory of this script
+# Get the directory of this script (so it works when called from other scripts)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
 BACKUP_FILE="$SCRIPT_DIR/data/backups/gencc_sub_baseline_20260103.sql.gz"
+
+# Parse arguments
+NO_CONFIRM=false
+for arg in "$@"; do
+    case "$arg" in
+        --no-confirm) NO_CONFIRM=true ;;
+    esac
+done
 
 echo "==========================================="
 echo "GenCC-Sub Database Restore Script"
@@ -38,8 +49,10 @@ echo "  $BACKUP_FILE"
 echo ""
 echo "WARNING: This will overwrite all existing data in $DB_DATABASE!"
 echo ""
-read -r -p "Press Enter to continue, or Ctrl+C to abort..."
-echo ""
+if [ "$NO_CONFIRM" = false ]; then
+    read -r -p "Press Enter to continue, or Ctrl+C to abort..."
+    echo ""
+fi
 
 echo "Restoring database..."
 MYSQL_ERROR=$(gunzip -c "$BACKUP_FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" -p"$DB_PASSWORD" "$DB_DATABASE" 2>&1)
@@ -53,3 +66,33 @@ else
     echo "$MYSQL_ERROR"
     exit 1
 fi
+
+echo ""
+echo "Running migrations..."
+php artisan migrate --force
+
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "Migrations completed successfully!"
+else
+    echo ""
+    echo "Error running migrations"
+    exit 1
+fi
+
+echo ""
+echo "Importing submitter logos..."
+php artisan import:submitter-logos
+
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "Logos imported successfully!"
+else
+    echo ""
+    echo "Warning: Some logos may have failed to import"
+fi
+
+echo ""
+echo "==========================================="
+echo "Database restore complete!"
+echo "==========================================="

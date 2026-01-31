@@ -53,6 +53,8 @@ services:
         composer install --no-interaction &&
         npm install &&
         php artisan key:generate --force --no-interaction 2>/dev/null || true &&
+        rm -f public/storage &&
+        php artisan storage:link &&
         pm2-runtime ecosystem.dev.config.cjs
       "
 
