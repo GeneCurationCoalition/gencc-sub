@@ -360,7 +360,7 @@
         //console.log(value);
         if (value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'inheritance',
                     curie: value
                 }, {
@@ -393,7 +393,7 @@
 
         if (value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'classification',
                     curie: value
                 }, {
@@ -418,7 +418,7 @@
 
     async function updateLocalKey(value) {
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'local_key',
                 local_key: value
             }, {
@@ -446,7 +446,7 @@
     async function updateMechanism(obj) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'mechanism_of_disease',
                 curie: obj.curie,
                 comment: obj.comment
@@ -473,7 +473,7 @@
     async function updateDescription(value) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'version',
                 curie: value.public,
                 private: value.private,
@@ -502,7 +502,7 @@
     async function updateNotes(obj) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'notes',
                 curie: 'notes update',
                 public: obj.public,
@@ -530,7 +530,7 @@
     async function updateContributor(obj) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'primary_contributor',
                 curie: obj.id,
                 name: obj.name
@@ -559,7 +559,7 @@
         const pmids = value.map(({ pmid, code }) => pmid);
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'evidence',
                 curie: pmids.join(','),
                 evidence: pmids
@@ -586,7 +586,7 @@
     async function updateReport(value) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'report',
                 curie: value.url,
                 date: value.date
@@ -613,7 +613,7 @@
     async function updateCriteria(value) {
 
         try {
-            const response = await axios.post('/api/submissions/' + props.submission.sid, {
+            const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'criteria',
                 curie: value.url + ',' + value.name,
                 url: value.url,
@@ -643,7 +643,7 @@
 
         if (value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'reportdate',
                     curie: value
                 }, {
@@ -670,7 +670,7 @@
         //console.log(value);
         if (value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'gene',
                     curie: value
                 }, {
@@ -702,7 +702,7 @@
 
         if (value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'disease',
                     curie: value
                 }, {
@@ -759,7 +759,7 @@
 
         if (entryText.value != '') {
             try {
-                const response = await axios.post('/api/submissions/' + props.submission.sid, {
+                const response = await axios.post('/api/submissions/' + props.submission.ident, {
                     type: 'disease',
                     curie: entryText.value
                 }, {
