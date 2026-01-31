@@ -50,7 +50,6 @@ class ImportUsers extends Command
 
         $upsert = $this->option('upsert');
         $stats = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0];
-        $adminUserCount = 0;
 
         foreach ($data['users'] as $index => $userData) {
             // For error reporting
@@ -74,9 +73,6 @@ class ImportUsers extends Command
                 if ($existingUser && !$upsert) {
                     $this->line("  Skipped: {$userData['name']} ({$userData['email']}) - already exists (add --upsert to update)");
                     $stats['skipped']++;
-                    if (!empty($userData['is_admin'])) {
-                        $adminUserCount++;
-                    }
                     continue;
                 }
 
@@ -86,7 +82,6 @@ class ImportUsers extends Command
                     'email' => $userData['email'] ?? null,
                     'password' => $userData['password'] ?? null,
                     'submitter_id' => $submitter->id,
-                    'credentials' => $userData['credentials'] ?? null,
                     'phone' => $userData['phone'] ?? null,
                     'upsert' => $upsert,
                 ]);
@@ -97,10 +92,6 @@ class ImportUsers extends Command
                 } else {
                     $this->info("  Created: {$userData['name']} ({$userData['email']})");
                     $stats['created']++;
-                }
-
-                if (!empty($userData['is_admin'])) {
-                    $adminUserCount++;
                 }
 
             } catch (\Exception $e) {
@@ -116,10 +107,6 @@ class ImportUsers extends Command
         $this->line("  Updated: {$stats['updated']}");
         $this->line("  Skipped: {$stats['skipped']}");
         $this->line("  Failed:  {$stats['failed']}");
-
-        if ($adminUserCount > 0) {
-            $this->line("  Admin users: {$adminUserCount}");
-        }
 
         return $stats['failed'] > 0 ? 1 : 0;
     }

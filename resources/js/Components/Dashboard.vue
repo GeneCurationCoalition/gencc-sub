@@ -6,7 +6,7 @@
     import Message from 'primevue/message';
     import Tag from 'primevue/tag';
     import Button from 'primevue/button';
-    import { computed, ref } from 'vue';
+    import { computed, ref, onMounted, onUnmounted } from 'vue';
     import { Link, router } from '@inertiajs/vue3';
     import axios from 'axios';
     import { useToast } from 'primevue/usetoast';
@@ -24,7 +24,9 @@
                                 // Section 3: Submissions Archived
                                 'archived_first_version_unique', 'archived_republish_unique', 'archived_unpublish_unique',
                                 'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
-                                'archived_unique_total', 'archived_total'])
+                                'archived_unique_total', 'archived_total',
+                                // Admin-specific data
+                                'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'disease_status', 'gene_status', 'admin_logs'])
 
     const seriesColors = ['#3b82f6', '#ef4444']; // Published (blue), Unpublished (red)
 
@@ -479,6 +481,304 @@
         }
     }
 
+    // Admin action states
+    const adminActionLoading = ref({
+        publish: false,
+        diseases: false,
+        genes: false,
+        pubmed: false
+    });
+
+    // Admin action status messages (shown near buttons during/after operations)
+    const adminActionStatus = ref({
+        publish: null,
+        diseases: null,
+        genes: null,
+        pubmed: null
+    });
+
+    // Progress polling intervals
+    const progressPollingIntervals = ref({});
+
+    // Map action names to operation identifiers used by AdminProgressTracker
+    const actionToOperation = {
+        diseases: 'update_diseases',
+        genes: 'update_genes',
+        pubmed: 'pubmed_sync',
+        publish: 'run_publish'
+    };
+
+    // Success messages for each action
+    const actionSuccessMessages = {
+        publish: 'Publish completed successfully',
+        diseases: 'Disease update completed',
+        genes: 'Gene update completed',
+        pubmed: 'PubMed sync completed successfully'
+    };
+
+    // Extract progress status text from polling response
+    function extractProgressText(progress) {
+        const recentMessages = progress.messages || [];
+        let statusText = '';
+
+        if (recentMessages.length > 0) {
+            const latestMessage = recentMessages[recentMessages.length - 1];
+            statusText = latestMessage.message || '';
+        }
+
+        if (!statusText && progress.current_phase) {
+            const phaseName = progress.phases?.[progress.current_phase] || progress.current_phase;
+            const phaseProgress = progress.phase_progress?.[progress.current_phase];
+            if (phaseProgress && phaseProgress.percent !== undefined && phaseProgress.percent > 0) {
+                statusText = `${phaseName}: ${phaseProgress.percent}%`;
+            } else {
+                statusText = phaseName + '...';
+            }
+        }
+
+        return statusText;
+    }
+
+    // Parse output for "unchanged" or "skipped" indicators
+    function parseOutputForSkipped(output) {
+        if (!output) return [];
+        const skippedItems = [];
+
+        if (output.includes('MONDO update skipped') || output.includes('MONDO: Skipped')) {
+            skippedItems.push('MONDO unchanged');
+        }
+        if (output.includes('OMIM update skipped') || output.includes('OMIM: Skipped')) {
+            skippedItems.push('OMIM unchanged');
+        }
+        if (output.includes('Orphanet update skipped') || output.includes('Orphanet: Skipped')) {
+            skippedItems.push('Orphanet unchanged');
+        }
+        if (output.includes('All source files unchanged')) {
+            return ['All sources unchanged - no update needed'];
+        }
+
+        return skippedItems;
+    }
+
+    // Handle completed operation from polling
+    function handleOperationComplete(action, progress) {
+        stopProgressPolling(action);
+        adminActionLoading.value[action] = false;
+
+        const result = progress.result || {};
+        const output = result.output || '';
+        const successMessage = actionSuccessMessages[action] || 'Operation completed';
+
+        if (result.success === false) {
+            adminActionStatus.value[action] = {
+                type: 'warn',
+                text: result.summary?.replace(/\*\*/g, '').substring(0, 100) || 'Completed with issues'
+            };
+            toast.add({
+                severity: 'warn',
+                summary: 'Completed with Issues',
+                detail: result.summary?.replace(/\*\*/g, '').replace(/\n/g, ' ').trim() || 'Action completed with some issues',
+                life: 5000
+            });
+        } else {
+            const skippedItems = parseOutputForSkipped(output);
+
+            if (skippedItems.length > 0) {
+                adminActionStatus.value[action] = {
+                    type: 'info',
+                    text: skippedItems.join(', ')
+                };
+                toast.add({
+                    severity: 'info',
+                    summary: 'No Updates Needed',
+                    detail: skippedItems.join(', '),
+                    life: 5000
+                });
+            } else {
+                const summaryText = (result.summary || '').replace(/\*\*/g, '').replace(/\n/g, ' ').trim() || successMessage;
+                adminActionStatus.value[action] = {
+                    type: 'success',
+                    text: summaryText.substring(0, 100) + (summaryText.length > 100 ? '...' : '')
+                };
+                toast.add({
+                    severity: 'success',
+                    summary: 'Success',
+                    detail: successMessage,
+                    life: 5000
+                });
+            }
+        }
+
+        // Reload dashboard to reflect any changes
+        router.reload();
+
+        // Clear status after 10 seconds
+        setTimeout(() => {
+            adminActionStatus.value[action] = null;
+        }, 10000);
+    }
+
+    // Handle failed operation from polling
+    function handleOperationFailed(action, progress) {
+        stopProgressPolling(action);
+        adminActionLoading.value[action] = false;
+
+        const errorMessage = progress.error || 'Operation failed';
+        adminActionStatus.value[action] = {
+            type: 'error',
+            text: errorMessage.substring(0, 100)
+        };
+        toast.add({
+            severity: 'error',
+            summary: 'Error',
+            detail: errorMessage,
+            life: 5000
+        });
+    }
+
+    // Start polling for progress with completion/failure handling
+    function startProgressPolling(action) {
+        const operation = actionToOperation[action];
+        if (!operation) return;
+
+        if (progressPollingIntervals.value[action]) {
+            clearInterval(progressPollingIntervals.value[action]);
+        }
+
+        // Immediate first poll after a short delay
+        setTimeout(() => pollProgress(action), 500);
+
+        // Then poll every 2 seconds
+        progressPollingIntervals.value[action] = setInterval(() => pollProgress(action), 2000);
+    }
+
+    // Single poll iteration
+    async function pollProgress(action) {
+        const operation = actionToOperation[action];
+        if (!operation) return;
+
+        try {
+            const response = await axios.get(`/api/admin/progress/${operation}`);
+            const progress = response.data;
+
+            if (progress.status === 'running') {
+                const statusText = extractProgressText(progress);
+                if (statusText) {
+                    adminActionStatus.value[action] = { type: 'progress', text: statusText };
+                }
+            } else if (progress.status === 'complete') {
+                handleOperationComplete(action, progress);
+            } else if (progress.status === 'failed') {
+                handleOperationFailed(action, progress);
+            }
+        } catch (error) {
+            console.log('Progress polling error:', error);
+        }
+    }
+
+    // Stop polling for progress
+    function stopProgressPolling(action) {
+        if (progressPollingIntervals.value[action]) {
+            clearInterval(progressPollingIntervals.value[action]);
+            delete progressPollingIntervals.value[action];
+        }
+    }
+
+    // Fire-and-forget admin action — dispatches job and polls for result
+    async function runAdminAction(action, endpoint) {
+        adminActionLoading.value[action] = true;
+        adminActionStatus.value[action] = { type: 'progress', text: 'Starting...' };
+
+        try {
+            const response = await axios.post(`/api/admin/${endpoint}`);
+
+            if (response.data.started) {
+                // Job dispatched — start polling for progress and completion
+                startProgressPolling(action);
+            } else {
+                // Already running or other issue
+                adminActionLoading.value[action] = false;
+                adminActionStatus.value[action] = {
+                    type: 'warn',
+                    text: response.data.message || 'Could not start operation'
+                };
+                toast.add({
+                    severity: 'warn',
+                    summary: 'Already Running',
+                    detail: response.data.message || 'This operation is already in progress',
+                    life: 5000
+                });
+            }
+        } catch (error) {
+            adminActionLoading.value[action] = false;
+            console.error(`Admin action ${action} failed to start:`, error);
+            adminActionStatus.value[action] = {
+                type: 'error',
+                text: error.response?.data?.message || `Failed to start ${action}`
+            };
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: error.response?.data?.message || `Failed to start ${action}`,
+                life: 5000
+            });
+        }
+    }
+
+    function runPublish() {
+        runAdminAction('publish', 'run-publish');
+    }
+
+    function updateDiseases() {
+        runAdminAction('diseases', 'update-diseases');
+    }
+
+    function updateGenes() {
+        runAdminAction('genes', 'update-genes');
+    }
+
+    function syncPubmed() {
+        runAdminAction('pubmed', 'sync-pubmed');
+    }
+
+    // On mount: check if any operations are currently running and resume polling
+    onMounted(async () => {
+        if (!props.is_admin) return;
+
+        for (const [action, operation] of Object.entries(actionToOperation)) {
+            try {
+                const response = await axios.get(`/api/admin/progress/${operation}`);
+                const progress = response.data;
+
+                if (progress.status === 'running') {
+                    // Resume tracking this running operation
+                    adminActionLoading.value[action] = true;
+                    const statusText = extractProgressText(progress);
+                    adminActionStatus.value[action] = { type: 'progress', text: statusText || 'Running...' };
+                    startProgressPolling(action);
+                }
+            } catch (error) {
+                // Ignore — operation not running
+            }
+        }
+    });
+
+    // Clean up polling intervals on unmount
+    onUnmounted(() => {
+        for (const action of Object.keys(actionToOperation)) {
+            stopProgressPolling(action);
+        }
+    });
+
+    // Check if admin view (admin with no selected submitter)
+    const isAdminView = computed(() => props.is_admin && !props.has_submitter);
+
+    // Check if there are jobs ready to publish
+    const hasSubmittedJobs = computed(() => props.submitted_jobs_count > 0);
+
+    // Check if there are valid pending PMIDs to sync (excludes PMID=0)
+    const hasPendingPubmeds = computed(() => props.pubmed_status?.pending > 0);
+
 </script>
 
 <template>
@@ -572,7 +872,8 @@
                         </div>
                     </Fieldset>
                 </div>
-                <div class="">
+                <!-- Hide Pending Job panel for admins with no selected submitter (they see All Pending Jobs instead) -->
+                <div v-if="!isAdminView" class="">
                     <Fieldset legend="Pending Job">
                         <div v-if="unprocessed_job_status" class="m-0 relative">
                             <!-- Submit button in upper right -->
@@ -652,12 +953,330 @@
                                     />
                                 </div>
                             </div>
+                            <div v-else-if="isAdminView" class="text-gray-500 text-sm">
+                                Select a submitter to manage jobs, or view all pending jobs below.
+                            </div>
                             <div v-else class="text-gray-600">
                                 No pending job.
                             </div>
                         </div>
                     </Fieldset>
                 </div>
+                <!-- Release Statistics panel (shown when admin has no selected submitter) -->
+                <div v-else class="">
+                    <Fieldset legend="Release Statistics">
+                        <div class="flex flex-col gap-2">
+                            <div class="flex flex-wrap gap-2 items-center">
+                                <Button
+                                    label="Run Publish"
+                                    icon="pi pi-send"
+                                    severity="success"
+                                    size="small"
+                                    :loading="adminActionLoading.publish"
+                                    :disabled="!hasSubmittedJobs"
+                                    @click="runPublish"
+                                    :title="hasSubmittedJobs ? 'Publish all submitted jobs to gencc-search' : 'No jobs in submitted status'"
+                                />
+                                <span v-if="submitted_jobs_count > 0" class="text-sm text-gray-600">
+                                    {{ submitted_jobs_count }} job(s) ready
+                                </span>
+                            </div>
+                            <!-- Progress/Status feedback -->
+                            <div v-if="adminActionStatus.publish" class="text-xs pl-1 max-w-64">
+                                <span v-if="adminActionStatus.publish.type === 'progress'" class="text-blue-600">
+                                    <i class="pi pi-spin pi-spinner mr-1"></i>
+                                    {{ adminActionStatus.publish.text }}
+                                </span>
+                                <span v-else-if="adminActionStatus.publish.type === 'success'" class="text-green-600">
+                                    <i class="pi pi-check-circle mr-1"></i>
+                                    {{ adminActionStatus.publish.text }}
+                                </span>
+                                <span v-else-if="adminActionStatus.publish.type === 'error'" class="text-red-600">
+                                    <i class="pi pi-times-circle mr-1"></i>
+                                    {{ adminActionStatus.publish.text }}
+                                </span>
+                            </div>
+                            <!-- Last Run Info -->
+                            <div v-else-if="admin_logs?.run_publish" class="text-xs text-gray-500 pl-1">
+                                <i :class="admin_logs.run_publish.success ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'" class="mr-1"></i>
+                                Last run: {{ admin_logs.run_publish.executed_at_human }}
+                                <span v-if="admin_logs.run_publish.duration_seconds" class="text-gray-400">({{ admin_logs.run_publish.duration_seconds }}s)</span>
+                            </div>
+                        </div>
+                    </Fieldset>
+                </div>
+            </div>
+
+            <!-- Admin Section: All Pending Jobs -->
+            <div v-if="isAdminView && all_pending_jobs && all_pending_jobs.length > 0" class="mt-4">
+                <Fieldset legend="All Pending Jobs" :toggleable="true">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b-2 border-gray-300 text-left">
+                                    <th class="py-2 px-2">Job</th>
+                                    <th class="py-2 px-2">Submitter</th>
+                                    <th class="py-2 px-2">Status</th>
+                                    <th class="py-2 px-2">Date</th>
+                                    <th class="py-2 px-2 text-center">New</th>
+                                    <th class="py-2 px-2 text-center">Republish</th>
+                                    <th class="py-2 px-2 text-center">Unpublish</th>
+                                    <th class="py-2 px-2 text-center">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="job in all_pending_jobs" :key="job.id" class="border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="py-2 px-2">
+                                        <Link :href="'/jobs/' + job.ident" class="font-mono text-blue-600 hover:text-blue-800 hover:underline">
+                                            {{ job.slug }}
+                                        </Link>
+                                        <i v-if="job.is_publishing" class="pi pi-spin pi-spinner text-blue-500 ml-1" title="Publishing..."></i>
+                                        <i v-if="job.is_processing" class="pi pi-spin pi-spinner text-amber-500 ml-1" title="Processing..."></i>
+                                    </td>
+                                    <td class="py-2 px-2 text-gray-700">{{ job.submitter_name }}</td>
+                                    <td class="py-2 px-2">
+                                        <Tag :severity="job.status === 'draft' ? 'warning' : 'info'" :value="job.status" />
+                                    </td>
+                                    <td class="py-2 px-2 text-gray-600">{{ job.date }}</td>
+                                    <td class="py-2 px-2 text-center">{{ job.new_count }}</td>
+                                    <td class="py-2 px-2 text-center">{{ job.republish_count }}</td>
+                                    <td class="py-2 px-2 text-center">{{ job.unpublish_count }}</td>
+                                    <td class="py-2 px-2 text-center font-semibold">
+                                        {{ job.total_count }}
+                                        <i v-if="job.error_count > 0" class="pi pi-exclamation-circle text-red-600 ml-1" v-tooltip.top="`${job.error_count} error(s)`"></i>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </Fieldset>
+            </div>
+
+            <!-- Admin Section: Admin Actions -->
+            <div v-if="isAdminView" class="mt-4">
+                <Fieldset legend="Admin Actions">
+                    <div class="grid grid-cols-3 divide-x divide-gray-300">
+                        <!-- Update Diseases Column -->
+                        <div class="px-4 first:pl-0">
+                            <div class="flex flex-col gap-2">
+                                <div class="flex items-center gap-2">
+                                    <Button
+                                        label="Update Diseases"
+                                        icon="pi pi-refresh"
+                                        severity="info"
+                                        size="small"
+                                        :loading="adminActionLoading.diseases"
+                                        @click="updateDiseases"
+                                        title="Update disease data from MONDO, OMIM, Orphanet"
+                                    />
+                                </div>
+                                <!-- Progress/Status feedback -->
+                                <div v-if="adminActionStatus.diseases" class="text-xs pl-1">
+                                    <span v-if="adminActionStatus.diseases.type === 'progress'" class="text-blue-600">
+                                        <i class="pi pi-spin pi-spinner mr-1"></i>
+                                        {{ adminActionStatus.diseases.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.diseases.type === 'info'" class="text-blue-500">
+                                        <i class="pi pi-info-circle mr-1"></i>
+                                        {{ adminActionStatus.diseases.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.diseases.type === 'success'" class="text-green-600">
+                                        <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.diseases.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.diseases.type === 'warn'" class="text-amber-600">
+                                        <i class="pi pi-exclamation-triangle mr-1"></i>
+                                        {{ adminActionStatus.diseases.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.diseases.type === 'error'" class="text-red-600">
+                                        <i class="pi pi-times-circle mr-1"></i>
+                                        {{ adminActionStatus.diseases.text }}
+                                    </span>
+                                </div>
+                                <!-- Last Run -->
+                                <div v-if="admin_logs?.update_diseases" class="text-xs text-gray-500 pl-1">
+                                    <i :class="admin_logs.update_diseases.success ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'" class="mr-1"></i>
+                                    {{ admin_logs.update_diseases.executed_at_human }}
+                                    <span v-if="admin_logs.update_diseases.duration_seconds" class="text-gray-400">({{ admin_logs.update_diseases.duration_seconds }}s)</span>
+                                    <div v-if="!admin_logs.update_diseases.success && admin_logs.update_diseases.summary" class="text-red-500 mt-1">
+                                        {{ admin_logs.update_diseases.summary.replace(/\*\*/g, '').substring(0, 80) }}
+                                    </div>
+                                </div>
+                                <!-- Disease Statistics -->
+                                <div v-if="disease_status" class="mt-2 pt-2 border-t border-gray-200">
+                                    <h4 class="text-sm font-semibold text-gray-700 mb-1">Disease Statistics</h4>
+                                    <table class="text-sm">
+                                        <tbody>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600">Active:</td>
+                                                <td class="font-medium text-green-600">{{ disease_status.active.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600 pl-3">MONDO:</td>
+                                                <td class="font-medium">{{ disease_status.mondo.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600 pl-3">OMIM:</td>
+                                                <td class="font-medium">{{ disease_status.omim.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600 pl-3">Orphanet:</td>
+                                                <td class="font-medium">{{ disease_status.orphanet.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr v-if="disease_status.deprecated > 0">
+                                                <td class="pr-4 py-0.5 text-gray-600">Deprecated:</td>
+                                                <td class="font-medium text-gray-400">{{ disease_status.deprecated.toLocaleString() }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Update Genes Column -->
+                        <div class="px-4">
+                            <div class="flex flex-col gap-2">
+                                <div class="flex items-center gap-2">
+                                    <Button
+                                        label="Update Genes"
+                                        icon="pi pi-refresh"
+                                        severity="info"
+                                        size="small"
+                                        :loading="adminActionLoading.genes"
+                                        @click="updateGenes"
+                                        title="Update gene data from HGNC"
+                                    />
+                                </div>
+                                <!-- Progress/Status feedback -->
+                                <div v-if="adminActionStatus.genes" class="text-xs pl-1">
+                                    <span v-if="adminActionStatus.genes.type === 'progress'" class="text-blue-600">
+                                        <i class="pi pi-spin pi-spinner mr-1"></i>
+                                        {{ adminActionStatus.genes.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.genes.type === 'info'" class="text-blue-500">
+                                        <i class="pi pi-info-circle mr-1"></i>
+                                        {{ adminActionStatus.genes.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.genes.type === 'success'" class="text-green-600">
+                                        <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.genes.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.genes.type === 'error'" class="text-red-600">
+                                        <i class="pi pi-times-circle mr-1"></i>
+                                        {{ adminActionStatus.genes.text }}
+                                    </span>
+                                </div>
+                                <!-- Last Run -->
+                                <div v-if="admin_logs?.update_genes" class="text-xs text-gray-500 pl-1">
+                                    <i :class="admin_logs.update_genes.success ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'" class="mr-1"></i>
+                                    {{ admin_logs.update_genes.executed_at_human }}
+                                    <span v-if="admin_logs.update_genes.duration_seconds" class="text-gray-400">({{ admin_logs.update_genes.duration_seconds }}s)</span>
+                                    <div v-if="!admin_logs.update_genes.success && admin_logs.update_genes.summary" class="text-red-500 mt-1">
+                                        {{ admin_logs.update_genes.summary.replace(/\*\*/g, '').substring(0, 80) }}
+                                    </div>
+                                </div>
+                                <!-- Gene Statistics -->
+                                <div v-if="gene_status" class="mt-2 pt-2 border-t border-gray-200">
+                                    <h4 class="text-sm font-semibold text-gray-700 mb-1">Gene Statistics</h4>
+                                    <table class="text-sm">
+                                        <tbody>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600">Total Genes:</td>
+                                                <td class="font-medium">{{ gene_status.total.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600">Active:</td>
+                                                <td class="font-medium text-green-600">{{ gene_status.active.toLocaleString() }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sync PubMed Column -->
+                        <div class="px-4 last:pr-0">
+                            <div class="flex flex-col gap-2">
+                                <div class="flex items-center gap-2">
+                                    <Button
+                                        label="Sync PubMed"
+                                        icon="pi pi-sync"
+                                        severity="info"
+                                        size="small"
+                                        :loading="adminActionLoading.pubmed"
+                                        @click="syncPubmed"
+                                        title="Fetch metadata for pending PMIDs from NCBI"
+                                    />
+                                </div>
+                                <!-- Progress/Status feedback -->
+                                <div v-if="adminActionStatus.pubmed" class="text-xs pl-1">
+                                    <span v-if="adminActionStatus.pubmed.type === 'progress'" class="text-blue-600">
+                                        <i class="pi pi-spin pi-spinner mr-1"></i>
+                                        {{ adminActionStatus.pubmed.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.pubmed.type === 'info'" class="text-blue-500">
+                                        <i class="pi pi-info-circle mr-1"></i>
+                                        {{ adminActionStatus.pubmed.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.pubmed.type === 'success'" class="text-green-600">
+                                        <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.pubmed.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.pubmed.type === 'error'" class="text-red-600">
+                                        <i class="pi pi-times-circle mr-1"></i>
+                                        {{ adminActionStatus.pubmed.text }}
+                                    </span>
+                                </div>
+                                <!-- Last Run -->
+                                <div v-if="admin_logs?.sync_pubmed" class="text-xs text-gray-500 pl-1">
+                                    <i :class="admin_logs.sync_pubmed.success ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'" class="mr-1"></i>
+                                    {{ admin_logs.sync_pubmed.executed_at_human }}
+                                    <span v-if="admin_logs.sync_pubmed.duration_seconds" class="text-gray-400">({{ admin_logs.sync_pubmed.duration_seconds }}s)</span>
+                                    <div v-if="!admin_logs.sync_pubmed.success && admin_logs.sync_pubmed.summary" class="text-red-500 mt-1">
+                                        {{ admin_logs.sync_pubmed.summary.replace(/\*\*/g, '').substring(0, 80) }}
+                                    </div>
+                                </div>
+                                <!-- PubMed Statistics -->
+                                <div v-if="pubmed_status" class="mt-2 pt-2 border-t border-gray-200">
+                                    <h4 class="text-sm font-semibold text-gray-700 mb-1">PubMed Statistics</h4>
+                                    <table class="text-sm">
+                                        <tbody>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600">Total PMIDs:</td>
+                                                <td class="font-medium">{{ pubmed_status.total.toLocaleString() }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="pr-4 py-0.5 text-gray-600">Synced:</td>
+                                                <td class="font-medium text-green-600">
+                                                    <i class="pi pi-check-circle mr-1"></i>
+                                                    {{ pubmed_status.complete.toLocaleString() }}
+                                                </td>
+                                            </tr>
+                                            <tr v-if="pubmed_status.pending > 0">
+                                                <td class="pr-4 py-0.5 text-gray-600">Pending:</td>
+                                                <td class="font-medium text-amber-600">
+                                                    <i class="pi pi-clock mr-1"></i>
+                                                    {{ pubmed_status.pending }}
+                                                </td>
+                                            </tr>
+                                            <tr v-if="pubmed_status.invalid > 0">
+                                                <td class="pr-4 py-0.5 text-gray-600">Invalid (PMID=0):</td>
+                                                <td class="font-medium text-red-500">
+                                                    <i class="pi pi-exclamation-triangle mr-1"></i>
+                                                    {{ pubmed_status.invalid }}
+                                                </td>
+                                            </tr>
+                                            <tr v-if="pubmed_status.submissions_affected > 0">
+                                                <td class="pr-4 py-0.5 text-gray-600">Affected submissions:</td>
+                                                <td class="font-medium text-amber-600">{{ pubmed_status.submissions_affected }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </Fieldset>
             </div>
 
             <Divider />

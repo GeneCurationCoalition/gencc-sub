@@ -107,7 +107,7 @@ class ReleaseController extends Controller
         ]);
 
         try {
-            $response = Http::withHeaders([
+            $response = Http::timeout(120)->withHeaders([
                 'GEN-API-KEY' => $token,
                 'X-GENCC-ACTION' => 'INIT'
             ])->withBody(
@@ -381,7 +381,7 @@ class ReleaseController extends Controller
         ]);
 
         // Post with X-GENCC-ACTION header set to UNPUBLISH
-        $response = Http::withHeaders([
+        $response = Http::timeout(120)->withHeaders([
             'GEN-API-KEY' => $token,
             'X-GENCC-ACTION' => 'UNPUBLISH'
         ])->withBody(
@@ -455,7 +455,7 @@ class ReleaseController extends Controller
         // echo "In end" . $template->render();
 
         // post packet TODO:  Need a new key assignment
-        $response = Http::withHeaders([
+        $response = Http::timeout(120)->withHeaders([
             'GEN-API-KEY' => $token
         ])->withBody(
             $template->render(), 'application/json; charset=UTF-8'
@@ -489,7 +489,7 @@ class ReleaseController extends Controller
         ]);
 
         try {
-            $response = Http::withHeaders([
+            $response = Http::timeout(120)->withHeaders([
                 'GEN-API-KEY' => $token,
                 'X-GENCC-ACTION' => 'UPDATE_COUNTS'
             ])->withBody(
@@ -525,7 +525,7 @@ class ReleaseController extends Controller
             'payload' => $rendered
         ]);
 
-        $response = Http::withHeaders([
+        $response = Http::timeout(120)->withHeaders([
             'GEN-API-KEY' => $token,
             'X-GENCC-ACTION' => $action
         ])->withBody(

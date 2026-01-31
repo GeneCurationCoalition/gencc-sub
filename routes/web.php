@@ -12,6 +12,7 @@ use App\Http\Controllers\ClientController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AliasController;
 use App\Http\Controllers\SubmissionDirectionsController;
+use App\Http\Controllers\AdminPageController;
 
 
 /*
@@ -51,6 +52,7 @@ use App\Http\Controllers\SubmissionDirectionsController;
         'auth:sanctum',
         config('jetstream.auth_session'),
         'verified',
+        'password.changed',
     ])->group(function () {
 
     Route::get('/help', function () {
@@ -73,11 +75,21 @@ use App\Http\Controllers\SubmissionDirectionsController;
 
     Route::get('/profile', [UserController::class, 'show'])->name('profile.show');
 
+    Route::get('/submitter', [UserController::class, 'showSubmitter'])->name('submitter.show');
+
+    Route::get('/team', [UserController::class, 'showTeam'])->name('team.show');
+
     Route::match(['get', 'post'], '/user/select-submitter', [UserController::class, 'setSelectedSubmitter'])->name('user.select-submitter');
 
     Route::get('/test', [ClientController::class, 'test_all'])->name('test.all');
 
     Route::get('/aliases', [AliasController::class, 'index'])->name('alias.index');
+
+    // Admin pages (protected by isGenccAdmin() check in controller)
+    Route::get('/admin/submitters', [AdminPageController::class, 'submitters'])->name('admin.submitters');
+    Route::get('/admin/submitters/{id}', [AdminPageController::class, 'submitterDetail'])->name('admin.submitters.show');
+    Route::get('/admin/users', [AdminPageController::class, 'users'])->name('admin.users');
+    Route::get('/admin/users/{id}', [AdminPageController::class, 'userDetail'])->name('admin.users.show');
 
    // Route::get('/userinfo',  [UserInformationController::class, 'create']);
 

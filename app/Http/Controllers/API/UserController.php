@@ -39,25 +39,52 @@ class UserController extends Controller
             case "refresh_token":
                 //$user->add_api_token();
                 $user->api_token_renewed_at = Carbon::now();
-            case 'name':
-                $user->add_name($request->input('name'));
-                $user->credentials = $request->input('credentials');
                 break;
-            case 'notify':
-                if ($user->preferences === null)
-                    $preferences = $user->initialize_preferences();
-                else
-                    $preferences = $user->preferences;
-                $preferences['notify'] = $request->input('new');
-                $user->update(['preferences' => $preferences]);
+            case 'profile':
+                // Update profile information (name, title, email, phone)
+                $user->add_name($request->input('name'));
+                $user->title = $request->input('title');
+                $user->email = $request->input('email');
+                $user->phone = $request->input('phone');
                 break;
             case 'passwd':
-                if (!Hash::check($request->input('old'), $user->password))
+                $oldPassword = $request->input('old');
+                $newPassword = $request->input('new');
+
+                // Verify old password
+                if (!Hash::check($oldPassword, $user->password))
                     return response()->json(['success' => 'false',
                         'status_code' => 3004,
-                        'message' => 'Unauthorized'],
+                        'message' => 'The current password you entered is incorrect.'],
                         200);
-                $user->password = $user->make_password($request->input('new'));
+
+                // Validate new password requirements
+                $errors = [];
+                if (strlen($newPassword) < 8) {
+                    $errors[] = 'Password must be at least 8 characters';
+                }
+                if (!preg_match('/[A-Z]/', $newPassword)) {
+                    $errors[] = 'Password must contain at least one uppercase letter';
+                }
+                if (!preg_match('/[a-z]/', $newPassword)) {
+                    $errors[] = 'Password must contain at least one lowercase letter';
+                }
+                if (!preg_match('/[0-9]/', $newPassword)) {
+                    $errors[] = 'Password must contain at least one number';
+                }
+                if ($oldPassword === $newPassword) {
+                    $errors[] = 'New password cannot be the same as old password';
+                }
+
+                if (!empty($errors)) {
+                    return response()->json(['success' => 'false',
+                        'status_code' => 3005,
+                        'message' => implode('. ', $errors)],
+                        200);
+                }
+
+                $user->password = $user->make_password($newPassword);
+                $user->must_change_password = false;
                 break;
             default:
                 return response()->json(['success' => 'false',

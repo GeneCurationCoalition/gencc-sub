@@ -44,7 +44,6 @@ class DocumentRowCountTest extends TestCase
     {
         // Create test submitter
         $this->submitter = Submitter::create([
-            'curie' => 'GENCC:000113',
             'name' => 'Test Submitter',
             'status' => 1,
             'type' => 0

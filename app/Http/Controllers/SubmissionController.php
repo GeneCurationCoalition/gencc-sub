@@ -38,6 +38,11 @@ class SubmissionController extends Controller
      */
     public function index(Request $request)
     {
+        // Redirect admin users without a selected submitter to dashboard
+        if ($redirect = $this->redirectAdminWithoutSubmitter($request)) {
+            return $redirect;
+        }
+
         $errors = false;
 
         $submissions = $this->getEffectiveSubmitter($request)->submissions()->forListing()->get();
@@ -76,6 +81,11 @@ class SubmissionController extends Controller
      */
     public function show(Request $request, $id)
     {
+        // Redirect admin users without a selected submitter to dashboard
+        if ($redirect = $this->redirectAdminWithoutSubmitter($request)) {
+            return $redirect;
+        }
+
         $submission = $this->getEffectiveSubmitterQuery($request, 'submissions')
                         ->with('gene')->with('user')->with('disease')->with('originalDisease')->with('inheritance')->with('submitter')->with('classification')->with('job')->with('pubmeds')->with('mechanism')->with('lastEditedByUser.teams')
                         ->where('ident', $id)->first();

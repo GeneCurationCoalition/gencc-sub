@@ -32,7 +32,6 @@ class DocumentDatabaseStorageTest extends TestCase
     protected function seedTestData(): void
     {
         $this->submitter = Submitter::create([
-            'curie' => 'GENCC:000113',
             'name' => 'Test Submitter',
             'status' => 1,
             'type' => 0

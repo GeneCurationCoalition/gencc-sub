@@ -10,6 +10,10 @@ use Auth;
 
 use App\Models\Job;
 use App\Models\Submission;
+use App\Models\Pubmed;
+use App\Models\Disease;
+use App\Models\Gene;
+use App\Models\AdminLog;
 
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
@@ -296,6 +300,94 @@ class DashboardController extends Controller
             if ($submitter) {
                 $submitter_curie = $submitter->curie;
             }
+        }
+
+        // Admin-specific data: all pending jobs across all submitters
+        $all_pending_jobs = [];
+        $is_admin = $user->isGenccAdmin();
+        $submitted_jobs_count = 0;
+        $pubmed_status = null;
+        $disease_status = null;
+        $gene_status = null;
+        $admin_logs = null;
+
+        if ($is_admin && $submitter_id === null) {
+            // Get all draft and submitted jobs across all submitters
+            $pendingJobs = Job::with(['submitter', 'submissions'])
+                ->whereIn('status', [Job::STATUS_DRAFT, Job::STATUS_SUBMITTED])
+                ->orderBy('updated_at', 'desc')
+                ->get();
+
+            foreach ($pendingJobs as $job) {
+                $statusCounts = $this->countSubmissionsByStatus($job, true);
+                $all_pending_jobs[] = [
+                    'id' => $job->id,
+                    'slug' => $job->slug,
+                    'ident' => $job->ident,
+                    'status' => $job->status,
+                    'submitter_name' => $job->submitter->name ?? 'Unknown',
+                    'submitter_id' => $job->submitter_id,
+                    'date' => $job->status === Job::STATUS_DRAFT
+                        ? $job->created_at->format('Y-m-d')
+                        : $job->updated_at->format('Y-m-d'),
+                    'new_count' => $statusCounts['new'],
+                    'republish_count' => $statusCounts['republish'],
+                    'unpublish_count' => $statusCounts['unpublish'],
+                    'error_count' => $statusCounts['errors'] ?? 0,
+                    'total_count' => $statusCounts['new'] + $statusCounts['republish'] + $statusCounts['unpublish'],
+                    'is_publishing' => $job->is_publishing,
+                    'is_processing' => $job->is_processing,
+                ];
+            }
+
+            // Count of jobs in submitted status (for Run Publish button)
+            $submitted_jobs_count = Job::where('status', Job::STATUS_SUBMITTED)->count();
+
+            // PubMed status for admin dashboard
+            // Exclude PMID=0 which is invalid historical data
+            $pubmed_pending = Pubmed::where('status', Pubmed::STATUS_INITIALIZING)
+                ->where('pmid', '!=', '0')
+                ->where('pmid', '!=', 0)
+                ->count();
+            $pubmed_invalid = Pubmed::where('status', Pubmed::STATUS_INITIALIZING)
+                ->where(function($q) {
+                    $q->where('pmid', '0')->orWhere('pmid', 0);
+                })
+                ->count();
+            $pubmed_complete = Pubmed::where('status', Pubmed::STATUS_SUMMARY_COMPLETE)->count();
+            $pubmed_total = $pubmed_pending + $pubmed_complete + $pubmed_invalid;
+            $submissions_with_pending = Submission::whereHas('pubmeds', function($q) {
+                $q->where('status', Pubmed::STATUS_INITIALIZING)
+                  ->where('pmid', '!=', '0')
+                  ->where('pmid', '!=', 0);
+            })->count();
+
+            $pubmed_status = [
+                'pending' => $pubmed_pending,
+                'invalid' => $pubmed_invalid,
+                'complete' => $pubmed_complete,
+                'total' => $pubmed_total,
+                'submissions_affected' => $submissions_with_pending,
+            ];
+
+            // Disease statistics for admin dashboard
+            $disease_status = [
+                'total' => Disease::count(),
+                'active' => Disease::where('status', Disease::STATUS_ACTIVE)->count(),
+                'deprecated' => Disease::where('status', Disease::STATUS_DEPRECATED)->count(),
+                'mondo' => Disease::where('type', Disease::TYPE_MONDO)->where('status', Disease::STATUS_ACTIVE)->count(),
+                'omim' => Disease::whereIn('type', [Disease::TYPE_OMIM, Disease::TYPE_OMIM_PLUS, Disease::TYPE_OMIM_PERCENT, Disease::TYPE_OMIM_NUMBER, Disease::TYPE_OMIM_GENE])->where('status', Disease::STATUS_ACTIVE)->count(),
+                'orphanet' => Disease::where('type', Disease::TYPE_ORPHANET)->where('status', Disease::STATUS_ACTIVE)->count(),
+            ];
+
+            // Gene statistics for admin dashboard
+            $gene_status = [
+                'total' => Gene::count(),
+                'active' => Gene::where('status', Gene::STATUS_ACTIVE)->count(),
+            ];
+
+            // Get latest admin operation logs
+            $admin_logs = AdminLog::latestForAll();
         }
 
         // ========================================================================
@@ -657,6 +749,14 @@ class DashboardController extends Controller
             'archived_unpublish_total' => $archived_unpublish_total,
             'archived_unique_total' => $archived_unique_total,
             'archived_total' => $archived_total,
+            // Admin-specific data
+            'is_admin' => $is_admin,
+            'all_pending_jobs' => $all_pending_jobs,
+            'submitted_jobs_count' => $submitted_jobs_count,
+            'pubmed_status' => $pubmed_status,
+            'disease_status' => $disease_status,
+            'gene_status' => $gene_status,
+            'admin_logs' => $admin_logs,
         ]);
     }
 

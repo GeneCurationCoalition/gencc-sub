@@ -30,6 +30,7 @@ class Team extends JetstreamTeam
         'name',
         'personal_team',
         'user_id',
+        'submitter_id',
     ];
 
     /**
@@ -42,4 +43,12 @@ class Team extends JetstreamTeam
         'updated' => TeamUpdated::class,
         'deleted' => TeamDeleted::class,
     ];
+
+    /**
+     * Get the submitter associated with this team.
+     */
+    public function submitter()
+    {
+        return $this->belongsTo(Submitter::class);
+    }
 }

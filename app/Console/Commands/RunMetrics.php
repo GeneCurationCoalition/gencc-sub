@@ -231,8 +231,7 @@ class RunMetrics extends Command
         $preferences = (array) $user->preferences;
 
         if ($preferences === null)
-            $preferences = ['notify' => false, 
-                            'dash_sub_graph' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            $preferences = ['dash_sub_graph' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                             'dash_class_graph' => [],
                             'sub_favorites' => [],
                             'job_favorites' => []];

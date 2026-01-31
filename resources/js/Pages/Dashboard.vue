@@ -20,7 +20,9 @@ const props = defineProps(['total_jobs_processing', 'total_submissions_processin
                            // Section 3: Submissions Archived
                            'archived_first_version_unique', 'archived_republish_unique', 'archived_unpublish_unique',
                            'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
-                           'archived_unique_total', 'archived_total'])
+                           'archived_unique_total', 'archived_total',
+                           // Admin-specific data
+                           'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'admin_logs'])
 
 const toast = useToast();
 const isSyncingClingen = ref(false);
@@ -148,7 +150,10 @@ onUnmounted(() => {
                                 :archived_first_version_unique="archived_first_version_unique" :archived_republish_unique="archived_republish_unique"
                                 :archived_unpublish_unique="archived_unpublish_unique" :archived_first_version_total="archived_first_version_total"
                                 :archived_republish_total="archived_republish_total" :archived_unpublish_total="archived_unpublish_total"
-                                :archived_unique_total="archived_unique_total" :archived_total="archived_total" />
+                                :archived_unique_total="archived_unique_total" :archived_total="archived_total"
+                                :is_admin="is_admin" :all_pending_jobs="all_pending_jobs"
+                                :submitted_jobs_count="submitted_jobs_count" :pubmed_status="pubmed_status"
+                                :admin_logs="admin_logs" />
                 </div>
             </div>
         </div>

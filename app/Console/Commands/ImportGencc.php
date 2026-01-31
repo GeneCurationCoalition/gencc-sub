@@ -56,9 +56,6 @@ class ImportGencc extends Command
         foreach ($records as $record)
         {
 
-            if ($record == 'GENCC:000100')
-                continue;
-
             $submitter = Submitter::curie($record)->first();
 
             echo "$record \n";

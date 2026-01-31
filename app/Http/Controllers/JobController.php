@@ -36,6 +36,11 @@ class JobController extends Controller
      */
     public function index(Request $request)
     {
+        // Redirect admin users without a selected submitter to dashboard
+        if ($redirect = $this->redirectAdminWithoutSubmitter($request)) {
+            return $redirect;
+        }
+
         // get all the jobs for the submitter associated with the user
         $jobs = $this->getEffectiveSubmitter($request)->jobs()
                             ->with('user:id,name')
@@ -112,6 +117,11 @@ class JobController extends Controller
      */
     public function show(Request $request, $id)
     {
+        // Redirect admin users without a selected submitter to dashboard
+        if ($redirect = $this->redirectAdminWithoutSubmitter($request)) {
+            return $redirect;
+        }
+
         $job = $this->getEffectiveSubmitterQuery($request, 'jobs')->select('id', 'ident', 'slug', 'friendly', 'type', 'user_id', 'submitter_id', 'status', 'processed_submission_ids', 'is_publishing', 'is_processing', 'created_at', 'submitted_at', 'released_at')
                         ->with('submitter:id,name,curie')->with('user:id,name,email')
                         ->with(['documents' => function ($query) {

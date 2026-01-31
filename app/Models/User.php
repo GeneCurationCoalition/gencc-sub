@@ -46,10 +46,11 @@ class User extends Authenticatable
      */
     protected $fillable = [
         'ident', 'type',
-        'name', 'first_name', 'last_name', 'credentials',
+        'name', 'first_name', 'last_name', 'title', 'phone',
         'email', 'profile', 'preferences', 'submitter_id', 'team_id',
         'clingen_id', 'api_token', 'api_token_renewed_at',
-        'password', 'role', 'status'
+        'password', 'role', 'status', 'email_verified_at',
+        'must_change_password'
     ];
 
     /**
@@ -74,7 +75,8 @@ class User extends Authenticatable
         'password' => 'hashed',
         'profile' => 'object',
         'preferences' => 'object',
-        'api_token_renewed_at' => 'datetime'
+        'api_token_renewed_at' => 'datetime',
+        'must_change_password' => 'boolean',
     ];
 
     /**
@@ -140,7 +142,12 @@ class User extends Authenticatable
          * - preferences: default user preferences structure
          */
         static::created(function ($model) {
-            $model->clingen_id = 'CUID:3' . sprintf('%05d', $model->id);
+            // Find the next sequential CUID by checking max existing value
+            $maxNum = self::where('clingen_id', 'like', 'CUID:3%')
+                ->selectRaw('MAX(CAST(SUBSTRING(clingen_id, 7) AS UNSIGNED)) as max_num')
+                ->value('max_num');
+            $nextNum = ($maxNum ?? 0) + 1;
+            $model->clingen_id = 'CUID:3' . sprintf('%05d', $nextNum);
             $model->add_api_token();
             $model->preferences = $model->initialize_preferences();
             $model->save();
@@ -165,12 +172,21 @@ class User extends Authenticatable
 
 
     /**
-     * Get the submitter associated with this user
-     *
+     * Get the primary submitter associated with this user (legacy, uses submitter_id)
      */
     public function submitter()
     {
        return $this->belongsTo('App\Models\Submitter');
+    }
+
+    /**
+     * Get all submitters associated with this user (via pivot)
+     */
+    public function submitters()
+    {
+       return $this->belongsToMany('App\Models\Submitter', 'submitter_user')
+                   ->withPivot('is_contact')
+                   ->withTimestamps();
     }
 
 
@@ -310,8 +326,7 @@ class User extends Authenticatable
      */
     public function initialize_preferences()
     {
-        $preferences = ['notify' => false,
-                        'dash_sub_graph' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        $preferences = ['dash_sub_graph' => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                         'dash_class_graph' => [0, 0, 0, 0, 0, 0, 0, 0, 0],
                         'job_favorites' => [],
                         'sub_favorites' => []
@@ -328,8 +343,8 @@ class User extends Authenticatable
      */
     public function isGenccAdmin()
     {
-        // GenCC Administrator is identified by membership in the shared admin team
-        return $this->teams()->where('teams.name', 'admin')->exists();
+        // GenCC Administrator is identified by membership in the "admin" Team
+        return $this->teams()->where('teams.name', 'admin')->where('personal_team', false)->exists();
     }
 
 
@@ -341,7 +356,6 @@ class User extends Authenticatable
      *   - email (required): Email address
      *   - password (required): Plaintext password (will be hashed)
      *   - submitter_id (required): ID of the submitter to associate with
-     *   - credentials (optional): User credentials/title
      *   - phone (optional): Phone number
      *   - status (optional): User status (default: STATUS_ACTIVE)
      *   - upsert (optional): If true, update existing user if found by email
@@ -351,7 +365,7 @@ class User extends Authenticatable
     public static function createUser(array $data): User
     {
         // Validate required fields
-        $required = ['name', 'email', 'password', 'submitter_id'];
+        $required = ['name', 'email', 'password'];
         foreach ($required as $field) {
             if (empty($data[$field])) {
                 throw new \InvalidArgumentException("Missing required field: {$field}");
@@ -371,15 +385,12 @@ class User extends Authenticatable
             'name' => $data['name'],
             'email' => $data['email'],
             'password' => bcrypt($data['password']),
-            'submitter_id' => $data['submitter_id'],
+            'submitter_id' => $data['submitter_id'] ?? null,
             'status' => $data['status'] ?? self::STATUS_ACTIVE,
             'email_verified_at' => now(),
-            'profile' => ['phone' => $data['phone'] ?? ''],
+            'title' => $data['title'] ?? null,
+            'phone' => $data['phone'] ?? null,
         ];
-
-        if (!empty($data['credentials'])) {
-            $attributes['credentials'] = $data['credentials'];
-        }
 
         if ($existingUser) {
             // Update existing user (upsert mode)

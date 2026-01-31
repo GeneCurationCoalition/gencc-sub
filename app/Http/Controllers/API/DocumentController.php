@@ -736,12 +736,6 @@ class DocumentController extends Controller
             }
         }
 
-        // Cache default fallback IDs to avoid repeated queries on invalid data
-        // Note: classification_id defaults to null - file validation prevents invalid data from being imported
-        $defaultGeneId = Gene::symbol('-')->first()->id;
-        $defaultDiseaseId = Disease::curie('MONDO:0000001')->first()->id;
-        $defaultMoiId = Inheritance::curie('HP:0000005')->first()->id;
-
         $lookupCaches = [
             'genes' => Gene::all()->keyBy('hgnc_id'),
             'diseases' => $diseaseCache,  // Exact disease lookups by CURIE
@@ -750,11 +744,6 @@ class DocumentController extends Controller
             'classifications' => Classification::all()->keyBy('curie'),
             'mechanisms' => Mechanism::all()->keyBy('curie'),
             'pubmeds' => Pubmed::all()->keyBy('pmid'),  // Cache existing PMIDs
-            'defaults' => [
-                'gene_id' => $defaultGeneId,
-                'disease_id' => $defaultDiseaseId,
-                'moi_id' => $defaultMoiId,
-            ],
         ];
         \Log::info('DocumentController@parser: Built lookup caches', [
             'genes' => $lookupCaches['genes']->count(),

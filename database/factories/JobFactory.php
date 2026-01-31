@@ -27,7 +27,6 @@ class JobFactory extends Factory
         // Get or create a submitter
         $submitter = Submitter::first() ?? Submitter::create([
             'name' => 'Test Submitter',
-            'curie' => 'TEST:001',
             'type' => 0,
             'status' => 1,
         ]);

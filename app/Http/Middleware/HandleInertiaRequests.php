@@ -56,7 +56,12 @@ class HandleInertiaRequests extends Middleware
             // Check if user is GenCC Administrator
             'isGenccAdmin' => fn () => $request->user() && $request->user()->isGenccAdmin(),
 
-            // Provide all submitters for admin users
+            // Check if user must change their password
+            'mustChangePassword' => fn () => $request->user()
+                ? (bool) $request->user()->must_change_password
+                : false,
+
+            // Provide all active submitters for admin users to select from
             'submitters' => fn () => $request->user() && $request->user()->isGenccAdmin()
                 ? \App\Models\Submitter::where('status', \App\Models\Submitter::STATUS_ACTIVE)
                     ->select('id', 'name', 'curie')
@@ -72,6 +77,11 @@ class HandleInertiaRequests extends Middleware
                     ->select('id', 'name', 'curie')
                     ->first()
                 : null,
+
+            // Check if admin user needs to select a submitter to access Jobs/Submissions
+            'adminNeedsSubmitterSelection' => fn () => $request->user() &&
+                $request->user()->isGenccAdmin() &&
+                !$request->session()->has('selected_submitter_id'),
 
         ]);
     }

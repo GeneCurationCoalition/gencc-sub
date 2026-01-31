@@ -27,6 +27,11 @@ const displayedSubmitterName = computed(() => {
     return page.props.userSubmitter?.name || '';
 });
 
+// Check if Jobs/Submissions should be visible (not for admins without a selected submitter)
+const showJobsAndSubmissions = computed(() => {
+    return !page.props.adminNeedsSubmitterSelection;
+});
+
 const switchToTeam = (team) => {
     router.put(route('current-team.update'), {
         team_id: team.id,
@@ -67,16 +72,28 @@ const logout = () => {
                                     Dashboard
                                 </NavLink>
                             </div>
-                            <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
                                 <NavLink :href="route('jobs.index')" :active="route().current('jobs.index')">
                                     Jobs
                                 </NavLink>
                             </div>
-                            <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
                                 <NavLink :href="route('submissions.index')" :active="route().current('submissions.index')">
                                     Submissions
                                 </NavLink>
                             </div>
+                            <template v-if="$page.props.isGenccAdmin">
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                    <NavLink :href="route('admin.submitters')" :active="route().current('admin.submitters*')">
+                                        Submitters
+                                    </NavLink>
+                                </div>
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                    <NavLink :href="route('admin.users')" :active="route().current('admin.users*')">
+                                        Users
+                                    </NavLink>
+                                </div>
+                            </template>
                             <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
                                 <NavLink :href="route('help')" :active="route().current('help')">
                                     Help  & Documentation
@@ -117,6 +134,13 @@ const logout = () => {
                                     <template #content>
                                         <DropdownLink :href="route('profile.show')">
                                             <i class="pi pi-user mr-2"></i> Profile
+                                        </DropdownLink>
+
+                                        <DropdownLink v-if="$page.props.adminNeedsSubmitterSelection" :href="route('team.show')">
+                                            <i class="pi pi-users mr-2"></i> Team
+                                        </DropdownLink>
+                                        <DropdownLink v-else :href="route('submitter.show')">
+                                            <i class="pi pi-building mr-2"></i> Submitter
                                         </DropdownLink>
 
                                         <!--
@@ -172,6 +196,21 @@ const logout = () => {
                         <ResponsiveNavLink :href="route('dashboard')" :active="route().current('dashboard')">
                             Dashboard
                         </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="showJobsAndSubmissions" :href="route('jobs.index')" :active="route().current('jobs.index')">
+                            Jobs
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="showJobsAndSubmissions" :href="route('submissions.index')" :active="route().current('submissions.index')">
+                            Submissions
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.submitters')" :active="route().current('admin.submitters*')">
+                            Submitters
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.users')" :active="route().current('admin.users*')">
+                            Users
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink :href="route('help')" :active="route().current('help')">
+                            Help & Documentation
+                        </ResponsiveNavLink>
                     </div>
 
                     <!-- Responsive Settings Options -->
@@ -194,6 +233,13 @@ const logout = () => {
                         <div class="mt-3 space-y-1">
                             <ResponsiveNavLink :href="route('profile.show')" :active="route().current('profile.show')">
                                 Profile
+                            </ResponsiveNavLink>
+
+                            <ResponsiveNavLink v-if="$page.props.adminNeedsSubmitterSelection" :href="route('team.show')" :active="route().current('team.show')">
+                                Team
+                            </ResponsiveNavLink>
+                            <ResponsiveNavLink v-else :href="route('submitter.show')" :active="route().current('submitter.show')">
+                                Submitter
                             </ResponsiveNavLink>
 
                             <ResponsiveNavLink v-if="$page.props.jetstream.hasApiFeatures" :href="route('api-tokens.index')" :active="route().current('api-tokens.index')">

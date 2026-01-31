@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const props = defineProps({
     content: {
@@ -8,21 +10,29 @@ const props = defineProps({
     }
 })
 
-// Escape HTML entities to display raw text
-const escapedContent = computed(() => {
+// Configure marked for safe rendering
+marked.setOptions({
+    breaks: true,  // Convert \n to <br>
+    gfm: true      // GitHub Flavored Markdown
+})
+
+// Parse markdown and sanitize HTML
+const renderedContent = computed(() => {
     if (!props.content) return ''
 
-    return props.content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;')
+    // Parse markdown to HTML
+    const html = marked.parse(props.content)
+
+    // Sanitize to prevent XSS
+    return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 'a', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
+        ALLOWED_ATTR: ['href', 'target', 'rel']
+    })
 })
 </script>
 
 <template>
-    <div class="markdown-content" v-html="escapedContent"></div>
+    <div class="markdown-content" v-html="renderedContent"></div>
 </template>
 
 <style scoped>

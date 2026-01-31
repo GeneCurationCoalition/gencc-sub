@@ -12,6 +12,9 @@ use App\Http\Controllers\API\JobController;
 use App\Http\Controllers\API\AliasController;
 use App\Http\Controllers\API\DocumentController;
 use App\Http\Controllers\API\PubmedController;
+use App\Http\Controllers\API\AdminController;
+use App\Http\Controllers\API\SubmitterController;
+use App\Http\Controllers\API\TeamController;
 
 /*
 |--------------------------------------------------------------------------
@@ -128,6 +131,14 @@ Route::group(['middleware' => ['web']], function () {
     // endpoint for profile updates
     Route::post('/users/{id}', [UserController::class, 'update']);
 
+    // endpoint for submitter updates
+    Route::post('/submitters/{id}', [SubmitterController::class, 'update']);
+
+    // endpoint for team updates
+    Route::post('/teams/{id}', [TeamController::class, 'update']);
+    Route::post('/teams/{id}/members', [TeamController::class, 'addMember']);
+    Route::delete('/teams/{id}/members/{userId}', [TeamController::class, 'removeMember']);
+
     // endpoint for alias updates
     Route::post('/aliases/{id}', [AliasController::class, 'update']);
 
@@ -162,6 +173,41 @@ Route::group(['middleware' => ['web']], function () {
 
 // Publish simulator
 Route::post('/sim', [SubmitController::class, 'pubrec']);
+
+/**
+ * Admin-only endpoints for running system commands
+ * These require GenCC Administrator privileges
+ */
+Route::group(['middleware' => ['web'], 'prefix' => 'admin'], function () {
+    // Operational commands
+    Route::post('/run-publish', [AdminController::class, 'runPublish']);
+    Route::post('/update-diseases', [AdminController::class, 'updateDiseases']);
+    Route::post('/update-genes', [AdminController::class, 'updateGenes']);
+    Route::post('/sync-pubmed', [AdminController::class, 'syncPubmed']);
+
+    // Submitter management
+    Route::get('/submitters', [AdminController::class, 'listSubmitters']);
+    Route::get('/submitters/{id}', [AdminController::class, 'showSubmitter']);
+    Route::post('/submitters', [AdminController::class, 'storeSubmitter']);
+    Route::put('/submitters/{id}', [AdminController::class, 'updateSubmitter']);
+    Route::delete('/submitters/{id}', [AdminController::class, 'deleteSubmitter']);
+
+    // User management
+    Route::get('/users', [AdminController::class, 'listUsers']);
+    Route::get('/users/{id}', [AdminController::class, 'showUser']);
+    Route::post('/users', [AdminController::class, 'storeUser']);
+    Route::put('/users/{id}', [AdminController::class, 'updateUser']);
+    Route::delete('/users/{id}', [AdminController::class, 'deleteUser']);
+    Route::post('/users/{id}/association', [AdminController::class, 'updateUserAssociation']);
+
+    // Submitter member management (add/remove users from submitter detail page)
+    Route::post('/submitters/{id}/members', [AdminController::class, 'addUserToSubmitter']);
+    Route::delete('/submitters/{id}/members/{userId}', [AdminController::class, 'removeUserFromSubmitter']);
+});
+
+// Progress polling endpoint - outside web middleware to avoid session locking
+// during long-running admin operations
+Route::get('/admin/progress/{operation}', [AdminController::class, 'getProgress']);
 
 /**
  * PubMed API endpoints
