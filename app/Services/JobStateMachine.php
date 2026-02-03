@@ -126,6 +126,22 @@ class JobStateMachine
     }
 
     /**
+     * Check if a job is immutable (cannot have fields edited).
+     * Submitted and released jobs are immutable.
+     *
+     * @param Job|string $stateOrJob Current state string OR Job object
+     * @return bool
+     */
+    public static function isImmutable($stateOrJob): bool
+    {
+        $state = $stateOrJob instanceof Job
+            ? $stateOrJob->status
+            : $stateOrJob;
+
+        return in_array($state, [Job::STATUS_SUBMITTED, Job::STATUS_RELEASED]);
+    }
+
+    /**
      * Check if a job is in terminal state (released)
      *
      * @param Job|string $stateOrJob Current state string OR Job object

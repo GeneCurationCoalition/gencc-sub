@@ -6,6 +6,8 @@ use Illuminate\Console\Command;
 
 use App\Models\Job;
 use App\Models\Submission;
+use App\Services\JobStateMachine;
+use App\Services\SubmissionStateMachine;
 
 class ProcessSubmissions extends Command
 {
@@ -48,25 +50,29 @@ class ProcessSubmissions extends Command
 
             foreach ($submissions as $submission)
             {
-                // Transition submission based on current state
-                if ($submission->status === Submission::STATUS_SUBMITTED_NEW) {
-                    // New submission -> published
-                    $submission->status = Submission::STATUS_PUBLISHED;
-                    $submission->released_at = now();
-                } elseif ($submission->status === Submission::STATUS_SUBMITTED_REPUBLISH) {
-                    // Republish -> published
-                    $submission->status = Submission::STATUS_PUBLISHED;
-                    $submission->released_at = now();
-                } elseif ($submission->status === Submission::STATUS_SUBMITTED_UNPUBLISH) {
-                    // Unpublish -> unpublished
-                    $submission->status = Submission::STATUS_UNPUBLISHED;
-                    $submission->released_at = null;
+                // Determine target state based on current submission status
+                $targetState = match($submission->status) {
+                    Submission::STATUS_NEW => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_REPUBLISH => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
+                    default => null
+                };
+
+                if ($targetState) {
+                    SubmissionStateMachine::transition($submission, $targetState);
+
+                    if ($targetState === Submission::STATUS_PUBLISHED) {
+                        $submission->released_at = now();
+                    } elseif ($targetState === Submission::STATUS_UNPUBLISHED) {
+                        $submission->released_at = null;
+                    }
+
+                    $submission->save();
                 }
-                $submission->save();
             }
 
-            // Mark job as processed
-            $job->status = Job::STATUS_PROCESSED;
+            // Mark job as released via state machine
+            JobStateMachine::complete($job);
             $job->save();
 
             $this->info('  Job ' . $job->slug . ' processed successfully');

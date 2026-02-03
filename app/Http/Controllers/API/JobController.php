@@ -417,6 +417,16 @@ class JobController extends Controller
                     'message' => 'Unauthorized'],
                     200);
 
+        // Allow favorites toggle on any job (modifies user preferences, not the job)
+        // All other field updates are blocked on immutable jobs
+        if ($request->input('type') !== 'favorites' && JobStateMachine::isImmutable($job)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3020,
+                'message' => 'This job is locked and cannot be edited in its current state'
+            ], 200);
+        }
+
         switch($request->input('type'))
         {
             case 'friendly':

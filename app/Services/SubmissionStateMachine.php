@@ -183,6 +183,33 @@ class SubmissionStateMachine
     }
 
     /**
+     * Check if a submission is immutable (cannot have fields edited).
+     * Published, unpublished, and submitted-stage submissions are immutable.
+     * Accepts Submission object (checks job status too) or string state.
+     *
+     * @param Submission|string $submissionOrState
+     * @return bool
+     */
+    public static function isImmutable($submissionOrState): bool
+    {
+        if ($submissionOrState instanceof \App\Models\Submission) {
+            // Released states are always immutable
+            if (self::isReleasedState($submissionOrState->status)) {
+                return true;
+            }
+            // Submissions in a submitted job are immutable (pending release)
+            if ($submissionOrState->job &&
+                $submissionOrState->job->status === \App\Models\Job::STATUS_SUBMITTED) {
+                return true;
+            }
+            return false;
+        }
+
+        // String-only check (no job context available)
+        return self::isReleasedState($submissionOrState);
+    }
+
+    /**
      * Check if a submission can be edited in its current state
      * Only new and republish are editable (must be in draft job)
      *

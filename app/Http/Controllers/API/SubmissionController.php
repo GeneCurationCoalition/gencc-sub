@@ -142,11 +142,22 @@ class SubmissionController extends Controller
                     'status_code' => 3002,
                     'message' => 'Unauthorized'],
                     200);
-        
+
+        // Allow favorites toggle on any submission (modifies user preferences, not the submission)
+        // All other field updates are blocked on immutable submissions
+        $type = $request->input('type');
+        if ($type !== 'favorites' && SubmissionStateMachine::isImmutable($submission)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3020,
+                'message' => 'This submission is locked and cannot be edited in its current state'
+            ], 200);
+        }
+
         // Initialize warnings array for duplicate warnings
         $warnings = [];
 
-        switch ($request->input('type'))
+        switch ($type)
         {
             case 'inheritance':
                 $inheritance = Inheritance::curie($request->input('curie'))->first();
