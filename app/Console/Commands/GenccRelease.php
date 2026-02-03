@@ -3,7 +3,6 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Carbon\Carbon;
@@ -16,7 +15,6 @@ use App\Models\Release;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
 
-use App\Http\Controllers\ReleaseController;
 use App\Events\PublishStatusUpdate;
 
 class GenccRelease extends Command
@@ -33,7 +31,7 @@ class GenccRelease extends Command
      *
      * @var string
      */
-    protected $description = 'Release pending submissions to gencc-search';
+    protected $description = 'Release pending submissions';
 
     /**
      * Release statistics for tracking
@@ -42,11 +40,9 @@ class GenccRelease extends Command
         'new' => 0,
         'republish' => 0,
         'unpublish' => 0,
-        'failed' => 0,
         'by_submitter' => [],
         'jobs_processed' => [],
         'actions_processed' => [],
-        'errors' => [],
     ];
 
     /**
@@ -64,9 +60,6 @@ class GenccRelease extends Command
 
         switch ($arg)
         {
-            case 'test_init':
-                $this->test($arg);
-                break;
             case 'process':
                 $startTime = Carbon::now();
 
@@ -80,15 +73,11 @@ class GenccRelease extends Command
                     return 0;
                 }
 
-                $this->process_actions();
-                $this->process_jobs();
-                $this->triggerUpdateCounts();
+                $this->process_actions($pendingActions);
+                $this->process_jobs($pendingJobs);
                 $this->generateReleaseNotes();
                 $this->generateSubmissionsCsv();
                 $this->createReleaseRecord($startTime);
-                break;
-            case 'sgc_ids':
-                $this->process_sgc_ids();
                 break;
             default:
                 print("INVALID ARG");
@@ -119,195 +108,183 @@ class GenccRelease extends Command
     }
 
 
-    /**
-     * Test the remote conntection.
-     */
-    protected function test($arg)
-    {
-        print("TESTING REMOTE HANDSHAKE");
-
-        // init handshake with gencc-search
-        $gencc_search = new ReleaseController();
-
-        $response = $gencc_search->init(new Request);
-
-        dd($response);
-                
-    }
-
 
     /**
-     * Publish all pending jobs.
-     *
+     * Release all pending jobs.
      */
-    protected function process_jobs()
+    protected function process_jobs($jobs)
     {
-        // Get jobs ready to publish (submitted status)
-        $jobs = $this->getPendingJobs();
-
-        $this->info("Found {$jobs->count()} submitted jobs to publish");
+        $this->info("Found {$jobs->count()} submitted jobs to release");
 
         if ($jobs->count() === 0) {
-            $this->info("No jobs to publish");
             return 0;
         }
 
-        // init handshake with gencc-search
-        $gencc_search = new ReleaseController();
-
-        $this->info("Initializing handshake with gencc-search...");
-        $response = $gencc_search->init(new Request);
-
-        if ($response === null) {
-            $this->error("Init failed: Response is null");
-            return 500;
-        }
-
-        if (!isset($response['status_code'])) {
-            $this->error("Init failed: No status_code in response");
-            \Log::error('Publish init response missing status_code', ['response' => $response]);
-            return 500;
-        }
-
-        if ($response['status_code'] != 200) {
-            $this->error("Init failed with status code: {$response['status_code']}");
-            \Log::error('Publish init failed', ['response' => $response]);
-            return $response['status_code'];
-        }
-
-        $this->info("Handshake successful");
-
-        foreach($jobs as $job)
+        foreach ($jobs as $job)
         {
-            // do NOT reprocess processed jobs
             if ($job->status == Job::STATUS_PROCESSED) {
                 $this->warn("Skipping job {$job->slug} - already processed");
                 continue;
             }
 
-            $this->info("Publishing job {$job->slug} (status: {$job->status}) with {$job->submissions->count()} submissions");
+            $this->info("Releasing job {$job->slug} (status: {$job->status}) with {$job->submissions->count()} submissions");
 
-            // Track statistics for this job before processing
             $this->trackJobStatistics($job);
 
-            // Set is_publishing flag and broadcast start event
             $job->update(['is_publishing' => true]);
             PublishStatusUpdate::dispatch($job->slug, true, 'started');
 
             try {
-                // Format and push submissions to gencc
-                $response = $gencc_search->send_job(new Request, $job);
+                $processedCount = $this->releaseJob($job);
 
-                $failedCount = 0;
-                $responseData = null;
+                $this->info("Job {$job->slug} released: {$processedCount} submissions processed");
 
-                // Convert JsonResponse to array if needed
-                if ($response instanceof \Illuminate\Http\JsonResponse) {
-                    $responseData = $response->getData(true);
-                    $statusCode = $responseData['status_code'] ?? 'unknown';
-                    $this->info("Job {$job->slug} publish result: {$statusCode}");
-
-                    // Report any failures
-                    if (isset($responseData['failed_count']) && $responseData['failed_count'] > 0) {
-                        $failedCount = $responseData['failed_count'];
-                        $this->warn("  {$failedCount} submission(s) failed and moved to draft job");
-                    }
-                } elseif (isset($response['status_code'])) {
-                    $responseData = $response;
-                    $this->info("Job {$job->slug} publish result: {$response['status_code']}");
-
-                    if (isset($response['failed_count']) && $response['failed_count'] > 0) {
-                        $failedCount = $response['failed_count'];
-                        $this->warn("  {$failedCount} submission(s) failed and moved to draft job");
-                    }
-                }
-
-                // Track failed submissions and capture error details
-                $this->releaseStats['failed'] += $failedCount;
-
-                if ($responseData && !empty($responseData['error_details'])) {
-                    $draftJobSlug = $responseData['draft_job_slug'] ?? null;
-                    foreach ($responseData['error_details'] as $error) {
-                        $this->releaseStats['errors'][] = [
-                            'submission_sid' => $error['submission_sid'],
-                            'error_message' => $error['error_message'],
-                            'submitter_name' => $error['submitter_name'] ?? 'Unknown',
-                            'original_job_slug' => $job->slug,
-                            'draft_job_slug' => $draftJobSlug,
-                        ];
-                    }
-                }
-
-                // Record the job as processed
                 $this->releaseStats['jobs_processed'][] = [
                     'job_id' => $job->id,
                     'slug' => $job->slug,
                     'submitter_name' => $job->submitter->name ?? 'Unknown',
                     'submission_count' => $job->submissions->count(),
-                    'failed_count' => $failedCount,
                 ];
 
-                // Clear is_publishing flag and broadcast completion event
                 $job->update(['is_publishing' => false]);
                 PublishStatusUpdate::dispatch($job->slug, false, 'completed');
 
             } catch (\Exception $e) {
-                // Clear is_publishing flag and broadcast failure event on error
                 $job->update(['is_publishing' => false]);
                 PublishStatusUpdate::dispatch($job->slug, false, 'failed');
 
-                $this->error("Failed to publish job {$job->slug}: " . $e->getMessage());
-                \Log::error("RunPublish: Failed to publish job {$job->slug}", [
+                $this->error("Failed to release job {$job->slug}: " . $e->getMessage());
+                \Log::error("GenccRelease: Failed to release job {$job->slug}", [
                     'exception' => $e->getMessage(),
                     'trace' => $e->getTraceAsString()
                 ]);
-                // Continue to next job instead of stopping the entire process
             }
         }
 
-        // close out the session to gencc
-        $this->info("Closing session with gencc-search...");
-        $response = $gencc_search->end(new Request);
+        return 0;
+    }
 
-        if (!isset($response['status_code'])) {
-            $this->error("End failed: No status_code in response");
-            return 500;
-        }
+    /**
+     * Release a single job's submissions within a transaction.
+     */
+    protected function releaseJob(Job $job): int
+    {
+        return DB::transaction(function () use ($job) {
+            $processedSubmissions = [];
 
-        $this->info("Session closed with status: {$response['status_code']}");
+            foreach ($job->submissions as $submission) {
+                if (in_array($submission->status, [Submission::STATUS_PUBLISHED, Submission::STATUS_UNPUBLISHED])) {
+                    continue;
+                }
 
-        return $response['status_code'];
+                if (!$submission->status) {
+                    \Log::warning("Submission {$submission->sid} has no status - skipping");
+                    continue;
+                }
+
+                $targetState = match($submission->status) {
+                    Submission::STATUS_NEW => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_REPUBLISH => Submission::STATUS_PUBLISHED,
+                    Submission::STATUS_UNPUBLISH => Submission::STATUS_UNPUBLISHED,
+                    default => null
+                };
+
+                $actionType = match($submission->status) {
+                    Submission::STATUS_NEW => 'published',
+                    Submission::STATUS_REPUBLISH => 'republished',
+                    Submission::STATUS_UNPUBLISH => 'unpublished',
+                    default => 'published'
+                };
+
+                if ($targetState) {
+                    SubmissionStateMachine::transition($submission, $targetState);
+
+                    // Archive all other versions of this SID
+                    Submission::where('sid', $submission->sid)
+                        ->where('id', '!=', $submission->id)
+                        ->update([
+                            'is_most_recent' => false,
+                            'is_live' => false
+                        ]);
+
+                    $submission->is_most_recent = true;
+                    $submission->is_live = true;
+
+                    if ($targetState === Submission::STATUS_PUBLISHED) {
+                        $submission->released_at = Carbon::now();
+                        $submission->original_submission_data = $submission->submission_data;
+                    }
+
+                    if ($targetState === Submission::STATUS_UNPUBLISHED) {
+                        $submission->unpublished_at = Carbon::now();
+                    }
+
+                    $submission->save();
+                } else {
+                    $submission->update([
+                        'released_at' => Carbon::now(),
+                        'original_submission_data' => $submission->submission_data
+                    ]);
+                }
+
+                $processedSubmissions[] = [
+                    'sid' => $submission->sid,
+                    'display_id' => $submission->display_id,
+                    'action' => $actionType,
+                    'classification_id' => $submission->classification_id
+                ];
+            }
+
+            // Update processed_submission_ids on the job
+            if (!empty($processedSubmissions)) {
+                $existingProcessed = $job->processed_submission_ids ?? [];
+
+                $allProcessed = $existingProcessed;
+                foreach ($processedSubmissions as $newEntry) {
+                    $existingIndex = array_search($newEntry['sid'], array_column($allProcessed, 'sid'));
+                    if ($existingIndex !== false) {
+                        $allProcessed[$existingIndex] = $newEntry;
+                    } else {
+                        $allProcessed[] = $newEntry;
+                    }
+                }
+
+                $job->processed_submission_ids = $allProcessed;
+            }
+
+            // Mark the job as processed
+            if ($job->status) {
+                JobStateMachine::complete($job);
+                $job->save();
+            } else {
+                $job->update(['status' => Job::STATUS_PROCESSED]);
+            }
+
+            return count($processedSubmissions);
+        });
     }
 
 
     /**
-     * Publish all pending actions.
-     *
+     * Process all pending actions.
      */
-    protected function process_actions()
+    protected function process_actions($actions)
     {
-        $actions = Action::status(Action::STATUS_PENDING)->with(['submission', 'submission.submitter', 'submission.gene', 'submission.disease'])->get();
-
         if ($actions->count() === 0) {
             return 0;
         }
 
-        // init handshake with gencc-search
-        $gencc_search = new ReleaseController();
+        // Eager load relationships if not already loaded
+        $actions->load(['submission', 'submission.submitter', 'submission.gene', 'submission.disease']);
 
-        $response = $gencc_search->init(new Request);
-
-        if ($response === null || $response['status_code'] != 200)
-            return $response['status_code'] ?? 500;
-
+        $this->info("Found {$actions->count()} pending actions to process");
 
         foreach ($actions as $action)
         {
             switch ($action->type)
             {
                 case Action::TYPE_UNPUBLISH:
-                    // Format and push action to gencc
-                    $response = $gencc_search->send_action(new Request, $action);
+                    $action->update(['status' => Action::STATUS_COMPLETE]);
 
                     // Track unpublish statistics
                     $this->releaseStats['unpublish']++;
@@ -338,84 +315,7 @@ class GenccRelease extends Command
             }
         }
 
-        // close out the session to gencc
-        $response = $gencc_search->end(new Request);
-
-        return ($response['status_code']);
-    }
-
-    /**
-     * Publish all sgc_ids.
-     *
-     */
-    protected function process_sgc_ids()
-    {
-        $submissions = Submission::whereNotNull('submission_data->search_row_id')->get();
-
-        $totalSubmissions = $submissions->count();
-        $processedCount = 0;
-
-        $this->info("Processing {$totalSubmissions} SGC IDs...");
-
-        // init handshake with gencc-search
-        $gencc_search = new ReleaseController();
-
-        $response = $gencc_search->init(new Request);
-
-        if ($response === null || $response['status_code'] != 200)
-            return $response['status_code'] ?? 500;
-
-
-        foreach ($submissions as $submission)
-        {
-            $response = $gencc_search->send_sgc_id(new Request, $submission);
-
-            $processedCount++;
-
-            // Update progress every 100 records or on the last record
-            if ($processedCount % 100 == 0 || $processedCount == $totalSubmissions) {
-                $this->getOutput()->write("\r  Progress: {$processedCount}/{$totalSubmissions} SGC IDs updated");
-            }
-        }
-
-        // Add newline after progress complete
-        $this->getOutput()->write("\n");
-
-        // close out the session to gencc
-        $response = $gencc_search->end(new Request);
-
-        return ($response['status_code']);
-    }
-
-    /**
-     * Trigger update_counts on gencc-search to refresh classification counts
-     * Called after all publishing operations are complete
-     */
-    protected function triggerUpdateCounts()
-    {
-        $this->info("Triggering update counts on gencc-search...");
-
-        $gencc_search = new ReleaseController();
-
-        // Initialize session
-        $initResponse = $gencc_search->init(new Request);
-
-        if ($initResponse === null || ($initResponse['status_code'] ?? null) != 200) {
-            $this->warn("Update counts: Failed to initialize session");
-            return;
-        }
-
-        // Trigger update counts
-        $countResponse = $gencc_search->updateCounts(new Request);
-
-        if (isset($countResponse['status_code']) && $countResponse['status_code'] == 200) {
-            $this->info("Update counts completed successfully");
-        } else {
-            $this->warn("Update counts failed: " . ($countResponse['error'] ?? 'Unknown error'));
-        }
-
-        // Close session
-        $gencc_search->end(new Request);
+        return 0;
     }
 
     /**
@@ -480,17 +380,16 @@ class GenccRelease extends Command
         $content .= "| New Submissions | {$this->releaseStats['new']} |\n";
         $content .= "| Updated Submissions | {$this->releaseStats['republish']} |\n";
         $content .= "| Unpublished Submissions | {$this->releaseStats['unpublish']} |\n";
-        $content .= "| Failed | {$this->releaseStats['failed']} |\n";
         $content .= "| **Total Changes** | **{$totalChanges}** |\n\n";
 
         // Jobs processed section
         if (!empty($this->releaseStats['jobs_processed'])) {
             $content .= "## Jobs Processed\n\n";
-            $content .= "| Job | Submitter | Submissions | Failed |\n";
-            $content .= "|-----|-----------|-------------|--------|\n";
+            $content .= "| Job | Submitter | Submissions |\n";
+            $content .= "|-----|-----------|-------------|\n";
 
             foreach ($this->releaseStats['jobs_processed'] as $job) {
-                $content .= "| {$job['slug']} | {$job['submitter_name']} | {$job['submission_count']} | {$job['failed_count']} |\n";
+                $content .= "| {$job['slug']} | {$job['submitter_name']} | {$job['submission_count']} |\n";
             }
             $content .= "\n";
         }
@@ -582,7 +481,6 @@ class GenccRelease extends Command
             'new' => $this->releaseStats['new'],
             'republish' => $this->releaseStats['republish'],
             'unpublish' => $this->releaseStats['unpublish'],
-            'failed' => $this->releaseStats['failed'],
             'total_live' => $cumulativeStats['total_live'],
         ]);
     }
@@ -809,10 +707,9 @@ class GenccRelease extends Command
             'new_count' => $this->releaseStats['new'],
             'republish_count' => $this->releaseStats['republish'],
             'unpublish_count' => $this->releaseStats['unpublish'],
-            'failed_count' => $this->releaseStats['failed'],
+            'failed_count' => 0,
             'total_count' => $totalChanges,
             'jobs_processed' => $this->releaseStats['jobs_processed'],
-            'errors' => !empty($this->releaseStats['errors']) ? $this->releaseStats['errors'] : null,
             'by_submitter' => !empty($this->releaseStats['by_submitter']) ? $this->releaseStats['by_submitter'] : null,
             'cumulative_stats' => $cumulativeStats,
             'duration_seconds' => $duration,
@@ -823,7 +720,6 @@ class GenccRelease extends Command
             'new' => $this->releaseStats['new'],
             'republish' => $this->releaseStats['republish'],
             'unpublish' => $this->releaseStats['unpublish'],
-            'failed' => $this->releaseStats['failed'],
             'duration' => $duration,
         ]);
     }

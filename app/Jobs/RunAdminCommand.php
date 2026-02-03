@@ -53,7 +53,13 @@ class RunAdminCommand implements ShouldQueue
         try {
             Log::info("Admin job: Running {$this->command}", ['user_id' => $this->userId]);
 
-            $exitCode = Artisan::call($this->command);
+            // Pass user_id to gencc:release so it can be stored on the Release record
+            $commandArgs = [];
+            if ($this->command === 'gencc:release') {
+                $commandArgs = ['--user_id' => $this->userId];
+            }
+
+            $exitCode = Artisan::call($this->command, $commandArgs);
             $output = Artisan::output();
 
             $endTime = Carbon::now();
@@ -161,22 +167,20 @@ class RunAdminCommand implements ShouldQueue
             'diseases' => self::diseasesSummary($output, $exitCode),
             'genes' => self::genesSummary($output, $exitCode),
             'pubmed' => self::pubmedSummary($output, $exitCode),
+
             default => self::defaultSummary($this->command, $output, $exitCode),
         };
     }
 
     public static function publishSummary(string $output, int $exitCode): string
     {
-        $summary = $exitCode === 0 ? "**Publish completed successfully**\n\n" : "**Publish completed with issues**\n\n";
+        $summary = $exitCode === 0 ? "**Release completed successfully**\n\n" : "**Release completed with issues**\n\n";
 
         if (preg_match('/Found (\d+) submitted jobs/', $output, $matches)) {
             $summary .= "- Jobs processed: {$matches[1]}\n";
         }
-        if (preg_match('/(\d+) submission\(s\) failed/', $output, $matches)) {
-            $summary .= "- Failed submissions: {$matches[1]}\n";
-        }
-        if (preg_match('/Update counts completed/', $output)) {
-            $summary .= "- Classification counts updated\n";
+        if (preg_match('/Release record created: (.+)/', $output, $matches)) {
+            $summary .= "- Release: {$matches[1]}\n";
         }
 
         return $summary;
