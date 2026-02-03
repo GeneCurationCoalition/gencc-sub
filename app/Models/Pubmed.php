@@ -114,9 +114,10 @@ class Pubmed extends Model
      * This is much more efficient than individual queries
      *
      * @param array $pmids Array of PMID strings to fetch
+     * @param callable|null $onBatchComplete Callback after each batch: fn(int $processed, int $total, int $batchNum, int $totalBatches)
      * @return int Number of records successfully processed
      */
-    public static function query_summary_batch($pmids = null)
+    public static function query_summary_batch($pmids = null, ?callable $onBatchComplete = null)
     {
         $key = env('NCBI_API_KEY');
 
@@ -161,9 +162,14 @@ class Pubmed extends Model
                 $json = json_decode($results, true);
 
                 if ($json !== null && !empty($json['result']['uids'])) {
-                    // Process each PMID in the batch response
+                    // Fetch all matching records in one query, keyed by pmid
+                    $records = self::whereIn('pmid', $json['result']['uids'])
+                        ->get()
+                        ->keyBy('pmid');
+
+                    // Update each record with the API response data
                     foreach ($json['result']['uids'] as $pmid) {
-                        $record = self::where('pmid', $pmid)->first();
+                        $record = $records->get($pmid);
                         if ($record) {
                             $record->status = self::STATUS_SUMMARY_COMPLETE;
                             $record->update($json['result'][$pmid]);
@@ -174,6 +180,10 @@ class Pubmed extends Model
 
                     // Show progress after each batch (like submission progress)
                     echo "\r  Progress: {$processed}/{$total} ({$batch_count}/{$total_batches} batches)";
+
+                    if ($onBatchComplete) {
+                        $onBatchComplete($processed, $total, $batch_count, $total_batches);
+                    }
                 } else {
                     echo "\n  ERROR: Error decoding batch response\n";
                 }

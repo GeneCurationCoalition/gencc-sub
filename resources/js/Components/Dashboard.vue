@@ -486,7 +486,8 @@
         publish: false,
         diseases: false,
         genes: false,
-        pubmed: false
+        pubmed: false,
+        compare: false
     });
 
     // Admin action status messages (shown near buttons during/after operations)
@@ -494,7 +495,8 @@
         publish: null,
         diseases: null,
         genes: null,
-        pubmed: null
+        pubmed: null,
+        compare: null
     });
 
     // Progress polling intervals
@@ -504,8 +506,8 @@
     const actionToOperation = {
         diseases: 'update_diseases',
         genes: 'update_genes',
-        pubmed: 'pubmed_sync',
-        publish: 'run_publish'
+        pubmed: 'sync_pubmed',
+        publish: 'run_publish',
     };
 
     // Success messages for each action
@@ -513,7 +515,7 @@
         publish: 'Publish completed successfully',
         diseases: 'Disease update completed',
         genes: 'Gene update completed',
-        pubmed: 'PubMed sync completed successfully'
+        pubmed: 'PubMed sync completed successfully',
     };
 
     // Extract progress status text from polling response
