@@ -492,13 +492,13 @@ class SubmissionFileValidationTest extends TestCase
     }
 
     /**
-     * Test 14: PMID format validation
+     * Test 14: PMID format validation - completely invalid PMIDs produce errors
      */
     public function test_fails_when_pmid_has_invalid_format(): void
     {
         $worksheet = $this->createValidSpreadsheet([
             $this->createValidDataRow([
-                'pmids' => '0123456' // Leading zeros not allowed
+                'pmids' => 'abc,xyz' // Non-numeric values - no valid PMIDs extractable
             ])
         ]);
 

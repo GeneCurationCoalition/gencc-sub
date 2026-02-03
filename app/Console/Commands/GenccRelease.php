@@ -11,6 +11,7 @@ use Carbon\Carbon;
 use App\Models\Job;
 use App\Models\Action;
 use App\Models\Submission;
+use App\Models\Release;
 
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
@@ -25,7 +26,7 @@ class GenccRelease extends Command
      *
      * @var string
      */
-    protected $signature = 'gencc:release {arg=process}';
+    protected $signature = 'gencc:release {arg=process} {--user_id=}';
 
     /**
      * The console command description.
@@ -45,7 +46,14 @@ class GenccRelease extends Command
         'by_submitter' => [],
         'jobs_processed' => [],
         'actions_processed' => [],
+        'errors' => [],
     ];
+
+    /**
+     * Track generated filenames for the Release record.
+     */
+    protected ?string $releaseNotesFile = null;
+    protected ?string $submissionsCsvFile = null;
 
     /**
      * Execute the console command.
@@ -60,6 +68,8 @@ class GenccRelease extends Command
                 $this->test($arg);
                 break;
             case 'process':
+                $startTime = Carbon::now();
+
                 // Check if there's anything to process before starting
                 $pendingJobs = $this->getPendingJobs();
                 $pendingActions = Action::status(Action::STATUS_PENDING)->get();
@@ -75,6 +85,7 @@ class GenccRelease extends Command
                 $this->triggerUpdateCounts();
                 $this->generateReleaseNotes();
                 $this->generateSubmissionsCsv();
+                $this->createReleaseRecord($startTime);
                 break;
             case 'sgc_ids':
                 $this->process_sgc_ids();
@@ -188,6 +199,7 @@ class GenccRelease extends Command
                 $response = $gencc_search->send_job(new Request, $job);
 
                 $failedCount = 0;
+                $responseData = null;
 
                 // Convert JsonResponse to array if needed
                 if ($response instanceof \Illuminate\Http\JsonResponse) {
@@ -201,6 +213,7 @@ class GenccRelease extends Command
                         $this->warn("  {$failedCount} submission(s) failed and moved to draft job");
                     }
                 } elseif (isset($response['status_code'])) {
+                    $responseData = $response;
                     $this->info("Job {$job->slug} publish result: {$response['status_code']}");
 
                     if (isset($response['failed_count']) && $response['failed_count'] > 0) {
@@ -209,13 +222,27 @@ class GenccRelease extends Command
                     }
                 }
 
-                // Track failed submissions
+                // Track failed submissions and capture error details
                 $this->releaseStats['failed'] += $failedCount;
+
+                if ($responseData && !empty($responseData['error_details'])) {
+                    $draftJobSlug = $responseData['draft_job_slug'] ?? null;
+                    foreach ($responseData['error_details'] as $error) {
+                        $this->releaseStats['errors'][] = [
+                            'submission_sid' => $error['submission_sid'],
+                            'error_message' => $error['error_message'],
+                            'submitter_name' => $error['submitter_name'] ?? 'Unknown',
+                            'original_job_slug' => $job->slug,
+                            'draft_job_slug' => $draftJobSlug,
+                        ];
+                    }
+                }
 
                 // Record the job as processed
                 $this->releaseStats['jobs_processed'][] = [
+                    'job_id' => $job->id,
                     'slug' => $job->slug,
-                    'submitter' => $job->submitter->name ?? 'Unknown',
+                    'submitter_name' => $job->submitter->name ?? 'Unknown',
                     'submission_count' => $job->submissions->count(),
                     'failed_count' => $failedCount,
                 ];
@@ -463,7 +490,7 @@ class GenccRelease extends Command
             $content .= "|-----|-----------|-------------|--------|\n";
 
             foreach ($this->releaseStats['jobs_processed'] as $job) {
-                $content .= "| {$job['slug']} | {$job['submitter']} | {$job['submission_count']} | {$job['failed_count']} |\n";
+                $content .= "| {$job['slug']} | {$job['submitter_name']} | {$job['submission_count']} | {$job['failed_count']} |\n";
             }
             $content .= "\n";
         }
@@ -549,6 +576,7 @@ class GenccRelease extends Command
         $filepath = $releasesDir . '/' . $filename;
         File::put($filepath, $content);
 
+        $this->releaseNotesFile = $filename;
         $this->info("Release notes generated: {$filepath}");
         \Log::info("GenCC Release: Release notes generated at {$filepath}", [
             'new' => $this->releaseStats['new'],
@@ -697,8 +725,11 @@ class GenccRelease extends Command
         $csvContent = $this->arrayToCsvLine($headers);
 
         foreach ($submissions as $submission) {
-            // Extract PMIDs from pubmeds relationship
-            $pmids = $submission->pubmeds->pluck('pmid')->implode(';');
+            // Extract PMIDs - prefer normalized_pmids column, fallback to pubmeds relationship
+            // normalized_pmids uses comma separator, but export uses semicolon
+            $pmids = $submission->normalized_pmids
+                ? str_replace(',', ';', $submission->normalized_pmids)
+                : $submission->pubmeds->pluck('pmid')->implode(';');
 
             // Extract data from submission_data JSON
             $submissionData = $submission->submission_data;
@@ -741,6 +772,7 @@ class GenccRelease extends Command
         $latestPath = $exportsDir . '/' . $latestFilename;
         File::copy($timestampedPath, $latestPath);
 
+        $this->submissionsCsvFile = $timestampedFilename;
         $this->info("Submissions CSV generated: {$timestampedPath}");
         $this->info("Latest CSV available at: {$latestPath}");
 
@@ -754,6 +786,48 @@ class GenccRelease extends Command
     /**
      * Convert an array to a properly escaped CSV line.
      */
+    /**
+     * Create a Release record with statistics from this release run.
+     */
+    protected function createReleaseRecord(Carbon $startTime)
+    {
+        $endTime = Carbon::now();
+        $duration = $startTime->diffInSeconds($endTime);
+
+        $totalChanges = $this->releaseStats['new']
+            + $this->releaseStats['republish']
+            + $this->releaseStats['unpublish'];
+
+        // Gather cumulative stats snapshot
+        $cumulativeStats = $this->gatherCumulativeStatistics();
+
+        $release = Release::create([
+            'released_at' => $startTime,
+            'release_notes_file' => $this->releaseNotesFile,
+            'submissions_csv_file' => $this->submissionsCsvFile,
+            'user_id' => $this->option('user_id') ? (int)$this->option('user_id') : null,
+            'new_count' => $this->releaseStats['new'],
+            'republish_count' => $this->releaseStats['republish'],
+            'unpublish_count' => $this->releaseStats['unpublish'],
+            'failed_count' => $this->releaseStats['failed'],
+            'total_count' => $totalChanges,
+            'jobs_processed' => $this->releaseStats['jobs_processed'],
+            'errors' => !empty($this->releaseStats['errors']) ? $this->releaseStats['errors'] : null,
+            'by_submitter' => !empty($this->releaseStats['by_submitter']) ? $this->releaseStats['by_submitter'] : null,
+            'cumulative_stats' => $cumulativeStats,
+            'duration_seconds' => $duration,
+        ]);
+
+        $this->info("Release record created: {$release->slug}");
+        \Log::info("GenCC Release: Release record {$release->slug} created", [
+            'new' => $this->releaseStats['new'],
+            'republish' => $this->releaseStats['republish'],
+            'unpublish' => $this->releaseStats['unpublish'],
+            'failed' => $this->releaseStats['failed'],
+            'duration' => $duration,
+        ]);
+    }
+
     protected function arrayToCsvLine(array $fields): string
     {
         $escaped = array_map(function ($field) {

@@ -22,6 +22,7 @@ const axios = window.axios;
 const toast = useToast();
 const confirm = useConfirm();
 const uploadErrors = ref([]);
+const uploadWarnings = ref([]);
 const showErrorCard = ref(false);
 const uploadedFilename = ref('');
 const uploadedDocumentId = ref(null);
@@ -208,6 +209,11 @@ const dataRowErrors = computed(() => {
     return uploadErrors.value.filter(err => !isFileFormatError(err));
 });
 
+// Computed: PMID normalization warnings
+const pmidWarnings = computed(() => {
+    return uploadWarnings.value.filter(err => err.error_type === 'pmid_normalization_warning');
+});
+
 // Computed: Check if document can be cleared (validation failed OR partial upload, but NOT during active processing)
 const canClearDocument = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
@@ -301,11 +307,18 @@ const displayErrorCard = (errors) => {
            (err.error_type && err.error_type !== 'validation_error');
   });
 
+  // Separate warnings from errors
+  const warnings = validErrors.filter(err => err.severity === 'warning');
+  const errors = validErrors.filter(err => err.severity !== 'warning');
+  uploadWarnings.value = warnings;
+  uploadErrors.value = errors;
+
   // Only show error card if there are valid errors
-  if (validErrors.length > 0) {
-    uploadErrors.value = validErrors;
+  if (errors.length > 0) {
     showErrorCard.value = true; // Default to expanded when errors first appear
     expandedErrorRows.value = {}; // Reset expanded state when showing new errors
+  } else if (warnings.length > 0) {
+    console.log('Validation passed with warnings:', warnings);
   } else {
     console.log('Ignoring empty/invalid errors:', errors);
   }
@@ -551,9 +564,10 @@ const uploadFile = async (event) => {
   const file = event.files[0];
   uploadedFilename.value = file.name;
 
-  // Clear any previous error card
+  // Clear any previous error card and warnings
   showErrorCard.value = false;
   uploadErrors.value = [];
+  uploadWarnings.value = [];
   expandedErrorRows.value = {};
 
   console.log('[Upload] File selected:', file.name);
@@ -634,7 +648,14 @@ const uploadFile = async (event) => {
       // Display validation errors
       if (errorData.errors && Array.isArray(errorData.errors)) {
         displayErrorCard(errorData.errors);
-      } else {
+      }
+
+      // Also handle warnings if present
+      if (errorData.warnings && errorData.warnings.length > 0) {
+        uploadWarnings.value = errorData.warnings;
+      }
+
+      if (!errorData.errors || !Array.isArray(errorData.errors)) {
         // Fallback error display
         displayErrorCard([{
           error_type: 'validation_error',
@@ -1330,6 +1351,27 @@ const formatDate = (dateString) => {
                     </div>
                 </template>
             </Card>
+
+            <!-- PMID Normalization Warnings Card -->
+            <div v-if="pmidWarnings.length > 0" class="mt-2 mb-4">
+                <div class="bg-orange-50 border-l-4 border-orange-400 p-4 rounded">
+                    <div class="flex justify-between items-center text-orange-700">
+                        <div class="flex items-center gap-2">
+                            <i class="pi pi-info-circle text-2xl"></i>
+                            <div class="flex flex-col">
+                                <span class="font-semibold">{{ pmidWarnings.length }} PMID Normalization Warning(s)</span>
+                                <span class="text-sm">Some PMID values were automatically cleaned. Upload will proceed normally.</span>
+                            </div>
+                        </div>
+                        <Button label="Dismiss" icon="pi pi-times" severity="warning" text size="small" @click="uploadWarnings = []" />
+                    </div>
+                    <div class="mt-3 max-h-40 overflow-y-auto">
+                        <div v-for="(warning, index) in pmidWarnings" :key="index" class="text-sm text-orange-600 py-1 border-b border-orange-200 last:border-b-0">
+                            <span class="font-mono">Row {{ warning.rows }}:</span> {{ warning.message }}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />
         </div>

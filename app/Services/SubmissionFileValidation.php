@@ -26,6 +26,7 @@ class SubmissionFileValidation
     const FILE_FORMAT_VALIDATION = 'file_format';  // For file structure/template errors
     const SEVERITY_FATAL = 'fatal';
     const SEVERITY_ERROR = 'error';
+    const SEVERITY_WARNING = 'warning';
 
     // If you change this value, be sure to update JobItem.vue MAX_VALIDATION_RESULTS
     // Set to 0 to disable the limit and collect all validation errors
@@ -142,8 +143,6 @@ class SubmissionFileValidation
         'pmids' => [
             'desc' => 'PubMed IDs',
             'required' => false,
-            # empty or ###### or #####, ##### or #####,#####,#####
-            'regexp' => '/^\s*(\d+(\s*[,;]\s*\d+)*)?\s*$/',
         ],
         'assertion_criteria_url' => [
             'desc' => 'Assertion Criteria URL',
@@ -939,11 +938,10 @@ class SubmissionFileValidation
         $validation_results = [];
         $pmid_index = self::get_index('pmids');
 
+        // Use 1-indexed row_num (matching main loop) for consistent error reporting
         $row_num = 0;
         foreach ($worksheet as $row) {
             $row_num++;
-
-            // Skip non-data rows
             if ($row_num < self::FIRST_DATA_ROW) {
                 continue;
             }
@@ -953,56 +951,39 @@ class SubmissionFileValidation
                 continue;
             }
 
-            // Get PMIDs from this row
             $pmids_cell = $row[$pmid_index] ?? '';
             if (empty(trim($pmids_cell))) {
                 continue;
             }
 
-            // Track if this row has any invalid PMIDs
-            $row_has_invalid_pmid = false;
+            $result = \App\Services\PmidNormalizer::normalize($pmids_cell);
 
-            // Parse PMIDs (comma or semicolon separated)
-            $pmids = preg_split('/[,;]/', $pmids_cell);
-            foreach ($pmids as $pmid) {
-                $pmid = trim($pmid);
-
-                // Remove "PMID:" prefix if present
-                $pmid = (stripos($pmid, "PMID:") === 0 ? substr($pmid, 5) : $pmid);
-                $pmid = trim($pmid);
-
-                if (empty($pmid)) {
-                    continue;
-                }
-
-                // Check format: must be numeric (any length from 1 digit up), no leading zeros
-                $is_invalid = false;
-                if (!is_numeric($pmid)) {
-                    $is_invalid = true;
-                } elseif (strlen($pmid) > 1 && $pmid[0] === '0') {
-                    // Leading zeros are only invalid for multi-digit numbers
-                    $is_invalid = true;
-                }
-
-                if ($is_invalid) {
-                    $row_has_invalid_pmid = true;
-                    break;  // One invalid PMID is enough to flag the row
-                }
+            // If there are issues but some valid PMIDs were extracted, it's a warning
+            if (!empty($result['issues']) && !empty($result['pmids'])) {
+                $issueDetails = collect($result['issues'])->map(fn($i) => "{$i['value']} ({$i['reason']})")->implode(', ');
+                $validation_results[] = [
+                    'error_type' => 'pmid_normalization_warning',
+                    'severity' => self::SEVERITY_WARNING,
+                    'validation_type' => self::DATA_VALIDATION,
+                    'row' => $row_num,
+                    'message' => "Some PMID values were cleaned or removed: {$issueDetails}. Valid PMIDs retained: " . implode(', ', $result['pmids']),
+                ];
             }
 
-            // Add error for this row if it has invalid PMIDs
-            if ($row_has_invalid_pmid) {
+            // If no valid PMIDs from non-empty input, it's an error
+            if (empty($result['pmids']) && !empty($result['issues'])) {
+                $issueDetails = collect($result['issues'])->map(fn($i) => "{$i['value']} ({$i['reason']})")->implode(', ');
                 $validation_results[] = [
                     'error_type' => 'invalid_pmid_format',
                     'severity' => self::SEVERITY_ERROR,
                     'validation_type' => self::DATA_VALIDATION,
                     'row' => $row_num,
-                    'message' => 'Invalid PMID format found: Must be numeric with no leading zeros.',
+                    'message' => "No valid PMIDs found. All values were invalid: {$issueDetails}",
                 ];
             }
         }
 
-        \Log::info('SubmissionFileValidation: PMID format validation complete. Rows with invalid PMIDs: ' . count($validation_results));
+        \Log::info('SubmissionFileValidation: PMID format validation complete. Results: ' . count($validation_results));
         return $validation_results;
     }
 
@@ -1019,8 +1000,14 @@ class SubmissionFileValidation
 
         \Log::info('SubmissionFileValidation: Checking for duplicate PMIDs within submissions...');
 
-        for ($row_num = self::FIRST_DATA_ROW; $row_num < count($worksheet); $row_num++) {
-            $row = $worksheet[$row_num];
+        $row_num = 0;
+        foreach ($worksheet as $row) {
+            $row_num++;
+
+            // Skip non-data rows
+            if ($row_num < self::FIRST_DATA_ROW) {
+                continue;
+            }
 
             // Get PMIDs from this row
             $pmids_cell = $row[$pmid_index] ?? '';
@@ -1028,21 +1015,8 @@ class SubmissionFileValidation
                 continue;
             }
 
-            // Parse PMIDs (comma or semicolon separated)
-            $pmids = preg_split('/[,;]/', $pmids_cell);
-            $cleaned_pmids = [];
-
-            foreach ($pmids as $pmid) {
-                $pmid = trim($pmid);
-
-                // Remove "PMID:" prefix if present
-                $pmid = (stripos($pmid, "PMID:") === 0 ? substr($pmid, 5) : $pmid);
-                $pmid = trim($pmid);
-
-                if (!empty($pmid) && is_numeric($pmid)) {
-                    $cleaned_pmids[] = $pmid;
-                }
-            }
+            $result = \App\Services\PmidNormalizer::normalize($pmids_cell);
+            $cleaned_pmids = $result['pmids'];
 
             // Check for duplicates
             $unique_pmids = array_unique($cleaned_pmids);
@@ -1103,17 +1077,9 @@ class SubmissionFileValidation
                 continue;
             }
 
-            // Parse PMIDs (comma or semicolon separated)
-            $pmids = preg_split('/[,;]/', $pmids_cell);
-            foreach ($pmids as $pmid) {
-                $pmid = trim($pmid);
-                // Remove "PMID:" prefix if present
-                $pmid = (stripos($pmid, "PMID:") === 0 ? substr($pmid, 5) : $pmid);
-                $pmid = trim($pmid);
-
-                if (!empty($pmid) && is_numeric($pmid)) {
-                    $all_pmids[$pmid] = true; // Use associative array for uniqueness
-                }
+            $result = \App\Services\PmidNormalizer::normalize($pmids_cell);
+            foreach ($result['pmids'] as $pmid) {
+                $all_pmids[$pmid] = true; // Use associative array for uniqueness
             }
         }
 

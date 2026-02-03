@@ -953,6 +953,18 @@
 
     // localMechanism is now a computed property (defined above) - no need for initialization here
 
+    function formatIssueReason(reason) {
+        const labels = {
+            'literal_null': 'literal NULL value',
+            'scientific_notation': 'scientific notation',
+            'non_numeric': 'non-numeric value',
+            'zero_value': 'zero value',
+            'exceeds_max_digits': 'exceeds maximum digits',
+            'leading_zeros_stripped': 'leading zeros stripped',
+        };
+        return labels[reason] || reason.replace(/_/g, ' ');
+    }
+
     function getDiseaseDeprecationTooltip(disease) {
         if (!disease || disease.status !== 8) {
             return 'DEPRECATED: This disease term is deprecated';
@@ -1359,8 +1371,8 @@ console.log(props.submission)
                           </div>
                         </div>
 
-                        <!-- mechanism of disease -->
-                        <div class="col-span-2 pt-3 text-right pr-3">Mechanism of Disease:</div>
+                        <!-- mechanism of disease (hidden) -->
+                        <!-- <div class="col-span-2 pt-3 text-right pr-3">Mechanism of Disease:</div>
                         <div class="col-span-2 py-1 my-2 border-l-8 pl-3" :class="hasProperty('mech_of_disease') ? 'border-2 border-red-600' : ''">
                             <div class="font-normal">{{ submission.submission_data?.mechanism?.name || '' }}</div>
                             <div class="text-xs">{{ submission.submission_data?.mechanism?.curie || '' }}</div>
@@ -1377,7 +1389,7 @@ console.log(props.submission)
                           <div class="col-span-12 ">
                               <ChangeMechanism v-model:visible="showMechanismDialog" v-bind:input="localMechanism" @select_dialog_close="showMechanismDialog = false" @select_mechanism_item="updateMechanism" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeMechanism>
                           </div>
-                        </div>
+                        </div> -->
 
                         <!-- evaluated date-->
                         <!--<div class="col-span-2 pt-3 text-right pr-3">Evaluated/Report Date:</div>
@@ -1413,6 +1425,24 @@ console.log(props.submission)
                               <ChangeEvidence v-model:visible="showEvidenceDialog" @input_evidence_close="showEvidence = false" @input_evidence_item="updateEvidence" v-bind:input="submission.submission_data?.evidence" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeEvidence>
                           </div>
                         </div>
+
+                        <!-- PMID normalization issues (warnings, not errors) -->
+                        <template v-if="submission.pmid_issues && submission.pmid_issues.length > 0">
+                            <div class="col-span-11 ml-12 mb-2">
+                                <div class="bg-orange-50 border-l-4 border-orange-300 p-2 rounded text-sm text-orange-700">
+                                    <div class="font-semibold mb-1">
+                                        <i class="pi pi-info-circle mr-1"></i>
+                                        {{ submission.pmid_issues.length }} PMID value(s) were cleaned during normalization:
+                                    </div>
+                                    <ul class="list-disc ml-5">
+                                        <li v-for="(issue, idx) in submission.pmid_issues" :key="idx">
+                                            <span class="font-mono">{{ issue.value }}</span>
+                                            <span class="text-orange-500">({{ formatIssueReason(issue.reason) }})</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </template>
 
                         <!-- report url -->
                         <div class="col-span-2 pt-3 text-right pr-3">Public Report:</div>
