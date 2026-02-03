@@ -309,12 +309,12 @@ const displayErrorCard = (errors) => {
 
   // Separate warnings from errors
   const warnings = validErrors.filter(err => err.severity === 'warning');
-  const errors = validErrors.filter(err => err.severity !== 'warning');
+  const actualErrors = validErrors.filter(err => err.severity !== 'warning');
   uploadWarnings.value = warnings;
-  uploadErrors.value = errors;
+  uploadErrors.value = actualErrors;
 
   // Only show error card if there are valid errors
-  if (errors.length > 0) {
+  if (actualErrors.length > 0) {
     showErrorCard.value = true; // Default to expanded when errors first appear
     expandedErrorRows.value = {}; // Reset expanded state when showing new errors
   } else if (warnings.length > 0) {
@@ -882,8 +882,8 @@ const formatDate = (dateString) => {
                     Uploading submissions in background ({{ uploadProgress.processed_submissions || 0 }} of {{ uploadProgress.total_submissions || 0 }}) - You can navigate away, the job will continue uploading.
                 </p>
             </div>
-            <!-- Draft status: show submit button if no errors and not processing -->
-            <div v-else-if="job.status === 'draft' && job.type == 0 && submissions.length > 0 && !submissions.some(s => s.submission_errors)"
+            <!-- Draft status: show submit button if no errors, not processing, and not partial upload -->
+            <div v-else-if="job.status === 'draft' && job.type == 0 && submissions.length > 0 && !hasErrors && !hasPartialUpload && !job.is_processing"
                  class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold">There are no errors.
                 <Button class="float-right !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" label="Submit" icon="pi pi-send" @click="publishConfirmation()" raised /></p>
