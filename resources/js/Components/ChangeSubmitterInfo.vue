@@ -39,6 +39,10 @@
     // Contact selection
     const selectedContact = ref(null);
 
+    // Member and downloadable flags
+    const member = ref(false);
+    const downloadable = ref(false);
+
     const disabled = computed(() => {
         return Object.keys(errors.value).length !== 0 || !name.value || (logoFile.value && !logoValidated.value)
     })
@@ -160,7 +164,9 @@
             'assertion': assertion.value || null,
             'logo': logoFile.value,
             'remove_logo': removeLogo.value,
-            'contact_id': selectedContact.value?.id || null
+            'contact_id': selectedContact.value?.id || null,
+            'member': member.value,
+            'downloadable': downloadable.value
         });
     }
 
@@ -182,6 +188,9 @@
         removeLogo.value = false;
         // Set current contact
         selectedContact.value = props.members?.find(m => m.is_contact) || null;
+        // Set member and downloadable flags
+        member.value = props.input.member || false;
+        downloadable.value = props.input.downloadable || false;
     }
 
 </script>
@@ -286,6 +295,36 @@
                 </div>
                 <div class="flex items-center col-span-3">
                     <small class="text-gray-500">Select the primary contact for this submitter</small>
+                </div>
+
+                <!-- Member Flag -->
+                <div class="flex items-center gap-3">
+                    <label for="memberInput" class="flex items-center font-semibold w-6rem">Member</label>
+                </div>
+                <div class="flex items-center col-span-3 gap-3">
+                    <Checkbox id="memberInput" v-model="member" :binary="true" />
+                    <label for="memberInput" class="ml-2 text-gray-700">This submitter is a GenCC member</label>
+                </div>
+                <div class="flex items-center gap-3">
+                    &nbsp;
+                </div>
+                <div class="flex items-center col-span-3">
+                    <small class="text-gray-500">Member submitters are displayed on the GenCC website</small>
+                </div>
+
+                <!-- Downloadable Flag -->
+                <div class="flex items-center gap-3">
+                    <label for="downloadableInput" class="flex items-center font-semibold w-6rem">Downloadable</label>
+                </div>
+                <div class="flex items-center col-span-3 gap-3">
+                    <Checkbox id="downloadableInput" v-model="downloadable" :binary="true" />
+                    <label for="downloadableInput" class="ml-2 text-gray-700">Include submissions in public downloads</label>
+                </div>
+                <div class="flex items-center gap-3">
+                    &nbsp;
+                </div>
+                <div class="flex items-center col-span-3">
+                    <small class="text-gray-500">Downloadable submitters have their data included in the GenCC data exports</small>
                 </div>
 
                 <!-- Logo -->

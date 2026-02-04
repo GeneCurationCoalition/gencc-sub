@@ -227,6 +227,8 @@ class AdminController extends Controller
             'logo' => 'nullable|file|max:500',
             'remove_logo' => 'nullable',
             'contact_id' => 'nullable|integer|exists:users,id',
+            'member' => 'nullable',
+            'downloadable' => 'nullable',
         ]);
 
         $submitter->name = $validated['name'];
@@ -236,6 +238,14 @@ class AdminController extends Controller
 
         if (isset($validated['status'])) {
             $submitter->status = $validated['status'];
+        }
+
+        // Handle member and downloadable flags
+        if ($request->has('member')) {
+            $submitter->member = filter_var($request->member, FILTER_VALIDATE_BOOLEAN);
+        }
+        if ($request->has('downloadable')) {
+            $submitter->downloadable = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
         }
 
         // Handle logo removal

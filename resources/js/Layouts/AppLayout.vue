@@ -93,6 +93,11 @@ const logout = () => {
                                         Users
                                     </NavLink>
                                 </div>
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                    <NavLink :href="route('admin.releases')" :active="route().current('admin.releases*')">
+                                        Releases
+                                    </NavLink>
+                                </div>
                             </template>
                             <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
                                 <NavLink :href="route('help')" :active="route().current('help')">
@@ -207,6 +212,9 @@ const logout = () => {
                         </ResponsiveNavLink>
                         <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.users')" :active="route().current('admin.users*')">
                             Users
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.releases')" :active="route().current('admin.releases*')">
+                            Releases
                         </ResponsiveNavLink>
                         <ResponsiveNavLink :href="route('help')" :active="route().current('help')">
                             Help & Documentation

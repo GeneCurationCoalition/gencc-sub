@@ -51,6 +51,7 @@ class Submitter extends Model
                             'logo_contents', 'logo_mime_type',
                             'website', 'assertion',
                             'counts', 'contacts', 'activity', 'notes',
+                            'member', 'downloadable',
                             'status' ];
 
 	/**

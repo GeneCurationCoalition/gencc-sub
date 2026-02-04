@@ -90,6 +90,8 @@ use App\Http\Controllers\AdminPageController;
     Route::get('/admin/submitters/{id}', [AdminPageController::class, 'submitterDetail'])->name('admin.submitters.show');
     Route::get('/admin/users', [AdminPageController::class, 'users'])->name('admin.users');
     Route::get('/admin/users/{id}', [AdminPageController::class, 'userDetail'])->name('admin.users.show');
+    Route::get('/admin/releases', [AdminPageController::class, 'releases'])->name('admin.releases');
+    Route::get('/admin/releases/{id}', [AdminPageController::class, 'releaseDetail'])->name('admin.releases.show');
 
    // Route::get('/userinfo',  [UserInformationController::class, 'create']);
 

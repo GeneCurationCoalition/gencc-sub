@@ -3,8 +3,10 @@
 namespace App\Console\Commands\Pubmed;
 
 use Illuminate\Console\Command;
+use App\Models\AdminLog;
 use App\Models\Pubmed;
 use App\Models\Submission;
+use App\Services\AdminProgressTracker;
 
 class SyncPubmed extends Command
 {
@@ -26,6 +28,8 @@ class SyncPubmed extends Command
      */
     protected $description = 'Sync PubMed data with flexible scoping options';
 
+    protected const PROGRESS_OPERATION = AdminLog::OP_SYNC_PUBMED;
+
     /**
      * Execute the console command.
      */
@@ -44,12 +48,14 @@ class SyncPubmed extends Command
         }
 
         // Determine which PMIDs to process based on scope
+        AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, "Collecting PMIDs (scope: {$scope})...");
         $pmids = $this->collectPmids($scope, $createMissing, $quiet);
 
         if (empty($pmids)) {
             if (!$quiet) {
                 $this->warn('No PMIDs to process');
             }
+            AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'No PMIDs to process');
             return 0;
         }
 
@@ -82,7 +88,23 @@ class SyncPubmed extends Command
             if (!$quiet) {
                 $this->info("Processing {$summary_count} PMIDs...");
             }
-            $processed = Pubmed::query_summary_batch($pmids_needing_summary);
+            AdminProgressTracker::updatePhase(
+                self::PROGRESS_OPERATION, 'fetching', 0, $summary_count,
+                "Fetching {$summary_count} PMIDs from NCBI..."
+            );
+
+            $processed = Pubmed::query_summary_batch($pmids_needing_summary, function ($processed, $total, $batchNum, $totalBatches) {
+                AdminProgressTracker::updatePhase(
+                    self::PROGRESS_OPERATION, 'fetching', $processed, $total,
+                    "Batch {$batchNum}/{$totalBatches} complete ({$processed}/{$total} PMIDs)"
+                );
+            });
+
+            AdminProgressTracker::completePhase(
+                self::PROGRESS_OPERATION, 'fetching',
+                "Fetched {$processed}/{$summary_count} PMIDs"
+            );
+
             if (!$quiet) {
                 $this->info("Successfully processed {$processed} PMIDs");
             }
@@ -90,6 +112,7 @@ class SyncPubmed extends Command
             if (!$quiet) {
                 $this->info('All PMIDs already have summary data');
             }
+            AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'All PMIDs already have summary data');
         }
 
         // Report on invalid PMIDs (if processing from submissions)

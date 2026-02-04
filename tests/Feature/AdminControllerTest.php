@@ -279,10 +279,10 @@ class AdminControllerTest extends TestCase
      */
     public function test_publish_summary_generator(): void
     {
-        $summary = RunAdminCommand::publishSummary("Found 2 submitted jobs\nUpdate counts completed", 0);
-        $this->assertStringContainsString('**Publish completed successfully**', $summary);
+        $summary = RunAdminCommand::publishSummary("Found 2 submitted jobs\nRelease record created: R-100001", 0);
+        $this->assertStringContainsString('**Release completed successfully**', $summary);
         $this->assertStringContainsString('Jobs processed: 2', $summary);
-        $this->assertStringContainsString('Classification counts updated', $summary);
+        $this->assertStringContainsString('Release: R-100001', $summary);
     }
 
     public function test_diseases_summary_generator(): void

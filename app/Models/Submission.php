@@ -51,6 +51,8 @@ class Submission extends Model
         'original_submission_data' => 'object',
         'submission_errors' => 'object',
         'evidence' => 'object',
+        'normalized_pmids' => 'string',
+        'pmid_issues' => 'array',
         'history' => 'array',
         'tags' => 'array',
         'submitted_at' => 'datetime',
@@ -69,7 +71,7 @@ class Submission extends Model
 	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
                             'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'original_submission_data',
-                            'submission_data', 'submission_errors', 'history', 'tags',
+                            'submission_data', 'submission_errors', 'normalized_pmids', 'pmid_issues', 'history', 'tags',
                             'status', 'action', 'origin_state', 'local_key', 'last_edited_by',
                             'document_id', 'submitted_at', 'released_at', 'unpublished_at'];
 
@@ -958,37 +960,36 @@ class Submission extends Model
             // This ensures that republish/update operations don't append to old PMIDs
             $this->evidence = [];
 
-            foreach ($this->submission_data->evidence as $evidence)
-            {
-                if (empty($evidence->pmid))
-                    continue;
-
-                // do some checking to make sure the pmid is formated correctly
-                $pmid =  (stripos($evidence->pmid, "PMID:") === 0 ? substr($evidence->pmid, 5) : $evidence->pmid);
-
-                $pmid = trim($pmid);
-
-                // Validate format: must be numeric with no leading zeros
-                if (!is_numeric($pmid))
-                {
-                    $this->asserterrors(null, 'invalid_pmid', 'Invalid PMID format: must be numeric');
-                    continue;
+            // Collect all raw PMID values from the evidence array
+            $rawPmids = [];
+            foreach ($this->submission_data->evidence as $evidence) {
+                if (!empty($evidence->pmid)) {
+                    $rawPmids[] = $evidence->pmid;
                 }
+            }
 
-                // Check for leading zeros on multi-digit numbers
-                if (strlen($pmid) > 1 && $pmid[0] === '0')
-                {
-                    $this->asserterrors(null, 'invalid_pmid', 'Invalid PMID format: no leading zeros allowed');
-                    continue;
-                }
+            // Normalize all PMIDs at once
+            $rawString = implode(',', $rawPmids);
+            $normResult = \App\Services\PmidNormalizer::normalize($rawString);
 
+            // Store normalization results
+            $this->normalized_pmids = !empty($normResult['pmids']) ? implode(',', $normResult['pmids']) : null;
+            $this->pmid_issues = !empty($normResult['issues']) ? $normResult['issues'] : null;
+
+            // Only flag as error if there were issues that resulted in lost PMIDs
+            // (not just formatting cleanup like [PMID] suffix removal)
+            if (!empty($normResult['issues']) && empty($normResult['pmids']) && !empty($rawPmids)) {
+                $this->asserterrors(null, 'invalid_pmid', 'No valid PMIDs found after normalization');
+            }
+
+            // Build the evidence array and submission_data from normalized PMIDs
+            $normalizedEvidence = [];
+            foreach ($normResult['pmids'] as $pmid) {
                 // Check if pmid exists in cache first, then database
-                // Do not throw error if PMID doesn't exist in PubMed yet - it will be fetched by batch job
                 $pmid_record = null;
                 if (isset($lookupCaches['pubmeds'])) {
                     $pmid_record = $lookupCaches['pubmeds']->get($pmid);
                     if (!$pmid_record) {
-                        // Not in cache - create new and add to cache for future lookups in same batch
                         $pmid_record = Pubmed::firstOrCreate(
                             ['pmid' => $pmid, 'uid' => $pmid],
                             ['status' => Pubmed::STATUS_INITIALIZING]
@@ -996,20 +997,23 @@ class Submission extends Model
                         $lookupCaches['pubmeds']->put($pmid, $pmid_record);
                     }
                 } else {
-                    // Fallback to database query (no cache available)
                     $pmid_record = Pubmed::firstOrCreate(
                         ['pmid' => $pmid, 'uid' => $pmid],
                         ['status' => Pubmed::STATUS_INITIALIZING]
                     );
                 }
 
-                // for convenience, maintain a list of valid pmids outside of submission_data
                 $ev = $this->evidence;
                 $ev[] = $pmid_record->pmid;
                 $this->evidence = $ev;
 
-                // note: we leave the parent to make changes to the pivot table
+                $normalizedEvidence[] = (object)['pmid' => $pmid];
             }
+
+            // Update submission_data->evidence with normalized values
+            $this->submission_data->evidence = $normalizedEvidence;
+
+            // note: we leave the parent to make changes to the pivot table
         }
 
         // Note: Workflow state is managed by status via the SubmissionStateMachine.

@@ -45,6 +45,7 @@ class Inheritance extends Model
      */
 	protected $fillable = [	'ident', 'type', 
                             'curie', 'name', 'description', 'abbreviation', 'informational', 'style_class',
+                            'hex_color', 'css_class',
                             'status' ];
 
 	/**

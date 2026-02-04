@@ -513,27 +513,45 @@ class DocumentController extends Controller
         $validation_errors = SubmissionFileValidation::validate_spreadsheet($rawWorksheets[0], $document->submitter_id, true);
 
         if (!empty($validation_errors)) {
-            \Log::error('DocumentController@validateFile: Validation failed: ' . json_encode($validation_errors));
+            // Separate blocking errors from warnings
+            $errors = array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning');
+            $warnings = array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning');
 
-            // Transform validation errors to match frontend DataTable format
-            // Note: validation errors are grouped by message with 'rows' (plural) as comma-separated string
-            // Keep full row lists for download reports - UI will handle truncation
-            $formattedErrors = array_map(function($error) {
-                $rows = $error['rows'] ?? ($error['row'] ?? 'N/A');
+            if (!empty($errors)) {
+                $formattedErrors = array_map(function($error) {
+                    $rows = $error['rows'] ?? ($error['row'] ?? 'N/A');
+                    return [
+                        'error_type' => $error['error_type'] ?? 'validation_error',
+                        'severity' => $error['severity'] ?? 'error',
+                        'message' => $error['message'] ?? 'Unknown validation error',
+                        'rows' => $rows,
+                    ];
+                }, $errors);
 
                 return [
-                    'error_type' => $error['error_type'] ?? 'validation_error',
-                    'severity' => $error['severity'] ?? 'error',
-                    'message' => $error['message'] ?? 'Unknown validation error',
-                    'rows' => $rows,
+                    'has_errors' => true,
+                    'errors' => $formattedErrors,
+                    'warnings' => array_values(array_map(function($w) {
+                        return [
+                            'error_type' => $w['error_type'] ?? 'warning',
+                            'severity' => 'warning',
+                            'message' => $w['message'] ?? '',
+                            'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
+                        ];
+                    }, $warnings)),
+                    'row_count' => $rowCount
                 ];
-            }, $validation_errors);
+            }
 
-            return [
-                'has_errors' => true,
-                'errors' => $formattedErrors,
-                'row_count' => $rowCount
-            ];
+            // Only warnings, no blocking errors - format warnings for display
+            $formattedWarnings = array_values(array_map(function($w) {
+                return [
+                    'error_type' => $w['error_type'] ?? 'warning',
+                    'severity' => 'warning',
+                    'message' => $w['message'] ?? '',
+                    'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
+                ];
+            }, $warnings));
         }
 
         // Check for empty file (no valid submission rows)
@@ -556,6 +574,7 @@ class DocumentController extends Controller
         return [
             'has_errors' => false,
             'errors' => null,
+            'warnings' => $formattedWarnings ?? [],
             'row_count' => $rowCount
         ];
     }
@@ -1221,17 +1240,12 @@ class DocumentController extends Controller
      */
     public function process_pmids($list)
     {
-        if (empty(trim($list)))
+        if (empty(trim($list))) {
             return [];
+        }
 
-        $matches = [];
-
-        $stat = preg_match_all('/[\s,]*([0-9]+)[[a-zA-Z\[\]_,\.;\s]*/', $list, $matches);
-
-        if ($stat)
-            return $matches[1];
-
-        return [];
+        $result = \App\Services\PmidNormalizer::normalize($list);
+        return $result['pmids'];
     }
 
 

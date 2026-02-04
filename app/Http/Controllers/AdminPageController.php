@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
+use App\Models\Release;
 use App\Models\Submitter;
 use App\Models\User;
 
@@ -29,7 +30,7 @@ class AdminPageController extends Controller
         $this->checkAdmin();
 
         $submitters = Submitter::withCount('users')
-            ->select('id', 'curie', 'name', 'website', 'status')
+            ->select('id', 'curie', 'name', 'website', 'status', 'member', 'downloadable')
             ->orderBy('name')
             ->get();
 
@@ -52,7 +53,7 @@ class AdminPageController extends Controller
         }
 
         // Build submitter data with logo as data URI
-        $submitterData = $submitter->only(['id', 'ident', 'curie', 'name', 'description', 'website', 'assertion', 'status', 'users_count', 'jobs_count', 'submissions_count']);
+        $submitterData = $submitter->only(['id', 'ident', 'curie', 'name', 'description', 'website', 'assertion', 'status', 'member', 'downloadable', 'users_count', 'jobs_count', 'submissions_count']);
 
         if ($submitter->logo_contents && $submitter->logo_mime_type) {
             $submitterData['logo'] = 'data:' . $submitter->logo_mime_type . ';base64,' . $submitter->logo_contents;
@@ -169,6 +170,73 @@ class AdminPageController extends Controller
             'user' => $userData,
             'allSubmitters' => $allSubmitters,
             'isSelf' => Auth::id() == $id,
+        ]);
+    }
+
+    /**
+     * Display the admin releases list page.
+     */
+    public function releases(Request $request)
+    {
+        $this->checkAdmin();
+
+        $releases = Release::with('user:id,name')
+            ->orderBy('released_at', 'desc')
+            ->get()
+            ->map(function ($release) {
+                return [
+                    'id' => $release->id,
+                    'slug' => $release->slug,
+                    'released_at' => $release->released_at?->toIso8601String(),
+                    'user_name' => $release->user?->name ?? 'System',
+                    'new_count' => $release->new_count,
+                    'republish_count' => $release->republish_count,
+                    'unpublish_count' => $release->unpublish_count,
+                    'failed_count' => $release->failed_count,
+                    'total_count' => $release->total_count,
+                    'duration_seconds' => $release->duration_seconds,
+                    'jobs_count' => is_array($release->jobs_processed) ? count($release->jobs_processed) : 0,
+                    'errors_count' => is_array($release->errors) ? count($release->errors) : 0,
+                ];
+            });
+
+        return Inertia::render('Admin/Releases', [
+            'releases' => $releases,
+        ]);
+    }
+
+    /**
+     * Display the admin release detail page.
+     */
+    public function releaseDetail(Request $request, string $id)
+    {
+        $this->checkAdmin();
+
+        $release = Release::with('user:id,name')->find($id);
+
+        if (!$release) {
+            abort(404);
+        }
+
+        return Inertia::render('Admin/ReleaseDetail', [
+            'release' => [
+                'id' => $release->id,
+                'slug' => $release->slug,
+                'released_at' => $release->released_at?->toIso8601String(),
+                'user_name' => $release->user?->name ?? 'System',
+                'release_notes_file' => $release->release_notes_file,
+                'submissions_csv_file' => $release->submissions_csv_file,
+                'new_count' => $release->new_count,
+                'republish_count' => $release->republish_count,
+                'unpublish_count' => $release->unpublish_count,
+                'failed_count' => $release->failed_count,
+                'total_count' => $release->total_count,
+                'jobs_processed' => $release->jobs_processed ?? [],
+                'errors' => $release->errors ?? [],
+                'by_submitter' => $release->by_submitter ?? [],
+                'cumulative_stats' => $release->cumulative_stats ?? [],
+                'duration_seconds' => $release->duration_seconds,
+            ],
         ]);
     }
 }
