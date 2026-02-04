@@ -10,6 +10,7 @@ use Carbon\Carbon;
 use App\Models\Job;
 use App\Models\Action;
 use App\Models\Submission;
+use App\Models\Submitter;
 use App\Models\Release;
 
 use App\Services\JobStateMachine;
@@ -77,6 +78,7 @@ class GenccRelease extends Command
                 $this->process_jobs($pendingJobs);
                 $this->generateReleaseNotes();
                 $this->generateSubmissionsCsv();
+                $this->updateSubmitterCounts();
                 $this->createReleaseRecord($startTime);
                 break;
             default:
@@ -560,6 +562,72 @@ class GenccRelease extends Command
         }
 
         return $stats;
+    }
+
+    /**
+     * Update the counts JSON field on each submitter with their curation statistics.
+     * This pre-computes counts by classification so gencc-search doesn't need to query them.
+     */
+    protected function updateSubmitterCounts(): void
+    {
+        $this->info("Updating submitter curation counts...");
+
+        // Query live submissions grouped by submitter and classification
+        $counts = Submission::where('is_live', true)
+            ->join('submitters', 'submissions.submitter_id', '=', 'submitters.id')
+            ->join('classifications', 'submissions.classification_id', '=', 'classifications.id')
+            ->select(
+                'submissions.submitter_id',
+                'classifications.name as classification_name',
+                'classifications.abbreviation as classification_abbr',
+                DB::raw('count(*) as count')
+            )
+            ->groupBy('submissions.submitter_id', 'classifications.name', 'classifications.abbreviation')
+            ->get();
+
+        // Also get total live count per submitter
+        $totals = Submission::where('is_live', true)
+            ->select('submitter_id', DB::raw('count(*) as total'))
+            ->groupBy('submitter_id')
+            ->pluck('total', 'submitter_id');
+
+        // Group by submitter_id
+        $submitterCounts = [];
+        foreach ($counts as $row) {
+            if (!isset($submitterCounts[$row->submitter_id])) {
+                $submitterCounts[$row->submitter_id] = [
+                    'total' => $totals[$row->submitter_id] ?? 0,
+                    'by_classification' => [],
+                ];
+            }
+            $submitterCounts[$row->submitter_id]['by_classification'][$row->classification_name] = [
+                'count' => $row->count,
+                'abbreviation' => $row->classification_abbr,
+            ];
+        }
+
+        // Update each submitter's counts field
+        $updated = 0;
+        foreach ($submitterCounts as $submitterId => $countsData) {
+            Submitter::where('id', $submitterId)->update([
+                'counts' => json_encode($countsData),
+            ]);
+            $updated++;
+        }
+
+        // Also clear counts for submitters with no live submissions
+        $submittersWithCounts = array_keys($submitterCounts);
+        if (!empty($submittersWithCounts)) {
+            $cleared = Submitter::whereNotIn('id', $submittersWithCounts)
+                ->where('counts', '!=', '[]')
+                ->update(['counts' => '[]']);
+
+            if ($cleared > 0) {
+                $this->info("Cleared counts for {$cleared} submitters with no live submissions.");
+            }
+        }
+
+        $this->info("Updated curation counts for {$updated} submitters.");
     }
 
     /**

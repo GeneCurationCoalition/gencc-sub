@@ -42,6 +42,8 @@
             if (obj.logo) formData.append('logo', obj.logo)
             if (obj.remove_logo) formData.append('remove_logo', '1')
             if (obj.contact_id !== undefined) formData.append('contact_id', obj.contact_id || '')
+            formData.append('member', obj.member ? '1' : '0')
+            formData.append('downloadable', obj.downloadable ? '1' : '0')
 
             const response = await axios.post('/api/submitters/' + props.submitter.id, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
@@ -205,6 +207,24 @@
                                             {{ submitter.assertion }}
                                         </a>
                                         <span v-else class="text-gray-500">Not provided</span>
+                                    </div>
+
+                                    <div class="col-span-2 pt-3 text-right pr-3">Member:</div>
+                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
+                                        <i v-if="submitter.member" class="pi pi-check text-green-600 mr-2"></i>
+                                        <i v-else class="pi pi-times text-gray-400 mr-2"></i>
+                                        <span :class="submitter.member ? 'text-green-700' : 'text-gray-500'">
+                                            {{ submitter.member ? 'Yes' : 'No' }}
+                                        </span>
+                                    </div>
+
+                                    <div class="col-span-2 pt-3 text-right pr-3">Downloadable:</div>
+                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
+                                        <i v-if="submitter.downloadable" class="pi pi-check text-green-600 mr-2"></i>
+                                        <i v-else class="pi pi-times text-gray-400 mr-2"></i>
+                                        <span :class="submitter.downloadable ? 'text-green-700' : 'text-gray-500'">
+                                            {{ submitter.downloadable ? 'Yes' : 'No' }}
+                                        </span>
                                     </div>
 
                                     <div class="col-span-2 pt-3 text-right pr-3">Statistics:</div>

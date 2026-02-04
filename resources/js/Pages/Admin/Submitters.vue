@@ -122,6 +122,18 @@
                                 </template>
                             </Column>
                             <Column field="users_count" header="Users" sortable style="min-width: 6rem" />
+                            <Column field="member" header="Member" sortable style="min-width: 6rem">
+                                <template #body="{ data }">
+                                    <i v-if="data.member" class="pi pi-check text-green-600"></i>
+                                    <i v-else class="pi pi-times text-gray-400"></i>
+                                </template>
+                            </Column>
+                            <Column field="downloadable" header="Downloadable" sortable style="min-width: 7rem">
+                                <template #body="{ data }">
+                                    <i v-if="data.downloadable" class="pi pi-check text-green-600"></i>
+                                    <i v-else class="pi pi-times text-gray-400"></i>
+                                </template>
+                            </Column>
 
                             <template #empty>
                                 <div class="text-center text-gray-500 py-4">No submitters found.</div>

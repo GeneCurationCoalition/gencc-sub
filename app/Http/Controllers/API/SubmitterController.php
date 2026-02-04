@@ -58,6 +58,8 @@ class SubmitterController extends Controller
             'logo' => 'nullable|file|max:500',
             'remove_logo' => 'nullable',
             'contact_id' => 'nullable|integer|exists:users,id',
+            'member' => 'nullable',
+            'downloadable' => 'nullable',
         ]);
 
         // Update submitter fields
@@ -132,6 +134,16 @@ class SubmitterController extends Controller
                     ->where('submitter_id', $submitter->id)
                     ->where('user_id', $request->contact_id)
                     ->update(['is_contact' => true]);
+            }
+        }
+
+        // Handle member and downloadable flags (admin-only)
+        if ($user->isGenccAdmin()) {
+            if ($request->has('member')) {
+                $submitter->member = filter_var($request->member, FILTER_VALIDATE_BOOLEAN);
+            }
+            if ($request->has('downloadable')) {
+                $submitter->downloadable = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
             }
         }
 
