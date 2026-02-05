@@ -1,0 +1,30 @@
+---
+- name: Create operator scripts directory
+  ansible.builtin.file:
+    path: /opt/gencc/bin
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install backup/restore scripts from repo
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../scripts/{{ item }}"
+    dest: "/opt/gencc/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - backup-db.sh
+    - restore-db-from-gcs.sh
+    - setup-backup-cron.sh
+
+- name: Write backup env file from vault
+  ansible.builtin.copy:
+    content: "{{ gencc_backup_env | default('') }}"
+    dest: "{{ gencc_secrets_dir }}/backup.env"
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0640"
+  no_log: true
+

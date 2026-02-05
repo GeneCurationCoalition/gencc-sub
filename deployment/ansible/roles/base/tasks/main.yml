@@ -1,0 +1,58 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - jq
+      - unzip
+      - sudo
+      - podman
+      - uidmap
+      - slirp4netns
+      - dbus-user-session
+      - mysql-client
+      - mysql-server
+    state: present
+
+- name: Ensure deploy user exists
+  ansible.builtin.user:
+    name: "{{ gencc_deploy_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Enable lingering for deploy user (rootless podman survives reboot)
+  ansible.builtin.command: "loginctl enable-linger {{ gencc_deploy_user }}"
+  changed_when: false
+
+- name: Create secrets directory
+  ansible.builtin.file:
+    path: "{{ gencc_secrets_dir }}"
+    state: directory
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+
+- name: Create data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+  loop:
+    - "{{ gencc_data_dir }}"
+    - "{{ gencc_data_dir }}/gencc-sub/storage"
+    - "{{ gencc_data_dir }}/gencc-search/storage"
+
+- name: Install gcloud/gsutil (for backups) if available
+  ansible.builtin.apt:
+    name: google-cloud-cli
+    state: present
+  ignore_errors: true

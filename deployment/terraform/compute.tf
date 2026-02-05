@@ -1,0 +1,82 @@
+data "google_compute_image" "ubuntu" {
+  family  = "ubuntu-2404-lts-amd64"
+  project = "ubuntu-os-cloud"
+}
+
+resource "google_service_account" "vm" {
+  account_id   = replace("${var.name_prefix}-vm", "_", "-")
+  display_name = "GenCC production VM"
+}
+
+resource "google_compute_address" "vm_internal_ip" {
+  name         = "${var.name_prefix}-vm-internal-ip"
+  address_type = "INTERNAL"
+  subnetwork   = google_compute_subnetwork.subnet.id
+  region       = var.region
+}
+
+resource "google_compute_instance" "vm" {
+  name         = "${var.name_prefix}-vm"
+  machine_type = var.machine_type
+  zone         = var.zone
+
+  tags = ["${var.name_prefix}-vm"]
+
+  boot_disk {
+    initialize_params {
+      image = data.google_compute_image.ubuntu.self_link
+      size  = var.boot_disk_gb
+      type  = "pd-balanced"
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.subnet.id
+    network_ip = google_compute_address.vm_internal_ip.address
+    # No access_config => no public IP
+  }
+
+  service_account {
+    email  = google_service_account.vm.email
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+  }
+
+  metadata = {
+    enable-oslogin = "FALSE"
+  }
+}
+
+resource "google_compute_instance_group" "ig" {
+  name = "${var.name_prefix}-ig"
+  zone = var.zone
+
+  instances = [google_compute_instance.vm.self_link]
+}
+
+resource "google_compute_instance_group_named_port" "sub" {
+  group = google_compute_instance_group.ig.name
+  zone  = var.zone
+  name  = "gencc-sub"
+  port  = 8080
+}
+
+resource "google_compute_instance_group_named_port" "search" {
+  group = google_compute_instance_group.ig.name
+  zone  = var.zone
+  name  = "gencc-search"
+  port  = 8081
+}
+
+resource "google_storage_bucket_iam_member" "backup_writer" {
+  count  = var.backup_bucket_name != null ? 1 : 0
+  bucket = var.backup_bucket_name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}
+
+resource "google_storage_bucket_iam_member" "private_reader" {
+  count  = var.private_config_bucket_name != null ? 1 : 0
+  bucket = var.private_config_bucket_name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule gencc-sub pubmed:sync
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec={{ gencc_pubmed_sync_interval }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

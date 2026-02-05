@@ -1,0 +1,9 @@
+[gcp_vms]
+# Example (Terraform prints an inventory snippet after apply):
+# gencc-prod-vm ansible_host=10.30.0.10 ansible_zone=us-central1-a
+
+[gcp_vms:vars]
+ansible_user=gencc
+# IAP tunnel (requires gcloud installed on the operator machine)
+# ansible_ssh_common_args='-o ProxyCommand="gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project=<PROJECT> --zone=<ZONE>"'
+

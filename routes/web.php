@@ -25,7 +25,12 @@ use App\Http\Controllers\AdminPageController;
 | contains the "web" middleware group. Now create something great!
 |
 */
-    
+
+// Load balancer / container health check (public - no auth required)
+Route::get('/-/healthz', function () {
+    return response('ok', 200);
+});
+
     Route::get('/', function () {
         return Inertia::render('Welcome', [
             'canLogin' => Route::has('login'),
@@ -98,4 +103,3 @@ use App\Http\Controllers\AdminPageController;
     //Route::post('/userinfo-store',  [UserInformationController::class, 'store'])->name('user-informations.store');
 
 });
-   

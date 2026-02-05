@@ -1,0 +1,20 @@
+[Unit]
+Description=gencc-sub container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=gencc-sub
+Image={{ gencc_sub_image }}
+Network=slirp4netns:allow_host_loopback=true
+PublishPort={{ gencc_sub_port }}:80
+Environment=DB_HOST={{ gencc_container_db_host }}
+Volume={{ gencc_secrets_dir }}/gencc-sub.env:/var/www/html/.env:ro
+Volume={{ gencc_data_dir }}/gencc-sub/storage:/var/www/html/storage
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
