@@ -8,5 +8,6 @@
     - ops_scripts
     - mysql
     - quadlet
+    - db_bootstrap
     - nginx_tls
     - timers

@@ -41,3 +41,17 @@ gencc_letsencrypt_domains:
 
 # GCP Cloud DNS managed zone name (used by certbot DNS-01 hook scripts)
 gencc_gcp_dns_zone_name: clingen-app
+
+# -----------------------------------------------------------------------------
+# Database bootstrap
+# -----------------------------------------------------------------------------
+# Choose one:
+# - migrate_only: preserve the existing DB; only run Laravel migrations.
+# - restore_and_migrate: DROP + restore DB from a .sql.gz dump, then run migrations.
+gencc_db_bootstrap_mode: migrate_only
+
+# When restore_and_migrate is selected, you must set BOTH:
+# - gencc_db_restore_force: true (explicit destructive opt-in)
+# - gencc_db_restore_source: https://... or gs://... URL to a .sql.gz dump
+gencc_db_restore_force: true
+gencc_db_restore_source: "https://raw.githubusercontent.com/GeneCurationCoalition/gencc-sub/refs/heads/main/data/backups/gencc_sub_baseline_20260103.sql.gz"

@@ -17,6 +17,16 @@ It is intentionally written so it can be run safely after Terraform provisions t
 3. Run:
    - `ansible-playbook -i inventories/production.ini playbooks/site.yml --ask-vault-pass`
 
+## Database bootstrap
+By default the playbook **does not reset** the MySQL database; it only runs Laravel migrations inside the `gencc-sub` container.
+
+To restore a database dump and then migrate:
+- Set `gencc_db_bootstrap_mode: restore_and_migrate`
+- Set `gencc_db_restore_force: true` (required safety switch)
+- Set `gencc_db_restore_source` to an `https://` or `gs://` URL pointing to a `.sql.gz` dump
+
+The restore is destructive: it drops and recreates `gencc_mysql_database`.
+
 ## Notes
 - Uses **rootless Podman** for the app containers via a dedicated `gencc` user and `loginctl enable-linger`.
 - Uses **host MySQL** and allows container connections via `slirp4netns` (`DB_HOST=10.0.2.2`).

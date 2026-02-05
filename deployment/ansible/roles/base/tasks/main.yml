@@ -82,6 +82,33 @@
     - "{{ gencc_data_dir }}/gencc-sub/storage"
     - "{{ gencc_data_dir }}/gencc-search/storage"
 
+- name: Ensure Laravel storage subdirectories exist and are writable (rootless podman)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    # Rootless containers run app processes as non-root users (e.g. www-data).
+    # These users are uid-mapped and won't match host ownership, so we rely on
+    # parent directory traversal restrictions for safety and make the storage
+    # tree writable here.
+    mode: "0777"
+  loop:
+    - "{{ gencc_data_dir }}/gencc-sub/storage"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/app"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/cache"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/sessions"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/views"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/logs"
+    - "{{ gencc_data_dir }}/gencc-search/storage"
+    - "{{ gencc_data_dir }}/gencc-search/storage/app"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/cache"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/sessions"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/views"
+    - "{{ gencc_data_dir }}/gencc-search/storage/logs"
+
 - name: Verify gcloud is installed on the VM (required for IAP/ops scripts)
   ansible.builtin.command: gcloud version
   register: gencc_gcloud_version

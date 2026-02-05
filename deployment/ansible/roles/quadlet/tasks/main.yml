@@ -5,7 +5,10 @@
     dest: "{{ gencc_secrets_dir }}/{{ item.name }}.env"
     owner: root
     group: "{{ gencc_deploy_user }}"
-    mode: "0640"
+    # NOTE: This file is mounted into the container as `/var/www/html/.env`.
+    # It must be readable by the web user (e.g. www-data/nginx) inside the image.
+    # Host-side access is still restricted by `gencc_secrets_dir` permissions (0750 root:gencc).
+    mode: "0644"
   loop:
     - { name: "gencc-sub", content: "{{ gencc_sub_env | default('') }}" }
     - { name: "gencc-search", content: "{{ gencc_search_env | default('') }}" }
