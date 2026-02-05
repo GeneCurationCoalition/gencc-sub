@@ -549,9 +549,12 @@ class SubmissionController extends Controller
                 }
                 Auth::user()->preferences = $preferences;
                 Auth::user()->save();
-                $bags = [];
-                $bag = 'favorite';
-                break;
+                // Return early - favorites only modifies user preferences, not the submission
+                return response()->json([
+                    'success' => 'true',
+                    'status_code' => 200,
+                    'message' => 'Favorite status updated'
+                ], 200);
             case 'friendly':
                 // make sure name does not already exist
                 // Check against the effective submitter's submissions
