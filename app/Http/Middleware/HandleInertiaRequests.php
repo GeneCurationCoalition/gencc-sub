@@ -41,6 +41,9 @@ class HandleInertiaRequests extends Middleware
             // Application version (from config/app.php)
             'appVersion' => config('app.version'),
 
+            // Session idle timeout in milliseconds (for AutoLogout component)
+            'sessionIdleTimeout' => (int) config('session.idle_timeout', 900000),
+
             // Lazily...
             'mine' => fn () => $request->user()
                 ? $request->user()->id
