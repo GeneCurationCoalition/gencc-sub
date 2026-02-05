@@ -18,7 +18,7 @@
       - gencc_search_env is defined
       - gencc_sub_env | length > 0
       - gencc_search_env | length > 0
-    fail_msg: "Set app .env contents in `deployment/ansible/group_vars/all.vault.yml` (use Ansible Vault)."
+    fail_msg: "Set app .env contents in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
 
 - name: Ensure Quadlet directory exists for deploy user
   ansible.builtin.file:
@@ -54,13 +54,13 @@
     executable: /bin/bash
   become_user: "{{ gencc_deploy_user }}"
 
-- name: Enable and start quadlet services
+- name: Start (or restart) quadlet services
   ansible.builtin.shell: |
     set -euo pipefail
     uid="$(id -u {{ gencc_deploy_user }})"
     export XDG_RUNTIME_DIR="/run/user/${uid}"
-    systemctl --user enable --now gencc-sub.service
-    systemctl --user enable --now gencc-search.service
+    systemctl --user restart gencc-sub.service
+    systemctl --user restart gencc-search.service
   args:
     executable: /bin/bash
   become_user: "{{ gencc_deploy_user }}"

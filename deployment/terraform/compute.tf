@@ -15,6 +15,12 @@ resource "google_compute_address" "vm_internal_ip" {
   region       = var.region
 }
 
+resource "google_compute_address" "vm_external_ip" {
+  name         = "${var.name_prefix}-vm-external-ip"
+  address_type = "EXTERNAL"
+  region       = var.region
+}
+
 resource "google_compute_instance" "vm" {
   name         = "${var.name_prefix}-vm"
   machine_type = var.machine_type
@@ -33,7 +39,9 @@ resource "google_compute_instance" "vm" {
   network_interface {
     subnetwork = google_compute_subnetwork.subnet.id
     network_ip = google_compute_address.vm_internal_ip.address
-    # No access_config => no public IP
+    access_config {
+      nat_ip = google_compute_address.vm_external_ip.address
+    }
   }
 
   service_account {
@@ -42,35 +50,22 @@ resource "google_compute_instance" "vm" {
   }
 
   metadata = {
-    enable-oslogin = "FALSE"
+    enable-oslogin         = "TRUE"
+    block-project-ssh-keys = "TRUE"
   }
-}
-
-resource "google_compute_instance_group" "ig" {
-  name = "${var.name_prefix}-ig"
-  zone = var.zone
-
-  instances = [google_compute_instance.vm.self_link]
-}
-
-resource "google_compute_instance_group_named_port" "sub" {
-  group = google_compute_instance_group.ig.name
-  zone  = var.zone
-  name  = "gencc-sub"
-  port  = 8080
-}
-
-resource "google_compute_instance_group_named_port" "search" {
-  group = google_compute_instance_group.ig.name
-  zone  = var.zone
-  name  = "gencc-search"
-  port  = 8081
 }
 
 resource "google_storage_bucket_iam_member" "backup_writer" {
   count  = var.backup_bucket_name != null ? 1 : 0
   bucket = var.backup_bucket_name
   role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}
+
+resource "google_storage_bucket_iam_member" "backup_reader" {
+  count  = var.backup_bucket_name != null ? 1 : 0
+  bucket = var.backup_bucket_name
+  role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.vm.email}"
 }
 

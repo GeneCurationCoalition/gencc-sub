@@ -1,0 +1,14 @@
+---
+# Timers are intentionally disabled by default until schedules/backups are reviewed.
+gencc_enable_timers: false
+
+# PubMed sync (relative interval)
+gencc_pubmed_sync_interval: 15m
+
+# Periodic data refresh (OnCalendar syntax)
+gencc_update_genes_oncalendar: "Sat 03:00"
+gencc_update_diseases_oncalendar: "Sun 03:00"
+
+# Backups (OnCalendar syntax)
+gencc_backup_oncalendar: "daily"
+

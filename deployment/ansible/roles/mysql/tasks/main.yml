@@ -12,7 +12,7 @@
       - gencc_mysql_search_password is defined
       - gencc_mysql_sub_password | length > 0
       - gencc_mysql_search_password | length > 0
-    fail_msg: "Set MySQL passwords in `deployment/ansible/group_vars/all.vault.yml` (use Ansible Vault)."
+    fail_msg: "Set MySQL passwords in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
 
 - name: Configure MySQL bind address (allows rootless podman slirp connectivity)
   ansible.builtin.lineinfile:
@@ -41,3 +41,4 @@
     SQL
   args:
     executable: /bin/bash
+  no_log: true

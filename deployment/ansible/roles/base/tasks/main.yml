@@ -20,6 +20,37 @@
       - mysql-server
     state: present
 
+- name: Check if snap is installed
+  ansible.builtin.stat:
+    path: /usr/bin/snap
+  register: gencc_snap_bin
+
+- name: Read snap allowed home directories (snapd confinement)
+  ansible.builtin.command: snap get system homedirs
+  register: gencc_snap_homedirs
+  changed_when: false
+  failed_when: false
+  when: gencc_snap_bin.stat.exists
+
+- name: Allow OS Login home roots for confined snaps (gcloud snap)
+  ansible.builtin.command: >-
+    snap set system homedirs={{ gencc_snap_homedirs_desired }}
+  vars:
+    gencc_snap_homedirs_current: "{{ gencc_snap_homedirs.stdout | trim }}"
+    gencc_snap_homedirs_desired: >-
+      {{
+        '/home,/home/unix'
+        if gencc_snap_homedirs_current in ['', 'null']
+        else (
+          gencc_snap_homedirs_current
+          if '/home/unix' in (gencc_snap_homedirs_current.split(',') | map('trim') | list)
+          else gencc_snap_homedirs_current ~ ',/home/unix'
+        )
+      }}
+  when:
+    - gencc_snap_bin.stat.exists
+    - (gencc_snap_homedirs.stdout | trim) != (gencc_snap_homedirs_desired | trim)
+
 - name: Ensure deploy user exists
   ansible.builtin.user:
     name: "{{ gencc_deploy_user }}"
@@ -51,8 +82,12 @@
     - "{{ gencc_data_dir }}/gencc-sub/storage"
     - "{{ gencc_data_dir }}/gencc-search/storage"
 
-- name: Install gcloud/gsutil (for backups) if available
-  ansible.builtin.apt:
-    name: google-cloud-cli
-    state: present
-  ignore_errors: true
+- name: Verify gcloud is installed on the VM (required for IAP/ops scripts)
+  ansible.builtin.command: gcloud version
+  register: gencc_gcloud_version
+  changed_when: false
+
+- name: Verify gsutil is installed on the VM (required for backup/restore scripts)
+  ansible.builtin.command: gsutil version
+  register: gencc_gsutil_version
+  changed_when: false

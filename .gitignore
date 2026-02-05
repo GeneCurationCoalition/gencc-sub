@@ -56,3 +56,12 @@ data/en_product1.xml
 data/gencc-submissions.xlsx
 wrapper.env.txt
 .env copy.testing
+
+# Local deployment / AI artifacts (keep untracked, reduce `git status` noise)
+/.gemini/
+/CLAUDE.local.md
+/gencc-sub-github-action-deploy-key
+/ai/logs/
+/ai/*.log
+/ai/deploy-workflow-run.log
+/build-and-deployment.md

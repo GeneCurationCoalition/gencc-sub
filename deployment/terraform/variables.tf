@@ -19,21 +19,24 @@ variable "name_prefix" {
   default     = "gencc"
 }
 
-variable "domain" {
-  type        = string
-  description = "Base domain for host-based routing (e.g. clingen.app)."
-}
-
 variable "submit_hostname" {
   type        = string
-  description = "Hostname for gencc-sub (e.g. submit.clingen.app)."
-  default     = null
+  description = "Hostname for gencc-sub (e.g. gencc-sub-stage.clingen.app)."
+
+  validation {
+    condition     = !endswith(var.submit_hostname, ".")
+    error_message = "submit_hostname must not include a trailing dot."
+  }
 }
 
 variable "search_hostname" {
   type        = string
-  description = "Hostname for gencc-search (e.g. search.clingen.app)."
-  default     = null
+  description = "Hostname for gencc-search (e.g. gencc-search-stage.clingen.app)."
+
+  validation {
+    condition     = !endswith(var.search_hostname, ".")
+    error_message = "search_hostname must not include a trailing dot."
+  }
 }
 
 variable "machine_type" {
@@ -50,8 +53,7 @@ variable "boot_disk_gb" {
 
 variable "ssh_user" {
   type        = string
-  description = "Linux username Ansible will SSH as (created by Ansible)."
-  default     = "gencc"
+  description = "OS Login Linux username Ansible will SSH as (see `gcloud compute os-login describe-profile`)."
 }
 
 variable "backup_bucket_name" {
@@ -80,12 +82,11 @@ variable "enable_dns_records" {
 
 variable "dns_managed_zone_name" {
   type        = string
-  description = "Existing Cloud DNS managed zone name to place records in (required if enable_dns_records=true)."
+  description = "Existing Cloud DNS managed zone name (used for optional A records and to grant the VM service account DNS permissions for certbot DNS-01 automation)."
   default     = null
-}
 
-variable "existing_managed_ssl_certificate_name" {
-  type        = string
-  description = "Optional: name of an existing google_compute_managed_ssl_certificate to attach to the HTTPS proxy instead of creating a new one."
-  default     = null
+  validation {
+    condition     = var.enable_dns_records == false || var.dns_managed_zone_name != null
+    error_message = "dns_managed_zone_name must be set when enable_dns_records=true."
+  }
 }

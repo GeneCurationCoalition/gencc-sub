@@ -1,4 +1,4 @@
-# Terraform (GCP) — gencc production VM + HTTPS Load Balancer
+# Terraform (GCP) — GenCC VM (nginx + certbot TLS termination)
 
 This directory contains **declarative Terraform** to provision the infrastructure described in `ai/2026-02-05T001502Z-synthesized-gencc-deploy-plan.GEMINI.md`.
 
@@ -6,17 +6,12 @@ This repo change is **safe to commit**: it does not contain secrets and does not
 
 ## What it creates (high level)
 - A dedicated VPC + subnet
-- Cloud NAT (so the VM can `apt update` / pull container images without a public IP)
-- A single Ubuntu VM **without** an external IP
-- An unmanaged instance group containing that VM with **named ports**:
-  - `gencc-sub` → `8080`
-  - `gencc-search` → `8081`
-- External HTTPS Load Balancer with host-based routing:
-  - `submit.<domain>` → backend `gencc-sub`
-  - `search.<domain>` → backend `gencc-search`
+- A single Ubuntu VM with a **static external IP**
+- Ingress firewall for `80/tcp` and `443/tcp` (nginx terminates TLS on the VM)
 - Firewall rules:
   - IAP SSH (`22/tcp`) from `35.235.240.0/20`
-  - LB + health checks to `8080/8081` from `35.191.0.0/16` and `130.211.0.0/22`
+- Optional Cloud DNS A records for `submit_hostname` and `search_hostname`
+- IAM: grants the VM service account `roles/dns.admin` on the managed zone (so certbot DNS-01 automation can work)
 
 ## Usage (operator runbook)
 1. Create `terraform.tfvars` (example keys are in `variables.tf`).
@@ -25,16 +20,18 @@ This repo change is **safe to commit**: it does not contain secrets and does not
    - `terraform plan`
    - `terraform apply`
 
-### Managed certificate note
-By default, `ssl.tf` creates a new `google_compute_managed_ssl_certificate` for the `submit.<domain>` and `search.<domain>` hostnames.
+### OS Login
+This VM is configured with OS Login enabled (`enable-oslogin=TRUE`) and project SSH keys blocked (`block-project-ssh-keys=TRUE`). Before running Ansible, determine your OS Login username and set it as `ssh_user`:
 
-If you already have a suitable Google-managed certificate created outside Terraform (e.g. a wildcard `*.clingen.app` cert named `clingen-app`), set:
-- `existing_managed_ssl_certificate_name = "clingen-app"`
+- `gcloud compute os-login describe-profile --project <PROJECT> --format='value(posixAccounts[0].username)'`
 
-In that mode, Terraform will *reference* the existing certificate (data source) and will not create a new one.
+Your account will also need `roles/compute.osAdminLogin` (for sudo) and `roles/iap.tunnelResourceAccessor` (for IAP SSH).
+
+### TLS termination
+TLS termination is intentionally handled on the VM (nginx + certbot/Let’s Encrypt) via Ansible in `deployment/ansible/`.
 
 ## Outputs
-- `lb_ip` — external IP for DNS
 - `vm_internal_ip` — internal IP used by Ansible inventory
+- `vm_external_ip` — external IP for DNS (if `enable_dns_records=true`)
 - `ansible_inventory` — inventory snippet using IAP tunneling
 - `ansible_ssh_config` — SSH config snippet using IAP tunneling

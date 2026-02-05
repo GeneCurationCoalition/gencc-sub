@@ -7,7 +7,7 @@ Wants=network-online.target
 ContainerName=gencc-search
 Image={{ gencc_search_image }}
 Network=slirp4netns:allow_host_loopback=true
-PublishPort={{ gencc_search_port }}:80
+PublishPort=127.0.0.1:{{ gencc_search_port }}:80
 Environment=DB_HOST={{ gencc_container_db_host }}
 Volume={{ gencc_secrets_dir }}/gencc-search.env:/var/www/html/.env:ro
 Volume={{ gencc_data_dir }}/gencc-search/storage:/var/www/html/storage

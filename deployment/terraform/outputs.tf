@@ -1,11 +1,11 @@
-output "lb_ip" {
-  value       = google_compute_global_address.lb_ip.address
-  description = "External IP address for the HTTPS load balancer."
-}
-
 output "vm_internal_ip" {
   value       = google_compute_address.vm_internal_ip.address
   description = "Internal IP address of the VM."
+}
+
+output "vm_external_ip" {
+  value       = google_compute_address.vm_external_ip.address
+  description = "External IP address of the VM."
 }
 
 output "vm_name" {
@@ -25,7 +25,7 @@ output "ansible_inventory" {
 
     [gcp_vms:vars]
     ansible_user=${var.ssh_user}
-    ansible_ssh_common_args='-o ProxyCommand="gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project=${var.project_id} --zone=${var.zone}"'
+    ansible_ssh_common_args='-o ProxyCommand="gcloud compute start-iap-tunnel ${google_compute_instance.vm.name} %p --listen-on-stdin --project=${var.project_id} --zone=${var.zone}"'
   EOT
   description = "Inventory snippet for IAP-tunneled Ansible SSH."
 }
@@ -35,7 +35,7 @@ output "ansible_ssh_config" {
     Host ${google_compute_instance.vm.name}
       HostName ${google_compute_instance.vm.name}
       User ${var.ssh_user}
-      ProxyCommand gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project ${var.project_id} --zone ${var.zone}
+      ProxyCommand gcloud compute start-iap-tunnel ${google_compute_instance.vm.name} %p --listen-on-stdin --project ${var.project_id} --zone ${var.zone}
   EOT
   description = "SSH config snippet for IAP tunneling."
 }
