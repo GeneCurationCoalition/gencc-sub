@@ -56,3 +56,6 @@ data/en_product1.xml
 data/gencc-submissions.xlsx
 wrapper.env.txt
 .env copy.testing
+
+# Database backups
+/data/backups/

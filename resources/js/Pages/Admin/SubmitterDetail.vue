@@ -27,7 +27,7 @@
         switch (status) {
             case 0: return 'Initializing'
             case 1: return 'Active'
-            case 9: return 'Removed'
+            case 9: return 'Inactive'
             default: return 'Unknown'
         }
     }
@@ -42,16 +42,18 @@
             if (obj.logo) formData.append('logo', obj.logo)
             if (obj.remove_logo) formData.append('remove_logo', '1')
             if (obj.contact_id !== undefined) formData.append('contact_id', obj.contact_id || '')
-            formData.append('member', obj.member ? '1' : '0')
+            formData.append('allow_submissions', obj.allow_submissions ? '1' : '0')
             formData.append('downloadable', obj.downloadable ? '1' : '0')
 
-            const response = await axios.post('/api/submitters/' + props.submitter.id, formData, {
+            const response = await axios.post('/api/admin/submitters/' + props.submitter.id, formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             })
 
-            if (response.data.hasOwnProperty('status_code') && response.data.status_code == 200) {
+            if (response.data.success) {
                 showEdit.value = false
                 toast.add({ severity: 'success', summary: 'Submitter Updated', detail: 'Submitter information has been updated successfully.', life: 3000 })
+                // Flag to refresh the submitters list when navigating back
+                sessionStorage.setItem('submitterUpdated', 'true')
                 router.reload()
             } else {
                 toast.add({ severity: 'error', summary: 'Update Failed', detail: response.data.message || 'An error occurred.', life: 5000 })
@@ -155,125 +157,125 @@
             </div>
         </template>
 
-        <div class="pb-12">
-            <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
+        <div class="pb-8">
+            <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
+
+                <!-- Main Info Card -->
                 <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg">
-                    <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
+                    <div class="p-6 lg:p-8">
 
-                        <div class="grid grid-cols-12 mt-4 gap-0">
-                            <div class="col-span-12">
-                                <div class="grid grid-cols-12 gap-0">
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">GenCC ID:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <div class="font-bold">{{ submitter.curie }}</div>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Name:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <div class="font-bold">{{ submitter.name }}</div>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Status:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
+                        <!-- Top section: 3-column grid with logo spanning 2 rows -->
+                        <div class="grid grid-cols-3 gap-6 mb-6 pb-6 border-b">
+                            <!-- Left column -->
+                            <div class="flex flex-col justify-between">
+                                <!-- Name and Status -->
+                                <div>
+                                    <h3 class="text-2xl font-bold text-gray-900">{{ submitter.name }}</h3>
+                                    <div class="flex items-center gap-3 mt-1">
+                                        <span class="text-gray-500">{{ submitter.curie }}</span>
                                         <Tag :value="statusLabel(submitter.status)" :severity="submitter.status === 1 ? 'success' : 'danger'" />
                                     </div>
+                                </div>
 
-                                    <div class="col-span-2 pt-3 text-right pr-3">Logo:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <div v-if="submitter.logo" class="flex items-center">
-                                            <img :src="submitter.logo" alt="Submitter logo" class="h-16 w-auto object-contain" />
+                                <!-- Stats -->
+                                <div class="flex flex-wrap gap-4 mt-4">
+                                    <div class="bg-gray-50 rounded-lg px-4 py-3">
+                                        <div class="text-2xl font-bold text-gray-900">{{ submitter.jobs_count || 0 }}</div>
+                                        <div class="text-sm text-gray-500">Jobs</div>
+                                    </div>
+                                    <div class="bg-gray-50 rounded-lg px-4 py-3">
+                                        <div class="text-2xl font-bold text-gray-900">{{ submitter.submissions_count || 0 }}</div>
+                                        <div class="text-sm text-gray-500">Submissions</div>
+                                    </div>
+                                    <div class="bg-gray-50 rounded-lg px-4 py-3">
+                                        <div class="text-2xl font-bold text-gray-900">{{ members?.length || 0 }}</div>
+                                        <div class="text-sm text-gray-500">Members</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Middle: Logo (fixed 400x200, centered, spans full height) -->
+                            <div class="flex items-center justify-center">
+                                <div v-if="submitter.logo" class="w-[400px] h-[200px] flex items-center justify-center border rounded-lg bg-gray-50">
+                                    <img :src="submitter.logo" alt="Logo" class="max-w-full max-h-full object-contain p-2" />
+                                </div>
+                            </div>
+
+                            <!-- Right: Actions (aligned to top) -->
+                            <div class="flex justify-end items-start gap-2">
+                                <Button icon="pi pi-pencil" label="Edit" @click="showEdit = true" />
+                                <Button v-if="submitter.status === 0" icon="pi pi-check" label="Activate" severity="success" outlined @click="reactivateSubmitter" />
+                                <Button v-if="submitter.status !== 9" icon="pi pi-ban" :label="canPermanentlyDelete ? 'Delete' : 'Deactivate'" severity="danger" outlined @click="showDeactivateDialog = true" />
+                                <Button v-if="submitter.status === 9" icon="pi pi-replay" label="Reactivate" severity="success" outlined @click="reactivateSubmitter" />
+                            </div>
+                        </div>
+
+                        <!-- Details grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Left: Description + Links -->
+                            <div class="space-y-4">
+                                <div v-if="submitter.description">
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Description</h4>
+                                    <div class="text-gray-700">
+                                        <MarkdownDisplay :content="submitter.description" />
+                                    </div>
+                                </div>
+
+                                <div v-if="submitter.website || submitter.assertion">
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Links</h4>
+                                    <div class="space-y-1">
+                                        <div v-if="submitter.website" class="flex items-center gap-2">
+                                            <i class="pi pi-globe text-gray-400"></i>
+                                            <a :href="submitter.website" target="_blank" class="text-blue-600 hover:underline">{{ submitter.website }}</a>
                                         </div>
-                                        <span v-else class="text-gray-500">No logo uploaded</span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Description:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <MarkdownDisplay v-if="submitter.description" :content="submitter.description" />
-                                        <span v-else class="text-gray-500">Not provided</span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Website:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <a v-if="submitter.website" :href="submitter.website" target="_blank" class="text-blue-600 hover:underline">
-                                            {{ submitter.website }}
-                                        </a>
-                                        <span v-else class="text-gray-500">Not provided</span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Assertion Criteria:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <a v-if="submitter.assertion" :href="submitter.assertion" target="_blank" class="text-blue-600 hover:underline">
-                                            {{ submitter.assertion }}
-                                        </a>
-                                        <span v-else class="text-gray-500">Not provided</span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Member:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <i v-if="submitter.member" class="pi pi-check text-green-600 mr-2"></i>
-                                        <i v-else class="pi pi-times text-gray-400 mr-2"></i>
-                                        <span :class="submitter.member ? 'text-green-700' : 'text-gray-500'">
-                                            {{ submitter.member ? 'Yes' : 'No' }}
-                                        </span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Downloadable:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <i v-if="submitter.downloadable" class="pi pi-check text-green-600 mr-2"></i>
-                                        <i v-else class="pi pi-times text-gray-400 mr-2"></i>
-                                        <span :class="submitter.downloadable ? 'text-green-700' : 'text-gray-500'">
-                                            {{ submitter.downloadable ? 'Yes' : 'No' }}
-                                        </span>
-                                    </div>
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Statistics:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <span class="mr-4">Jobs: <strong>{{ submitter.jobs_count }}</strong></span>
-                                        <span>Submissions: <strong>{{ submitter.submissions_count }}</strong></span>
-                                    </div>
-
-                                    <hr class="col-span-12 my-4" />
-
-                                    <div class="col-span-2 pt-3 text-right pr-3">Contact:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <div v-if="currentContact" class="font-bold">
-                                            {{ currentContact.name }}
-                                            <span class="text-gray-500 font-normal ml-2">({{ currentContact.email }})</span>
+                                        <div v-if="submitter.assertion" class="flex items-center gap-2">
+                                            <i class="pi pi-file text-gray-400"></i>
+                                            <a :href="submitter.assertion" target="_blank" class="text-blue-600 hover:underline">{{ submitter.assertion }}</a>
                                         </div>
-                                        <div v-else class="text-gray-500">No contact designated</div>
                                     </div>
+                                </div>
 
-                                    <div class="col-span-2 pt-3 text-right pr-3">Members:</div>
-                                    <div class="col-span-10 py-1 my-2 border-l-8 pl-3">
-                                        <div v-if="members && members.length > 0">
-                                            <div v-for="member in members" :key="member.id" class="py-1 flex items-center">
-                                                <a @click="goToUser(member.id)" class="font-bold text-blue-600 hover:underline cursor-pointer">{{ member.name }}</a>
-                                                <span class="text-gray-500 ml-2">({{ member.email }})</span>
-                                                <span v-if="member.is_contact" class="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">Contact</span>
-                                                <Button icon="pi pi-times" severity="danger" text rounded size="small" class="ml-2" @click="removeMember(member.id)" />
-                                            </div>
+                                <div>
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Settings</h4>
+                                    <div class="flex gap-6">
+                                        <div class="flex items-center gap-2">
+                                            <i :class="submitter.allow_submissions ? 'pi pi-check-circle text-green-600' : 'pi pi-times-circle text-gray-400'"></i>
+                                            <span :class="submitter.allow_submissions ? 'text-gray-700' : 'text-gray-500'">Allow submissions</span>
                                         </div>
-                                        <div v-else class="text-gray-500">No members</div>
-                                        <Button icon="pi pi-plus" label="Add Member" severity="info" text size="small" class="mt-2" @click="showAddMemberDialog = true" />
+                                        <div class="flex items-center gap-2">
+                                            <i :class="submitter.downloadable ? 'pi pi-check-circle text-green-600' : 'pi pi-times-circle text-gray-400'"></i>
+                                            <span :class="submitter.downloadable ? 'text-gray-700' : 'text-gray-500'">Include in downloads</span>
+                                        </div>
                                     </div>
+                                </div>
+                            </div>
 
-                                    <hr class="col-span-12 my-4" />
+                            <!-- Right: Members -->
+                            <div>
+                                <div class="flex items-center justify-between mb-3">
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">Members</h4>
+                                    <Button icon="pi pi-plus" label="Add" severity="info" text size="small" @click="showAddMemberDialog = true" />
+                                </div>
 
-                                    <div class="col-span-2 pt-3 text-right pr-3"></div>
-                                    <div class="col-span-10 py-1 my-2 pl-4 flex gap-3">
-                                        <Button icon="pi pi-pencil" label="Edit Submitter Information" @click="showEdit = true" />
-                                        <Button v-if="submitter.status === 0" icon="pi pi-check" label="Activate" severity="success" outlined @click="reactivateSubmitter" />
-                                        <Button v-if="submitter.status !== 9" icon="pi pi-ban" :label="canPermanentlyDelete ? 'Delete' : 'Deactivate'" severity="danger" outlined @click="showDeactivateDialog = true" />
-                                        <Button v-if="submitter.status === 9" icon="pi pi-replay" label="Reactivate" severity="success" outlined @click="reactivateSubmitter" />
+                                <div v-if="members && members.length > 0" class="space-y-2">
+                                    <div v-for="member in members" :key="member.id" class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                                        <div class="flex items-center gap-2">
+                                            <a @click="goToUser(member.id)" class="text-blue-600 hover:underline cursor-pointer font-medium">{{ member.name }}</a>
+                                            <span class="text-gray-500 text-sm">({{ member.email }})</span>
+                                            <Tag v-if="member.is_contact" value="Contact" severity="info" class="text-xs" />
+                                        </div>
+                                        <Button icon="pi pi-times" severity="danger" text rounded size="small" @click="removeMember(member.id)" v-tooltip.top="'Remove'" />
                                     </div>
-
+                                </div>
+                                <div v-else class="text-gray-500 text-sm bg-gray-50 rounded-lg px-3 py-3">
+                                    No members assigned
                                 </div>
                             </div>
                         </div>
 
                     </div>
                 </div>
+
             </div>
         </div>
 

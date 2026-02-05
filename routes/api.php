@@ -189,6 +189,7 @@ Route::group(['middleware' => ['web'], 'prefix' => 'admin'], function () {
     Route::get('/submitters', [AdminController::class, 'listSubmitters']);
     Route::get('/submitters/{id}', [AdminController::class, 'showSubmitter']);
     Route::post('/submitters', [AdminController::class, 'storeSubmitter']);
+    Route::post('/submitters/{id}', [AdminController::class, 'updateSubmitter']);
     Route::put('/submitters/{id}', [AdminController::class, 'updateSubmitter']);
     Route::delete('/submitters/{id}', [AdminController::class, 'deleteSubmitter']);
 

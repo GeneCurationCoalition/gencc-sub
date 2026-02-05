@@ -71,7 +71,6 @@
     const newUser = ref({
         name: '',
         email: '',
-        password: '',
         submitter_id: null,
         is_admin: false,
         title: '',
@@ -82,7 +81,6 @@
         newUser.value = {
             name: '',
             email: '',
-            password: '',
             submitter_id: null,
             is_admin: false,
             title: '',
@@ -91,7 +89,7 @@
     }
 
     const canAddUser = computed(() => {
-        if (!newUser.value.name || !newUser.value.email || !newUser.value.password) return false
+        if (!newUser.value.name || !newUser.value.email) return false
         if (!newUser.value.is_admin && !newUser.value.submitter_id) return false
         return true
     })
@@ -196,10 +194,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                     <InputText v-model="newUser.email" type="email" class="w-full" placeholder="email@example.com" />
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Password *</label>
-                    <InputText v-model="newUser.password" type="password" class="w-full" placeholder="Minimum 8 characters" />
+                    <small class="text-gray-500">A temporary password will be emailed to this address</small>
                 </div>
 
                 <div>

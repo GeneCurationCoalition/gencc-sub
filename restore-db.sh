@@ -9,7 +9,7 @@
 
 # Get the directory of this script (so it works when called from other scripts)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-BACKUP_FILE="$SCRIPT_DIR/data/backups/gencc_sub_baseline_20260103.sql.gz"
+BACKUP_FILE="$SCRIPT_DIR/data/backups/gencc_sub_baseline_20260205.sql.gz"
 
 # Parse arguments
 NO_CONFIRM=false
@@ -78,18 +78,6 @@ else
     echo ""
     echo "Error running migrations"
     exit 1
-fi
-
-echo ""
-echo "Importing submitter logos..."
-php artisan import:submitter-logos
-
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "Logos imported successfully!"
-else
-    echo ""
-    echo "Warning: Some logos may have failed to import"
 fi
 
 echo ""

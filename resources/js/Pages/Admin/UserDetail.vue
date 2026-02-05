@@ -182,10 +182,14 @@
                                     <hr class="col-span-12 my-4" />
 
                                     <div class="col-span-2 pt-3 text-right pr-3"></div>
-                                    <div class="col-span-10 py-1 my-2 pl-4 flex gap-3">
-                                        <Button icon="pi pi-pencil" label="Edit User" @click="openEdit" />
+                                    <div class="col-span-10 py-1 my-2 pl-4 flex gap-3 items-center">
+                                        <Button v-if="!isSelf" icon="pi pi-pencil" label="Edit User" @click="openEdit" />
+                                        <span v-if="isSelf" class="text-gray-500">
+                                            <i class="pi pi-info-circle mr-1"></i>
+                                            To edit your own profile, use the <a :href="route('profile.show')" class="text-blue-600 hover:underline">Profile page</a>
+                                        </span>
                                         <Button v-if="user.status !== 9 && !isSelf" icon="pi pi-ban" :label="canPermanentlyDelete ? 'Delete' : 'Deactivate'" severity="danger" outlined @click="showDeactivateDialog = true" />
-                                        <Button v-if="user.status === 9" icon="pi pi-replay" label="Reactivate" severity="success" outlined @click="reactivateUser" />
+                                        <Button v-if="user.status === 9 && !isSelf" icon="pi pi-replay" label="Reactivate" severity="success" outlined @click="reactivateUser" />
                                     </div>
 
                                 </div>
