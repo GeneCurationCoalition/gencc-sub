@@ -26,13 +26,15 @@ This repo change is **safe to commit**: it does not contain secrets and does not
    - `terraform apply`
 
 ### Managed certificate note
-`ssl.tf` defines a `google_compute_managed_ssl_certificate` resource. If you already have a certificate (e.g. named `clingen-app`) created outside Terraform, import it before `apply`:
+By default, `ssl.tf` creates a new `google_compute_managed_ssl_certificate` for the `submit.<domain>` and `search.<domain>` hostnames.
 
-`terraform import google_compute_managed_ssl_certificate.lb_cert clingen-app`
+If you already have a suitable Google-managed certificate created outside Terraform (e.g. a wildcard `*.clingen.app` cert named `clingen-app`), set:
+- `existing_managed_ssl_certificate_name = "clingen-app"`
+
+In that mode, Terraform will *reference* the existing certificate (data source) and will not create a new one.
 
 ## Outputs
 - `lb_ip` — external IP for DNS
 - `vm_internal_ip` — internal IP used by Ansible inventory
 - `ansible_inventory` — inventory snippet using IAP tunneling
 - `ansible_ssh_config` — SSH config snippet using IAP tunneling
-

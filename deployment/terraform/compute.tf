@@ -5,7 +5,7 @@ data "google_compute_image" "ubuntu" {
 
 resource "google_service_account" "vm" {
   account_id   = replace("${var.name_prefix}-vm", "_", "-")
-  display_name = "GenCC production VM"
+  display_name = "GenCC VM"
 }
 
 resource "google_compute_address" "vm_internal_ip" {

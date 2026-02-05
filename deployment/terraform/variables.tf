@@ -16,7 +16,7 @@ variable "zone" {
 variable "name_prefix" {
   type        = string
   description = "Prefix for resource names."
-  default     = "gencc-prod"
+  default     = "gencc"
 }
 
 variable "domain" {
@@ -45,7 +45,7 @@ variable "machine_type" {
 variable "boot_disk_gb" {
   type        = number
   description = "Boot disk size (GB)."
-  default     = 50
+  default     = 200
 }
 
 variable "ssh_user" {
@@ -81,5 +81,11 @@ variable "enable_dns_records" {
 variable "dns_managed_zone_name" {
   type        = string
   description = "Existing Cloud DNS managed zone name to place records in (required if enable_dns_records=true)."
+  default     = null
+}
+
+variable "existing_managed_ssl_certificate_name" {
+  type        = string
+  description = "Optional: name of an existing google_compute_managed_ssl_certificate to attach to the HTTPS proxy instead of creating a new one."
   default     = null
 }

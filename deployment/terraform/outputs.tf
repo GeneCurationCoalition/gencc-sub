@@ -19,7 +19,7 @@ output "vm_service_account" {
 }
 
 output "ansible_inventory" {
-  value = <<-EOT
+  value       = <<-EOT
     [gcp_vms]
     ${google_compute_instance.vm.name} ansible_host=${google_compute_address.vm_internal_ip.address} ansible_zone=${var.zone}
 
@@ -31,7 +31,7 @@ output "ansible_inventory" {
 }
 
 output "ansible_ssh_config" {
-  value = <<-EOT
+  value       = <<-EOT
     Host ${google_compute_instance.vm.name}
       HostName ${google_compute_instance.vm.name}
       User ${var.ssh_user}
