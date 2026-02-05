@@ -29,8 +29,8 @@ class AdminPageController extends Controller
     {
         $this->checkAdmin();
 
-        $submitters = Submitter::withCount('users')
-            ->select('id', 'curie', 'name', 'website', 'status', 'member', 'downloadable')
+        $submitters = Submitter::select('id', 'curie', 'name', 'status', 'allow_submissions', 'downloadable')
+            ->withCount(['users', 'jobs', 'submissions'])
             ->orderBy('name')
             ->get();
 
@@ -53,7 +53,7 @@ class AdminPageController extends Controller
         }
 
         // Build submitter data with logo as data URI
-        $submitterData = $submitter->only(['id', 'ident', 'curie', 'name', 'description', 'website', 'assertion', 'status', 'member', 'downloadable', 'users_count', 'jobs_count', 'submissions_count']);
+        $submitterData = $submitter->only(['id', 'ident', 'curie', 'name', 'description', 'website', 'assertion', 'status', 'allow_submissions', 'downloadable', 'users_count', 'jobs_count', 'submissions_count']);
 
         if ($submitter->logo_contents && $submitter->logo_mime_type) {
             $submitterData['logo'] = 'data:' . $submitter->logo_mime_type . ';base64,' . $submitter->logo_contents;

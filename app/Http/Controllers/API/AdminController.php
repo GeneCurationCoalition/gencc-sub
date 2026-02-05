@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\RunAdminCommand;
+use App\Mail\NewUserWelcome;
 use App\Mail\PasswordResetByAdmin;
 use App\Models\AdminLog;
 use App\Models\Submitter;
@@ -192,7 +193,13 @@ class AdminController extends Controller
             'description' => 'nullable|string|max:1000',
             'website' => 'nullable|url|max:500',
             'assertion' => 'nullable|url|max:500',
+            'downloadable' => 'nullable|boolean',
         ]);
+
+        // Convert downloadable to boolean if present
+        if ($request->has('downloadable')) {
+            $validated['downloadable'] = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
+        }
 
         $submitter = Submitter::createSubmitter($validated);
 
@@ -227,7 +234,7 @@ class AdminController extends Controller
             'logo' => 'nullable|file|max:500',
             'remove_logo' => 'nullable',
             'contact_id' => 'nullable|integer|exists:users,id',
-            'member' => 'nullable',
+            'allow_submissions' => 'nullable',
             'downloadable' => 'nullable',
         ]);
 
@@ -240,9 +247,9 @@ class AdminController extends Controller
             $submitter->status = $validated['status'];
         }
 
-        // Handle member and downloadable flags
-        if ($request->has('member')) {
-            $submitter->member = filter_var($request->member, FILTER_VALIDATE_BOOLEAN);
+        // Handle allow_submissions and downloadable flags
+        if ($request->has('allow_submissions')) {
+            $submitter->allow_submissions = filter_var($request->allow_submissions, FILTER_VALIDATE_BOOLEAN);
         }
         if ($request->has('downloadable')) {
             $submitter->downloadable = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
@@ -389,6 +396,7 @@ class AdminController extends Controller
     /**
      * Create a new user.
      * User is assigned to either a submitter OR the admin team (mutually exclusive).
+     * A temporary password is auto-generated and emailed to the user.
      */
     public function storeUser(Request $request)
     {
@@ -397,7 +405,6 @@ class AdminController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email|max:255',
-            'password' => 'required|string|min:8',
             'submitter_id' => 'nullable|integer|exists:submitters,id',
             'is_admin' => 'nullable|boolean',
             'title' => 'nullable|string|max:255',
@@ -410,11 +417,19 @@ class AdminController extends Controller
             return response()->json(['message' => 'Either a submitter or admin team assignment is required.'], 422);
         }
 
+        // Generate temporary password
+        $tempPassword = Str::password(12);
+        $validated['password'] = $tempPassword;
+
         try {
             $user = User::createUser($validated);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
+
+        // Set must_change_password flag
+        $user->must_change_password = true;
+        $user->save();
 
         if ($isAdmin) {
             // Add to admin team, clear submitter
@@ -428,9 +443,12 @@ class AdminController extends Controller
             $this->removeFromAdminTeam($user);
         }
 
+        // Send welcome email with temporary password
+        Mail::to($user->email)->send(new NewUserWelcome($user, $tempPassword));
+
         return response()->json([
             'success' => true,
-            'message' => 'User created',
+            'message' => 'User created. A welcome email with login credentials has been sent.',
             'user' => $user->only(['id', 'name', 'email', 'clingen_id']),
         ], 201);
     }
