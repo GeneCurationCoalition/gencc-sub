@@ -45,9 +45,7 @@
             formData.append('allow_submissions', obj.allow_submissions ? '1' : '0')
             formData.append('downloadable', obj.downloadable ? '1' : '0')
 
-            const response = await axios.post('/api/admin/submitters/' + props.submitter.id, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            })
+            const response = await axios.post('/api/admin/submitters/' + props.submitter.id, formData)
 
             if (response.data.success) {
                 showEdit.value = false
