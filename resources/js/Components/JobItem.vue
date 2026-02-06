@@ -586,7 +586,6 @@ const uploadFile = async (event) => {
 
   try {
     const response = await axios.post(`/api/documents/${props.job.ident}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
       signal: uploadAbortController.signal
     });
 
