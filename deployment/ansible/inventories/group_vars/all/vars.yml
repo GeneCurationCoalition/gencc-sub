@@ -4,8 +4,8 @@
 gencc_deploy_user: gencc
 
 # Container images (override per environment)
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0-beta3
-gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0-beta3a
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0-beta4
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0-beta4
 
 # Host bind ports (nginx routes to these)
 gencc_sub_port: 8080
