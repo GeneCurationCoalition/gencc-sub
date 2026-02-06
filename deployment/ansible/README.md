@@ -6,7 +6,7 @@ It is intentionally written so it can be run safely after Terraform provisions t
 
 ## Layout
 - `playbooks/site.yml` — main entrypoint
-- `inventories/production.ini.example` — example inventory (Terraform also outputs one)
+- `inventories/gencc.ini.example` — example inventory (Terraform also outputs one)
 - `inventories/group_vars/` — non-secret defaults + a vault template
 - `roles/` — baseline, MySQL, quadlet units, timers
 
@@ -15,7 +15,7 @@ It is intentionally written so it can be run safely after Terraform provisions t
 2. Create `inventories/group_vars/all/vault.yml` from the template and encrypt it:
    - `ansible-vault encrypt inventories/group_vars/all/vault.yml`
 3. Run:
-   - `ansible-playbook -i inventories/production.ini playbooks/site.yml --ask-vault-pass`
+   - `ansible-playbook -i inventories/gencc.ini playbooks/site.yml --ask-vault-pass`
 
 ## Database bootstrap
 By default the playbook **does not reset** the MySQL database; it only runs Laravel migrations inside the `gencc-sub` container.
