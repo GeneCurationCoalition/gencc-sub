@@ -82,7 +82,7 @@ class GenccRelease extends Command
                 $this->createReleaseRecord($startTime);
                 break;
             default:
-                $this->error("Invalid argument: {$action}");
+                $this->error("Invalid argument: {$arg}");
                 return 1;
         }
     }
