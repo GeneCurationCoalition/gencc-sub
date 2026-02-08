@@ -219,17 +219,18 @@
                                     </div>
                                 </div>
 
-                                <div v-if="submitter.website || submitter.assertion">
-                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Links</h4>
-                                    <div class="space-y-1">
-                                        <div v-if="submitter.website" class="flex items-center gap-2">
-                                            <i class="pi pi-globe text-gray-400"></i>
-                                            <a :href="submitter.website" target="_blank" class="text-blue-600 hover:underline">{{ submitter.website }}</a>
-                                        </div>
-                                        <div v-if="submitter.assertion" class="flex items-center gap-2">
-                                            <i class="pi pi-file text-gray-400"></i>
-                                            <a :href="submitter.assertion" target="_blank" class="text-blue-600 hover:underline">{{ submitter.assertion }}</a>
-                                        </div>
+                                <div v-if="submitter.website">
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Website</h4>
+                                    <div class="flex items-center gap-2">
+                                        <i class="pi pi-globe text-gray-400"></i>
+                                        <a :href="submitter.website" target="_blank" class="text-blue-600 hover:underline">{{ submitter.website }}</a>
+                                    </div>
+                                </div>
+
+                                <div v-if="submitter.assertion">
+                                    <h4 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Assertion Criteria</h4>
+                                    <div class="text-gray-700">
+                                        <MarkdownDisplay :content="submitter.assertion" />
                                     </div>
                                 </div>
 

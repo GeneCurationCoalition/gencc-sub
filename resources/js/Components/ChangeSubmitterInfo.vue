@@ -16,7 +16,7 @@
         name: yup.string().required().label('Name').max(248),
         description: yup.string().nullable().label('Description').max(1000),
         website: yup.string().nullable().label('Website').url('Must be a valid URL'),
-        assertion: yup.string().nullable().label('Assertion Criteria').url('Must be a valid URL'),
+        assertion: yup.string().nullable().label('Assertion Criteria').max(1000),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
@@ -236,13 +236,13 @@
                     </div>
                 </div>
 
-                <div class="flex gap-4">
-                    <div class="flex items-center gap-3 flex-1">
-                        <label for="assertionInput" class="font-semibold w-32 shrink-0">Assertion Criteria</label>
-                        <div class="flex-1">
-                            <InputText id="assertionInput" type="text" v-model="assertion" class="w-full" autocomplete="off" placeholder="https://example.org/criteria" />
-                            <small v-if="errors.assertion" class="text-red-600">{{ errors.assertion }}</small>
-                        </div>
+                <!-- Assertion Criteria -->
+                <div class="flex items-start gap-3">
+                    <label for="assertionInput" class="font-semibold w-32 shrink-0 pt-2">Assertion Criteria</label>
+                    <div class="flex-1">
+                        <Textarea id="assertionInput" v-model="assertion" class="w-full" rows="2" autocomplete="off" placeholder="https://example.org/criteria or markdown text" />
+                        <small class="text-gray-500">URL or Markdown supported</small>
+                        <small v-if="errors.assertion" class="text-red-600 block">{{ errors.assertion }}</small>
                     </div>
                 </div>
 
