@@ -81,9 +81,148 @@ class GenccRelease extends Command
                 $this->updateSubmitterCounts();
                 $this->createReleaseRecord($startTime);
                 break;
+
+            case 'repair':
+                $this->repairRelease();
+                break;
+
             default:
                 $this->error("Invalid argument: {$arg}");
                 return 1;
+        }
+    }
+
+    /**
+     * Repair a release that failed to complete.
+     *
+     * This method regenerates the release outputs (CSV, notes, submitter counts,
+     * release record) without reprocessing jobs. Use this when:
+     * - The queue job got stuck or timed out
+     * - Jobs were marked as released but outputs weren't generated
+     * - The release record is missing but data is consistent
+     *
+     * @return int
+     */
+    protected function repairRelease(): int
+    {
+        $startTime = Carbon::now();
+
+        $this->info("=== GenCC Release Repair ===");
+        $this->info("");
+
+        // Check current state
+        $liveSubmissions = Submission::where('is_live', true)->count();
+        $releasedJobs = Job::where('status', Job::STATUS_RELEASED)->count();
+        $latestRelease = Release::orderBy('id', 'desc')->first();
+
+        $this->info("Current State:");
+        $this->info("  Live submissions: {$liveSubmissions}");
+        $this->info("  Released jobs: {$releasedJobs}");
+        $this->info("  Latest release record: " . ($latestRelease ? "ID {$latestRelease->id} ({$latestRelease->released_at})" : "None"));
+        $this->info("");
+
+        if ($liveSubmissions === 0) {
+            $this->error("No live submissions found. Nothing to repair.");
+            return 1;
+        }
+
+        // Check if CSV file exists for today
+        $releaseDate = Carbon::now();
+        $csvFilename = 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv';
+        $exportsDir = storage_path('app/public/exports');
+        $csvExists = File::exists($exportsDir . '/' . $csvFilename);
+
+        $this->info("Checking existing outputs:");
+        $this->info("  CSV file ({$csvFilename}): " . ($csvExists ? "EXISTS" : "MISSING"));
+
+        // Check release notes
+        $releasesDir = storage_path('releases');
+        $notesPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.md';
+        $notesFiles = glob($releasesDir . '/' . $notesPattern);
+        $notesExist = !empty($notesFiles);
+        $this->info("  Release notes: " . ($notesExist ? "EXISTS (" . count($notesFiles) . " files)" : "MISSING"));
+        $this->info("");
+
+        // Confirm before proceeding
+        if (!$this->option('no-interaction')) {
+            if (!$this->confirm("Proceed with repair? This will regenerate all release outputs.", true)) {
+                $this->info("Repair cancelled.");
+                return 0;
+            }
+        }
+
+        $this->info("Starting repair...");
+        $this->info("");
+
+        // Regenerate outputs
+        $this->info("1. Generating release notes...");
+        $this->generateReleaseNotes();
+
+        $this->info("2. Generating submissions CSV...");
+        $this->generateSubmissionsCsv();
+
+        $this->info("3. Updating submitter counts...");
+        $this->updateSubmitterCounts();
+
+        $this->info("4. Creating release record...");
+        $this->createRepairReleaseRecord($startTime);
+
+        $this->info("");
+        $this->info("=== Repair Complete ===");
+
+        $duration = $startTime->diffInSeconds(Carbon::now());
+        $this->info("Duration: {$duration} seconds");
+
+        return 0;
+    }
+
+    /**
+     * Create a release record specifically for a repair operation.
+     */
+    protected function createRepairReleaseRecord(Carbon $startTime): void
+    {
+        $releaseDate = Carbon::now();
+        $duration = $startTime->diffInSeconds($releaseDate);
+
+        // Gather current statistics
+        $liveCount = Submission::where('is_live', true)->count();
+        $publishedCount = Submission::where('status', Submission::STATUS_PUBLISHED)->count();
+        $unpublishedCount = Submission::where('status', Submission::STATUS_UNPUBLISHED)->count();
+
+        // Get cumulative stats
+        $cumulativeStats = $this->gatherCumulativeStatistics();
+
+        // Check if release record already exists for today
+        $existingRelease = Release::whereDate('released_at', $releaseDate->toDateString())->first();
+
+        if ($existingRelease) {
+            $this->info("  Updating existing release record (ID: {$existingRelease->id})...");
+            $existingRelease->update([
+                'submissions_csv_file' => 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv',
+                'total_count' => $liveCount,
+                'cumulative_stats' => $cumulativeStats,
+                'duration_seconds' => $duration,
+                'errors' => json_encode(['note' => 'Repaired at ' . Carbon::now()->toIso8601String()]),
+            ]);
+            $this->info("  Release record updated.");
+        } else {
+            $this->info("  Creating new release record...");
+            $release = Release::create([
+                'released_at' => $releaseDate,
+                'submissions_csv_file' => 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv',
+                'user_id' => $this->option('user_id') ?? 1,
+                'new_count' => 0,
+                'republish_count' => 0,
+                'unpublish_count' => 0,
+                'failed_count' => 0,
+                'total_count' => $liveCount,
+                'jobs_processed' => json_encode(['note' => 'Repair operation - no jobs processed']),
+                'errors' => json_encode(['note' => 'Created via repair at ' . Carbon::now()->toIso8601String()]),
+                'by_submitter' => null,
+                'cumulative_stats' => $cumulativeStats,
+                'duration_seconds' => $duration,
+            ]);
+            $this->info("  Release record created (ID: {$release->id}, Slug: {$release->slug})");
         }
     }
 

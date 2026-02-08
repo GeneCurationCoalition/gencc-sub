@@ -94,6 +94,8 @@ php artisan pubmed:status          # Show PubMed sync status
 php artisan run:metrics            # Generate metrics reports
 php artisan run:notify             # Send notifications
 php artisan run:publish            # Publish staged submissions
+php artisan gencc:release process  # Process and release pending jobs
+php artisan gencc:release repair   # Repair incomplete release (regenerate outputs)
 php artisan add:user              # Add new user
 php artisan make-prod-db          # Create production database dump
 ```
