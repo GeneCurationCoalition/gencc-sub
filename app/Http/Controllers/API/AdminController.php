@@ -192,7 +192,7 @@ class AdminController extends Controller
             'name' => 'required|string|max:248',
             'description' => 'nullable|string|max:1000',
             'website' => 'nullable|url|max:500',
-            'assertion' => 'nullable|url|max:500',
+            'assertion' => 'nullable|string|max:1000',
             'downloadable' => 'nullable|boolean',
         ]);
 
@@ -229,7 +229,7 @@ class AdminController extends Controller
             'name' => 'required|string|max:248',
             'description' => 'nullable|string|max:1000',
             'website' => 'nullable|url|max:500',
-            'assertion' => 'nullable|url|max:500',
+            'assertion' => 'nullable|string|max:1000',
             'status' => 'nullable|integer',
             'logo' => 'nullable|file|max:500',
             'remove_logo' => 'nullable',
