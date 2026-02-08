@@ -936,7 +936,7 @@ class UpdateDiseases extends Command
         $cleansed = [];
 
         foreach ($synonyms as $synonym)
-            if ($synonym->pred = "hasExactSynonym")
+            if ($synonym->pred === "hasExactSynonym")
                 $cleansed[] = $synonym->val;
 
         return $cleansed;

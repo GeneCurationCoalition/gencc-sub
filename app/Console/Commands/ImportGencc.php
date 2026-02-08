@@ -33,7 +33,7 @@ class ImportGencc extends Command
      *
      * @var string
      */
-    protected $description = 'Command description';
+    protected $description = 'Import existing GenCC curated submissions data';
 
     /**
      * Track UUIDs that had date issues and were corrected
@@ -58,7 +58,7 @@ class ImportGencc extends Command
 
             $submitter = Submitter::curie($record)->first();
 
-            echo "$record \n";
+            $this->info("Processing submitter: {$record}");
 
             $coordinator = $submitter->users->first();
 
@@ -349,9 +349,9 @@ class ImportGencc extends Command
         if ($stat)
             return implode(',', $matches[1]);
 
-        // Suppress error output for specific known values like "neant"
+        // Log error for invalid PMID formats (except known values like "neant")
         if (strtolower(trim($list)) !== 'neant') {
-            echo "PMID ERROR:  $list \n";
+            \Log::warning("PMID parse error: {$list}");
         }
 
         return "";

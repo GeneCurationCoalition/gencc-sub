@@ -33,7 +33,6 @@ class UpdateGenes extends Command
 
         $this->hugo();
         $this->uniprot();
-        //$this->ucsc(); // is this needed anymore?
         $this->mane();
 
         $this->info('Gene update complete');
@@ -194,17 +193,10 @@ class UpdateGenes extends Command
                     else if (strpos($parms[1], '-!- ') === 0 && $state == 4)
                     {
                         $state = 0;
-                        //echo "Processing " . $current['gn'] . "\n";
 
                         // combine the function lines into one.
                         $function = implode(' ', $current['fn']);
-
                         $function = str_replace("\n", "", $function);
-
-                        //if (strlen($function) > 500)
-                        //{
-                           // $function = substr($function, 0, 500) . '...';
-                        //}
 
                         $record = Gene::symbol($current['gn'])->first();
 
@@ -279,8 +271,6 @@ class UpdateGenes extends Command
 		{
 			$parts = explode("\t", $line);
 
-			//echo "Updating " . $parts[2] . " \n";
-
 			$gene = Gene::hgnc_id($parts[2])->first();
 
 			// there is at least one record with no hgncid, but it does have a symbol.
@@ -306,7 +296,7 @@ class UpdateGenes extends Command
 			else if ($parts[9] == 'MANE Plus Clinical')
 				$gene->update(['coordinates->mane_plus' => $xscript]);
 			else
-				echo "Bad Status " . $parts[9] . " \n";
+				$this->warn("Unknown MANE status: {$parts[9]}");
 		}
 
         // Update cached headers after successful processing

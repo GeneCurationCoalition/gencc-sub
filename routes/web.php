@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Controllers\UserInformationController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -92,10 +91,5 @@ use App\Http\Controllers\AdminPageController;
     Route::get('/admin/users/{id}', [AdminPageController::class, 'userDetail'])->name('admin.users.show');
     Route::get('/admin/releases', [AdminPageController::class, 'releases'])->name('admin.releases');
     Route::get('/admin/releases/{id}', [AdminPageController::class, 'releaseDetail'])->name('admin.releases.show');
-
-   // Route::get('/userinfo',  [UserInformationController::class, 'create']);
-
-    //Route::post('/userinfo-store',  [UserInformationController::class, 'store'])->name('user-informations.store');
-
 });
    
