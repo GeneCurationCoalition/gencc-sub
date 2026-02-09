@@ -239,4 +239,50 @@ class AdminPageController extends Controller
             ],
         ]);
     }
+
+    /**
+     * Download a release CSV file.
+     */
+    public function downloadReleaseCsv(Request $request, string $id)
+    {
+        $this->checkAdmin();
+
+        $release = Release::find($id);
+        if (!$release || !$release->submissions_csv_file) {
+            abort(404, 'Release or CSV file not found');
+        }
+
+        $filePath = storage_path('app/public/exports/' . $release->submissions_csv_file);
+
+        if (!file_exists($filePath)) {
+            abort(404, 'CSV file not found on disk');
+        }
+
+        return response()->download($filePath, $release->submissions_csv_file, [
+            'Content-Type' => 'text/csv',
+        ]);
+    }
+
+    /**
+     * Download a release notes file.
+     */
+    public function downloadReleaseNotes(Request $request, string $id)
+    {
+        $this->checkAdmin();
+
+        $release = Release::find($id);
+        if (!$release || !$release->release_notes_file) {
+            abort(404, 'Release or notes file not found');
+        }
+
+        $filePath = storage_path('releases/' . $release->release_notes_file);
+
+        if (!file_exists($filePath)) {
+            abort(404, 'Release notes file not found on disk');
+        }
+
+        return response()->download($filePath, $release->release_notes_file, [
+            'Content-Type' => 'text/markdown',
+        ]);
+    }
 }

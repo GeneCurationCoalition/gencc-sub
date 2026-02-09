@@ -184,10 +184,50 @@ class GenccRelease extends Command
         $releaseDate = Carbon::now();
         $duration = $startTime->diffInSeconds($releaseDate);
 
+        // Find jobs that were released today (these are the jobs we're repairing for)
+        $releasedJobsToday = Job::whereDate('released_at', $releaseDate->toDateString())
+            ->with(['submitter', 'submissions'])
+            ->get();
+
+        // Build jobs_processed data from today's released jobs
+        $jobsProcessed = [];
+        $newCount = 0;
+        $republishCount = 0;
+        $unpublishCount = 0;
+        $bySubmitter = [];
+
+        foreach ($releasedJobsToday as $job) {
+            $submitterName = $job->submitter->name ?? 'Unknown';
+            $jobNewCount = $job->submissions->where('action', Submission::ACTION_NEW)->count();
+            $jobRepublishCount = $job->submissions->where('action', Submission::ACTION_REPUBLISH)->count();
+            $jobUnpublishCount = $job->submissions->where('action', Submission::ACTION_UNPUBLISH)->count();
+
+            $jobsProcessed[] = [
+                'slug' => $job->slug,
+                'submitter_name' => $submitterName,
+                'submission_count' => $job->submissions->count(),
+                'new' => $jobNewCount,
+                'republish' => $jobRepublishCount,
+                'unpublish' => $jobUnpublishCount,
+            ];
+
+            $newCount += $jobNewCount;
+            $republishCount += $jobRepublishCount;
+            $unpublishCount += $jobUnpublishCount;
+
+            // Track by submitter
+            if (!isset($bySubmitter[$submitterName])) {
+                $bySubmitter[$submitterName] = ['new' => 0, 'republish' => 0, 'unpublish' => 0];
+            }
+            $bySubmitter[$submitterName]['new'] += $jobNewCount;
+            $bySubmitter[$submitterName]['republish'] += $jobRepublishCount;
+            $bySubmitter[$submitterName]['unpublish'] += $jobUnpublishCount;
+        }
+
+        $this->info("  Found " . count($releasedJobsToday) . " job(s) released today");
+
         // Gather current statistics
         $liveCount = Submission::where('is_live', true)->count();
-        $publishedCount = Submission::where('status', Submission::STATUS_PUBLISHED)->count();
-        $unpublishedCount = Submission::where('status', Submission::STATUS_UNPUBLISHED)->count();
 
         // Get cumulative stats
         $cumulativeStats = $this->gatherCumulativeStatistics();
@@ -198,27 +238,35 @@ class GenccRelease extends Command
         if ($existingRelease) {
             $this->info("  Updating existing release record (ID: {$existingRelease->id})...");
             $existingRelease->update([
-                'submissions_csv_file' => 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv',
+                'release_notes_file' => $this->releaseNotesFile,
+                'submissions_csv_file' => $this->submissionsCsvFile,
+                'user_id' => $this->option('user_id') ?? $existingRelease->user_id,
+                'new_count' => $newCount,
+                'republish_count' => $republishCount,
+                'unpublish_count' => $unpublishCount,
                 'total_count' => $liveCount,
+                'jobs_processed' => $jobsProcessed,
+                'by_submitter' => $bySubmitter,
                 'cumulative_stats' => $cumulativeStats,
                 'duration_seconds' => $duration,
-                'errors' => json_encode(['note' => 'Repaired at ' . Carbon::now()->toIso8601String()]),
+                'errors' => ['note' => 'Repaired at ' . Carbon::now()->toIso8601String()],
             ]);
             $this->info("  Release record updated.");
         } else {
             $this->info("  Creating new release record...");
             $release = Release::create([
                 'released_at' => $releaseDate,
-                'submissions_csv_file' => 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv',
+                'release_notes_file' => $this->releaseNotesFile,
+                'submissions_csv_file' => $this->submissionsCsvFile,
                 'user_id' => $this->option('user_id') ?? 1,
-                'new_count' => 0,
-                'republish_count' => 0,
-                'unpublish_count' => 0,
+                'new_count' => $newCount,
+                'republish_count' => $republishCount,
+                'unpublish_count' => $unpublishCount,
                 'failed_count' => 0,
                 'total_count' => $liveCount,
-                'jobs_processed' => json_encode(['note' => 'Repair operation - no jobs processed']),
-                'errors' => json_encode(['note' => 'Created via repair at ' . Carbon::now()->toIso8601String()]),
-                'by_submitter' => null,
+                'jobs_processed' => $jobsProcessed,
+                'errors' => ['note' => 'Created via repair at ' . Carbon::now()->toIso8601String()],
+                'by_submitter' => $bySubmitter,
                 'cumulative_stats' => $cumulativeStats,
                 'duration_seconds' => $duration,
             ]);
@@ -772,6 +820,7 @@ class GenccRelease extends Command
 
     /**
      * Generate a CSV file with all live submissions for download.
+     * Uses the same format as gencc-search SubmissionExport for consistency.
      */
     protected function generateSubmissionsCsv()
     {
@@ -788,25 +837,26 @@ class GenccRelease extends Command
         $timestampedFilename = 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv';
         $latestFilename = 'gencc-submissions.csv';
 
-        // Get all live submissions with relationships
+        // Get all live, published submissions with relationships
+        // Note: gencc-search filters by submitter.downloadable=true for public downloads,
+        // but for the release export we include all submissions
         $submissions = Submission::where('is_live', true)
+            ->where('status', Submission::STATUS_PUBLISHED)
             ->with([
                 'gene',
                 'disease',
                 'originalDisease',
                 'classification',
                 'inheritance',
-                'mechanism',
                 'submitter',
-                'pubmeds'
             ])
             ->orderBy('sid')
             ->get();
 
-        // Define CSV headers
+        // Define CSV headers - matches gencc-search SubmissionExport format exactly
         $headers = [
-            'uuid',
-            'submission_id',
+            'sgc_id',
+            'version_number',
             'gene_curie',
             'gene_symbol',
             'disease_curie',
@@ -819,11 +869,22 @@ class GenccRelease extends Command
             'moi_title',
             'submitter_curie',
             'submitter_title',
-            'submitted_as_assertion_criteria_url',
-            'submitted_as_report_url',
-            'submitted_as_pmids',
-            'submitted_as_notes_public',
+            'submitted_as_hgnc_id',
+            'submitted_as_hgnc_symbol',
+            'submitted_as_disease_id',
+            'submitted_as_disease_name',
+            'submitted_as_moi_id',
+            'submitted_as_moi_name',
+            'submitted_as_submitter_id',
+            'submitted_as_submitter_name',
+            'submitted_as_classification_id',
+            'submitted_as_classification_name',
             'submitted_as_date',
+            'submitted_as_public_report_url',
+            'submitted_as_notes',
+            'submitted_as_pmids',
+            'submitted_as_assertion_criteria_url',
+            'submitted_as_submission_id',
             'submitted_run_date',
         ];
 
@@ -831,40 +892,82 @@ class GenccRelease extends Command
         $csvContent = $this->arrayToCsvLine($headers);
 
         foreach ($submissions as $submission) {
-            // Extract PMIDs - prefer normalized_pmids column, fallback to pubmeds relationship
-            // normalized_pmids uses comma separator, but export uses semicolon
-            $pmids = $submission->normalized_pmids
-                ? str_replace(',', ';', $submission->normalized_pmids)
-                : $submission->pubmeds->pluck('pmid')->implode(';');
+            // Extract data from original_submission_data JSON (what was originally submitted)
+            $originalData = $submission->original_submission_data;
 
-            // Extract data from submission_data JSON
-            $submissionData = $submission->submission_data;
-            $criteriaUrl = $submissionData->criteria->url ?? '';
-            $reportUrl = $submissionData->report->ext_url ?? $submission->report_url ?? '';
-            $publicNotes = $submissionData->notes->display ?? '';
-            $submittedAsDate = $submissionData->report->display_date ?? $submission->report_date?->format('Y-m-d') ?? '';
+            // Handle both object and array access (JSON cast can return either)
+            $getNestedValue = function($data, $keys, $default = '') use (&$getNestedValue) {
+                if ($data === null) return $default;
+                foreach ($keys as $key) {
+                    if (is_object($data)) {
+                        $data = $data->$key ?? null;
+                    } elseif (is_array($data)) {
+                        $data = $data[$key] ?? null;
+                    } else {
+                        return $default;
+                    }
+                    if ($data === null) return $default;
+                }
+                return $data;
+            };
+
+            // Extract submitted_as fields from original_submission_data
+            $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
+            $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
+            $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
+            $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
+            $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
+            $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
+            $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
+            $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
+            $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
+            $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
+            $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
+            $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
+            $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+            $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
+            $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
+
+            // PMIDs - add space after commas for readability (matches gencc-search format)
+            $pmids = $submission->normalized_pmids
+                ? str_replace(',', ', ', $submission->normalized_pmids)
+                : '';
+
+            // submitted_run_date is the release date (date portion only)
+            $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
 
             $row = [
-                $submission->uuid ?? $submission->ident,
-                $submission->sid,
-                $submission->gene->hgnc_id ?? '',
-                $submission->gene->symbol ?? '',
-                $submission->disease->curie ?? '',
-                $submission->disease->name ?? '',
-                $submission->originalDisease->curie ?? $submission->disease->curie ?? '',
-                $submission->originalDisease->name ?? $submission->disease->name ?? '',
-                $submission->classification->curie ?? '',
-                $submission->classification->name ?? '',
-                $submission->inheritance->curie ?? '',
-                $submission->inheritance->name ?? '',
-                $submission->submitter->curie ?? '',
-                $submission->submitter->name ?? '',
-                $criteriaUrl,
-                $reportUrl,
-                $pmids,
-                $publicNotes,
-                $submittedAsDate,
-                $submission->released_at?->format('Y-m-d') ?? '',
+                $submission->sid,                                           // sgc_id
+                $submission->version_number ?? 1,                           // version_number
+                $submission->gene->hgnc_id ?? '',                           // gene_curie (HGNC ID)
+                $submission->gene->symbol ?? '',                            // gene_symbol
+                $submission->disease->curie ?? '',                          // disease_curie
+                $submission->disease->name ?? '',                           // disease_title
+                $submission->originalDisease->curie ?? '',                  // disease_original_curie
+                $submission->originalDisease->name ?? '',                   // disease_original_title
+                $submission->classification->curie ?? '',                   // classification_curie
+                $submission->classification->name ?? '',                    // classification_title
+                $submission->inheritance->curie ?? '',                      // moi_curie
+                $submission->inheritance->name ?? '',                       // moi_title
+                $submission->submitter->curie ?? '',                        // submitter_curie
+                $submission->submitter->name ?? '',                         // submitter_title
+                $submittedAsHgncId,                                         // submitted_as_hgnc_id
+                $submittedAsHgncSymbol,                                     // submitted_as_hgnc_symbol
+                $submittedAsDiseaseId,                                      // submitted_as_disease_id
+                $submittedAsDiseaseName,                                    // submitted_as_disease_name
+                $submittedAsMoiId,                                          // submitted_as_moi_id
+                $submittedAsMoiName,                                        // submitted_as_moi_name
+                $submittedAsSubmitterId,                                    // submitted_as_submitter_id
+                $submittedAsSubmitterName,                                  // submitted_as_submitter_name
+                $submittedAsClassificationId,                               // submitted_as_classification_id
+                $submittedAsClassificationName,                             // submitted_as_classification_name
+                $submittedAsDate,                                           // submitted_as_date
+                $submittedAsReportUrl,                                      // submitted_as_public_report_url
+                $submittedAsNotes,                                          // submitted_as_notes
+                $pmids,                                                     // submitted_as_pmids
+                $submittedAsCriteriaUrl,                                    // submitted_as_assertion_criteria_url
+                $submittedAsSubmissionId,                                   // submitted_as_submission_id
+                $submittedRunDate,                                          // submitted_run_date
             ];
 
             $csvContent .= $this->arrayToCsvLine($row);

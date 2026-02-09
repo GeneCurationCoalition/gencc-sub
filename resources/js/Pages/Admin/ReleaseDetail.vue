@@ -3,8 +3,17 @@
     import { Link } from '@inertiajs/vue3'
     import AppLayout from '@/Layouts/AppLayout.vue'
     import Tag from 'primevue/tag'
+    import Button from 'primevue/button'
 
     const props = defineProps(['release'])
+
+    const downloadCsv = () => {
+        window.location.href = route('admin.releases.download-csv', props.release.id)
+    }
+
+    const downloadNotes = () => {
+        window.location.href = route('admin.releases.download-notes', props.release.id)
+    }
 
     const formatDate = (iso) => {
         if (!iso) return '—'
@@ -25,6 +34,36 @@
     const hasJobs = computed(() => props.release.jobs_processed && props.release.jobs_processed.length > 0)
     const hasBySubmitter = computed(() => props.release.by_submitter && Object.keys(props.release.by_submitter).length > 0)
     const hasCumulativeStats = computed(() => props.release.cumulative_stats && Object.keys(props.release.cumulative_stats).length > 0)
+
+    // Format cumulative stats - separate simple values from nested objects
+    const simpleCumulativeStats = computed(() => {
+        if (!props.release.cumulative_stats) return {}
+        const simple = {}
+        for (const [key, value] of Object.entries(props.release.cumulative_stats)) {
+            if (typeof value !== 'object' || value === null) {
+                simple[key] = value
+            }
+        }
+        return simple
+    })
+
+    const classificationStats = computed(() => {
+        if (!props.release.cumulative_stats?.by_classification) return []
+        return Object.entries(props.release.cumulative_stats.by_classification).map(([name, count]) => ({
+            name,
+            count
+        }))
+    })
+
+    const submitterStats = computed(() => {
+        if (!props.release.cumulative_stats?.by_submitter) return []
+        return Object.entries(props.release.cumulative_stats.by_submitter).map(([name, stats]) => ({
+            name,
+            live: stats.live || 0,
+            published: stats.published || 0,
+            unpublished: stats.unpublished || 0,
+        }))
+    })
 
     const bySubmitterRows = computed(() => {
         if (!props.release.by_submitter) return []
@@ -102,13 +141,25 @@
                         <!-- Files -->
                         <div v-if="release.release_notes_file || release.submissions_csv_file" class="mt-6 pt-4 border-t border-gray-200">
                             <h3 class="text-sm font-medium text-gray-500 mb-2">Generated Files</h3>
-                            <div class="flex gap-4 text-sm">
-                                <span v-if="release.release_notes_file" class="text-gray-700">
-                                    <i class="pi pi-file mr-1"></i> {{ release.release_notes_file }}
-                                </span>
-                                <span v-if="release.submissions_csv_file" class="text-gray-700">
-                                    <i class="pi pi-file mr-1"></i> {{ release.submissions_csv_file }}
-                                </span>
+                            <div class="flex flex-wrap gap-3">
+                                <Button
+                                    v-if="release.submissions_csv_file"
+                                    :label="release.submissions_csv_file"
+                                    icon="pi pi-download"
+                                    severity="success"
+                                    size="small"
+                                    outlined
+                                    @click="downloadCsv"
+                                />
+                                <Button
+                                    v-if="release.release_notes_file"
+                                    :label="release.release_notes_file"
+                                    icon="pi pi-download"
+                                    severity="info"
+                                    size="small"
+                                    outlined
+                                    @click="downloadNotes"
+                                />
                             </div>
                         </div>
                     </div>
@@ -204,10 +255,47 @@
                 <div v-if="hasCumulativeStats" class="bg-white overflow-hidden shadow-xl sm:rounded-lg">
                     <div class="p-6 lg:p-8">
                         <h3 class="text-lg font-semibold mb-4">Cumulative Statistics at Release</h3>
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div v-for="(value, key) in release.cumulative_stats" :key="key" class="bg-gray-50 rounded-lg p-3">
+
+                        <!-- Simple numeric stats -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div v-for="(value, key) in simpleCumulativeStats" :key="key" class="bg-gray-50 rounded-lg p-3">
                                 <div class="text-xl font-bold text-gray-700">{{ typeof value === 'number' ? value.toLocaleString() : value }}</div>
                                 <div class="text-xs text-gray-500">{{ key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }}</div>
+                            </div>
+                        </div>
+
+                        <!-- Classification breakdown -->
+                        <div v-if="classificationStats.length > 0" class="mb-6">
+                            <h4 class="text-sm font-medium text-gray-600 mb-2">By Classification</h4>
+                            <div class="grid grid-cols-3 md:grid-cols-5 gap-2">
+                                <div v-for="item in classificationStats" :key="item.name" class="bg-blue-50 rounded p-2 text-center">
+                                    <div class="text-lg font-semibold text-blue-700">{{ item.count.toLocaleString() }}</div>
+                                    <div class="text-xs text-blue-600">{{ item.name }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submitter breakdown -->
+                        <div v-if="submitterStats.length > 0">
+                            <h4 class="text-sm font-medium text-gray-600 mb-2">By Submitter</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                                <div v-for="item in submitterStats" :key="item.name" class="bg-green-50 rounded p-2">
+                                    <div class="text-xs text-green-600 truncate font-medium mb-1" :title="item.name">{{ item.name }}</div>
+                                    <div class="flex gap-3 text-sm">
+                                        <span class="text-green-700">
+                                            <span class="font-semibold">{{ item.live.toLocaleString() }}</span>
+                                            <span class="text-xs text-green-600"> live</span>
+                                        </span>
+                                        <span class="text-blue-700">
+                                            <span class="font-semibold">{{ item.published.toLocaleString() }}</span>
+                                            <span class="text-xs text-blue-600"> pub</span>
+                                        </span>
+                                        <span class="text-orange-700">
+                                            <span class="font-semibold">{{ item.unpublished.toLocaleString() }}</span>
+                                            <span class="text-xs text-orange-600"> unpub</span>
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

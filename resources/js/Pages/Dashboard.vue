@@ -22,7 +22,8 @@ const props = defineProps(['total_jobs_processing', 'total_submissions_processin
                            'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
                            'archived_unique_total', 'archived_total',
                            // Admin-specific data
-                           'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'admin_logs'])
+                           'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'disease_status', 'gene_status', 'admin_logs',
+                           'needs_release_repair', 'release_repair_reason'])
 
 const toast = useToast();
 const isSyncingClingen = ref(false);
@@ -153,7 +154,10 @@ onUnmounted(() => {
                                 :archived_unique_total="archived_unique_total" :archived_total="archived_total"
                                 :is_admin="is_admin" :all_pending_jobs="all_pending_jobs"
                                 :submitted_jobs_count="submitted_jobs_count" :pubmed_status="pubmed_status"
-                                :admin_logs="admin_logs" />
+                                :disease_status="disease_status" :gene_status="gene_status"
+                                :admin_logs="admin_logs"
+                                :needs_release_repair="needs_release_repair"
+                                :release_repair_reason="release_repair_reason" />
                 </div>
             </div>
         </div>

@@ -656,4 +656,240 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when gene is the same');
     }
+
+    /**
+     * Test: Republish with same gene passes - spreadsheet uses numeric HGNC ID without prefix
+     *
+     * Tests that when the spreadsheet has just the numeric ID (e.g., "5" instead of "HGNC:5"),
+     * the comparison still works correctly.
+     */
+    public function test_passes_when_republish_uses_numeric_hgnc_id(): void
+    {
+        // Create a published submission with HGNC:5 gene
+        $submission = Submission::create([
+            'sid' => 'SGC-100003',
+            'gene_id' => 1, // The HGNC:5 gene created in seedTestData
+            'disease_id' => 1,
+            'original_disease_id' => 1,
+            'classification_id' => 1,
+            'inheritance_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => 'published',
+            'is_live' => true,
+            'submission_data' => json_encode(['test' => 'data']),
+            'original_submission_data' => json_encode(['test' => 'data']),
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100003',
+                'hgnc_id' => '5' // Just numeric, no HGNC: prefix
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Should not have gene change error
+        $geneChangeErrors = array_filter($errors, function($error) {
+            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
+        });
+
+        $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when using numeric HGNC ID');
+    }
+
+    /**
+     * Test: Republish fails when gene relationship is null (gene_id = null)
+     *
+     * When the submission has no gene relationship, we should still detect gene changes
+     * by falling back to original_submission_data.
+     */
+    public function test_republish_with_null_gene_relationship_uses_fallback(): void
+    {
+        // Create a published submission with null gene_id but original_submission_data has the gene
+        // Note: Don't use json_encode() - the 'object' cast handles serialization
+        $submission = Submission::create([
+            'sid' => 'SGC-100004',
+            'gene_id' => null, // No gene relationship
+            'disease_id' => 1,
+            'original_disease_id' => 1,
+            'classification_id' => 1,
+            'inheritance_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => 'published',
+            'is_live' => true,
+            'submission_data' => (object)['test' => 'data'],
+            'original_submission_data' => (object)[
+                'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
+            ],
+        ]);
+
+        // Try to republish with a DIFFERENT gene - should fail
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100004',
+                'hgnc_id' => 'HGNC:9673' // Different gene
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Should have gene change error
+        $geneChangeErrors = array_filter($errors, function($error) {
+            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
+        });
+
+        $this->assertNotEmpty($geneChangeErrors, 'Should detect gene change when using original_submission_data fallback');
+    }
+
+    /**
+     * Test: Republish with null gene relationship and matching gene in original_submission_data
+     */
+    public function test_republish_with_null_gene_relationship_same_gene_passes(): void
+    {
+        // Create a published submission with null gene_id but original_submission_data has the gene
+        // Note: Don't use json_encode() - the 'object' cast handles serialization
+        $submission = Submission::create([
+            'sid' => 'SGC-100005',
+            'gene_id' => null, // No gene relationship
+            'disease_id' => 1,
+            'original_disease_id' => 1,
+            'classification_id' => 1,
+            'inheritance_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => 'published',
+            'is_live' => true,
+            'submission_data' => (object)['test' => 'data'],
+            'original_submission_data' => (object)[
+                'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
+            ],
+        ]);
+
+        // Try to republish with the SAME gene - should pass
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100005',
+                'hgnc_id' => 'HGNC:5' // Same gene as in original_submission_data
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Should NOT have gene change error
+        $geneChangeErrors = array_filter($errors, function($error) {
+            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
+        });
+
+        $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when original_submission_data gene matches');
+    }
+
+    /**
+     * Test: Republish with both gene relationship and original_submission_data, gene relationship takes priority
+     */
+    public function test_republish_gene_relationship_takes_priority_over_original_data(): void
+    {
+        // Create a different gene
+        $differentGene = Gene::create([
+            'hgnc_id' => 'HGNC:9999',
+            'symbol' => 'OTHERGENE',
+            'name' => 'other gene',
+            'locus_group' => 'protein-coding gene',
+            'locus_type' => 'gene with protein product',
+            'status' => 'Approved',
+            'location' => '1p36.33',
+            'gene_history' => json_encode([]),
+        ]);
+
+        // Create a published submission with gene_id pointing to HGNC:5
+        // but original_submission_data has a DIFFERENT gene
+        $submission = Submission::create([
+            'sid' => 'SGC-100006',
+            'gene_id' => 1, // HGNC:5 gene
+            'disease_id' => 1,
+            'original_disease_id' => 1,
+            'classification_id' => 1,
+            'inheritance_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => 'published',
+            'is_live' => true,
+            'submission_data' => (object)['test' => 'data'],
+            'original_submission_data' => (object)[
+                'gene' => (object)['id' => 'HGNC:9999', 'symbol' => 'OTHERGENE'] // Different from gene_id
+            ],
+        ]);
+
+        // Try to republish with HGNC:5 (matching gene_id, not original_submission_data)
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100006',
+                'hgnc_id' => 'HGNC:5' // Matches gene relationship
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Should NOT have gene change error because gene relationship matches
+        $geneChangeErrors = array_filter($errors, function($error) {
+            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
+        });
+
+        $this->assertEmpty($geneChangeErrors, 'Gene relationship should take priority over original_submission_data');
+    }
+
+    /**
+     * Test: Case-insensitive comparison for HGNC prefix (hgnc: vs HGNC:)
+     */
+    public function test_republish_case_insensitive_hgnc_prefix(): void
+    {
+        // Create a published submission
+        $submission = Submission::create([
+            'sid' => 'SGC-100007',
+            'gene_id' => 1, // HGNC:5 gene
+            'disease_id' => 1,
+            'original_disease_id' => 1,
+            'classification_id' => 1,
+            'inheritance_id' => 1,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => 'published',
+            'is_live' => true,
+            'submission_data' => json_encode(['test' => 'data']),
+            'original_submission_data' => json_encode(['test' => 'data']),
+        ]);
+
+        // Use lowercase hgnc: prefix
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100007',
+                'hgnc_id' => 'hgnc:5' // lowercase prefix
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Should NOT have gene change error - case insensitive match
+        $geneChangeErrors = array_filter($errors, function($error) {
+            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
+        });
+
+        $this->assertEmpty($geneChangeErrors, 'HGNC prefix comparison should be case-insensitive');
+    }
 }

@@ -91,5 +91,7 @@ use App\Http\Controllers\AdminPageController;
     Route::get('/admin/users/{id}', [AdminPageController::class, 'userDetail'])->name('admin.users.show');
     Route::get('/admin/releases', [AdminPageController::class, 'releases'])->name('admin.releases');
     Route::get('/admin/releases/{id}', [AdminPageController::class, 'releaseDetail'])->name('admin.releases.show');
+    Route::get('/admin/releases/{id}/download-csv', [AdminPageController::class, 'downloadReleaseCsv'])->name('admin.releases.download-csv');
+    Route::get('/admin/releases/{id}/download-notes', [AdminPageController::class, 'downloadReleaseNotes'])->name('admin.releases.download-notes');
 });
    

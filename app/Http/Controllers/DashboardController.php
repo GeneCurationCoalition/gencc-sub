@@ -14,6 +14,7 @@ use App\Models\Pubmed;
 use App\Models\Disease;
 use App\Models\Gene;
 use App\Models\AdminLog;
+use App\Models\Release;
 
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
@@ -390,6 +391,54 @@ class DashboardController extends Controller
             $admin_logs = AdminLog::latestForAll();
         }
 
+        // Check if release repair is needed (admin only)
+        $needs_release_repair = false;
+        $release_repair_reason = null;
+
+        if ($is_admin && $submitter_id === null) {
+            // Check for conditions that indicate a failed/incomplete release:
+            // 1. Jobs released today but no Release record for today
+            // 2. Last run_publish failed
+            // 3. AdminProgressTracker shows stale "running" state
+
+            $today = Carbon::today();
+
+            // Check for jobs released today
+            $jobsReleasedToday = Job::whereDate('released_at', $today->toDateString())
+                ->where('status', Job::STATUS_RELEASED)
+                ->count();
+
+            // Check for Release record today
+            $releaseToday = Release::whereDate('released_at', $today->toDateString())->first();
+
+            if ($jobsReleasedToday > 0 && !$releaseToday) {
+                $needs_release_repair = true;
+                $release_repair_reason = "Jobs were released today but no release record exists";
+            }
+
+            // Check if last run_publish failed
+            if (!$needs_release_repair && isset($admin_logs['run_publish'])) {
+                $lastRunPublish = $admin_logs['run_publish'];
+                if (!$lastRunPublish['success']) {
+                    $needs_release_repair = true;
+                    $release_repair_reason = "Last publish operation failed";
+                }
+            }
+
+            // Check for stale "running" state in AdminProgressTracker
+            if (!$needs_release_repair) {
+                $progress = \App\Services\AdminProgressTracker::get('run_publish');
+                if ($progress && $progress['status'] === 'running') {
+                    // Check if it's been running for more than 30 minutes (likely stuck)
+                    $startedAt = Carbon::parse($progress['started_at']);
+                    if ($startedAt->diffInMinutes(Carbon::now()) > 30) {
+                        $needs_release_repair = true;
+                        $release_repair_reason = "Publish operation appears stuck (running > 30 minutes)";
+                    }
+                }
+            }
+        }
+
         // ========================================================================
         // SECTION 1: SUBMISSIONS RELEASED (is_live = true)
         // Only live versions - broken down by first version, republish, hidden
@@ -757,6 +806,8 @@ class DashboardController extends Controller
             'disease_status' => $disease_status,
             'gene_status' => $gene_status,
             'admin_logs' => $admin_logs,
+            'needs_release_repair' => $needs_release_repair,
+            'release_repair_reason' => $release_repair_reason,
         ]);
     }
 

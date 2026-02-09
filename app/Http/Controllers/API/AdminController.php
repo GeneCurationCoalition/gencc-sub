@@ -101,6 +101,37 @@ class AdminController extends Controller
     }
 
     /**
+     * Run the gencc:release repair command to fix a failed release.
+     */
+    public function repairRelease(Request $request)
+    {
+        $this->checkAdmin();
+        $user = Auth::user();
+
+        // Clear any stale progress tracker state first
+        AdminProgressTracker::clear('run_publish');
+
+        Log::info("Admin action: Dispatching gencc:release repair", ['user' => $user->email]);
+
+        // Initialize progress tracking
+        AdminProgressTracker::start('run_publish');
+
+        // Dispatch repair command with --no-interaction flag
+        RunAdminCommand::dispatch(
+            AdminLog::OP_RUN_PUBLISH,
+            'gencc:release repair --user_id=' . $user->id . ' --no-interaction',
+            $user->id,
+            'publish'
+        );
+
+        return response()->json([
+            'success' => true,
+            'started' => true,
+            'message' => 'Release repair started',
+        ]);
+    }
+
+    /**
      * Get progress for a running admin operation.
      *
      * Note: This endpoint is outside the web middleware to avoid session locking
@@ -122,6 +153,41 @@ class AdminController extends Controller
         }
 
         return response()->json($progress);
+    }
+
+    /**
+     * Clear a stale admin operation.
+     * Operations are considered stale if they've been "running" for 15+ minutes without updates.
+     */
+    public function clearStaleOperation(Request $request, string $operation)
+    {
+        $this->checkAdmin();
+
+        $progress = AdminProgressTracker::get($operation);
+
+        if (!$progress) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Operation not found',
+            ], 404);
+        }
+
+        // Only allow clearing stale or completed operations
+        if ($progress['status'] === 'running' && empty($progress['is_stale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot clear an actively running operation. Wait for it to complete or become stale.',
+            ], 409);
+        }
+
+        AdminProgressTracker::clear($operation);
+
+        Log::info("Admin action: Cleared stale operation {$operation}", ['user' => Auth::user()->email]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Operation cleared successfully',
+        ]);
     }
 
     // =========================================================================
