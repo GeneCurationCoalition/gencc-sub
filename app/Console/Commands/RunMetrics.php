@@ -25,7 +25,7 @@ class RunMetrics extends Command
      *
      * @var string
      */
-    protected $description = 'Command description';
+    protected $description = 'Generate metrics reports for jobs and submitters';
 
     /**
      * Execute the console command.

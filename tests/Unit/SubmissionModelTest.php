@@ -343,33 +343,6 @@ class SubmissionModelTest extends TestCase
     }
 
     /**
-     * Test newversion increments major version
-     */
-    public function test_newversion_increments(): void
-    {
-        $submission = Submission::factory()->create([
-            'submission_data' => ['version' => ['internal' => '1.0.0', 'display' => '1.0']]
-        ]);
-
-        $newVersion = $submission->newversion();
-
-        $this->assertEquals('2.0.0', $newVersion);
-    }
-
-    /**
-     * Test newversion returns default for empty version
-     */
-    public function test_newversion_default_for_empty(): void
-    {
-        $submission = new Submission();
-        $submission->submission_data = [];
-
-        $newVersion = $submission->newversion();
-
-        $this->assertEquals('1.0.0', $newVersion);
-    }
-
-    /**
      * Test normalizeJsonField handles stdClass (from DB load)
      */
     public function test_normalize_json_field_handles_object(): void

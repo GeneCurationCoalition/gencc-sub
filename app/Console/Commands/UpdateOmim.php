@@ -73,7 +73,7 @@ class UpdateOmim extends Command
         if (!$key)
         {
             $this->error('...ERROR, no OMIM key. Set OMIM_API_KEY in .env');
-            exit;
+            return 1;
         }
 
         // Path to store the genemap2.txt file
@@ -277,8 +277,7 @@ class UpdateOmim extends Command
                 }
         }
 
-
-        echo "... DONE\n";
+        $this->info('...OMIM update complete');
     }
 
 

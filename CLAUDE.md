@@ -85,10 +85,8 @@ php artisan update:search-submissions  # Update submission search index
 php artisan process:submissions     # Process pending submissions
 php artisan pubmed:query           # Query PubMed for new articles
 php artisan pubmed:efetch          # Fetch PubMed article details
-php artisan pubmed:check           # Check PubMed data integrity
-php artisan pubmed:fix             # Fix PubMed data issues
-php artisan pubmed:back            # Backfill PubMed data
-php artisan pubmed:past            # Process past PubMed data
+php artisan pubmed:sync            # Sync PubMed data (replaces legacy check/fix/back/past commands)
+php artisan pubmed:status          # Show PubMed sync status
 ```
 
 ### Operational Commands
@@ -96,6 +94,8 @@ php artisan pubmed:past            # Process past PubMed data
 php artisan run:metrics            # Generate metrics reports
 php artisan run:notify             # Send notifications
 php artisan run:publish            # Publish staged submissions
+php artisan gencc:release process  # Process and release pending jobs
+php artisan gencc:release repair   # Repair incomplete release (regenerate outputs)
 php artisan add:user              # Add new user
 php artisan make-prod-db          # Create production database dump
 ```

@@ -26,7 +26,7 @@ class ImportClingen extends Command
      *
      * @var string
      */
-    protected $description = 'Command description';
+    protected $description = 'Import ClinGen gene-disease summary data';
 
     /**
      * Create a new command instance.
@@ -64,7 +64,8 @@ class ImportClingen extends Command
         $fp = fopen(base_path() . '/data/Clingen-Gene-Disease-Summary.csv', 'r');
 		if ($fp === false)
 		{
-			die("Error opening ClinGen table");
+			$this->error("Error opening ClinGen table");
+			return 1;
 		}
 
         // skip over the header section
@@ -103,8 +104,8 @@ class ImportClingen extends Command
             }
             else
             {
-                echo "Assertion ID error\n";
-                dd($data);
+                $this->error("Assertion ID error: " . json_encode($data));
+                continue;
             }
 
             // get the HP term for the MOI
@@ -116,8 +117,8 @@ class ImportClingen extends Command
             $hp = Inheritance::where('abbreviation', $data[4])->first();
             if ($hp === null)
             {
-                echo "Error mapping moi $data[4] \n";
-                dd($data);
+                $this->error("Error mapping moi {$data[4]}");
+                continue;
             }
 
             // map the classification
@@ -135,14 +136,14 @@ class ImportClingen extends Command
             $class = Classification::where('name', $sclass)->first();
             if ($class === null)
             {
-                echo "Error mapping classification $data[6] \n";
-                dd($data);
+                $this->error("Error mapping classification {$data[6]}");
+                continue;
             }
 
             $gene = Gene::hgnc_id($data[1])->first();
             if ($gene === null)
             {
-				echo "Gene " . $data[1] . " not found\n";
+				$this->warn("Gene {$data[1]} not found");
 				continue;
             }
 

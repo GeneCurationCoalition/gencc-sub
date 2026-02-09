@@ -6,21 +6,17 @@ use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\ToCollection;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 
-use App\Models\Nodal;
-
 class SubmissionImport implements ToCollection, WithHeadingRow
 {
     /**
-    * @param Collection $collection
-    */
+     * Required by ToCollection interface but not used when using Excel::toCollection()
+     * The collection is returned directly by that method.
+     *
+     * @param Collection $collection
+     */
     public function collection(Collection $collection)
     {
-        $rownum = 0;
-
-        foreach ($collection as $row) 
-            // because the header is not really a header, we have to skip over a few more lines
-            if ($rownum++ > 5)
-                return new Nodal($row->toArray());
+        // No-op: data is accessed via Excel::toCollection() return value
     }
 
 

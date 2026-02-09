@@ -26,7 +26,8 @@
                                 'archived_first_version_total', 'archived_republish_total', 'archived_unpublish_total',
                                 'archived_unique_total', 'archived_total',
                                 // Admin-specific data
-                                'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'disease_status', 'gene_status', 'admin_logs'])
+                                'is_admin', 'all_pending_jobs', 'submitted_jobs_count', 'pubmed_status', 'disease_status', 'gene_status', 'admin_logs',
+                                'needs_release_repair', 'release_repair_reason'])
 
     const seriesColors = ['#3b82f6', '#ef4444']; // Published (blue), Unpublished (red)
 
@@ -484,6 +485,7 @@
     // Admin action states
     const adminActionLoading = ref({
         publish: false,
+        repair: false,
         diseases: false,
         genes: false,
         pubmed: false,
@@ -493,6 +495,7 @@
     // Admin action status messages (shown near buttons during/after operations)
     const adminActionStatus = ref({
         publish: null,
+        repair: null,
         diseases: null,
         genes: null,
         pubmed: null,
@@ -502,17 +505,28 @@
     // Progress polling intervals
     const progressPollingIntervals = ref({});
 
+    // Track stale operations (running for too long without updates)
+    const staleOperations = ref({
+        publish: false,
+        repair: false,
+        diseases: false,
+        genes: false,
+        pubmed: false,
+    });
+
     // Map action names to operation identifiers used by AdminProgressTracker
     const actionToOperation = {
         diseases: 'update_diseases',
         genes: 'update_genes',
         pubmed: 'sync_pubmed',
         publish: 'run_publish',
+        repair: 'run_publish', // repair uses same progress tracker as publish
     };
 
     // Success messages for each action
     const actionSuccessMessages = {
         publish: 'Publish completed successfully',
+        repair: 'Release repair completed successfully',
         diseases: 'Disease update completed',
         genes: 'Gene update completed',
         pubmed: 'PubMed sync completed successfully',
@@ -536,6 +550,11 @@
             } else {
                 statusText = phaseName + '...';
             }
+        }
+
+        // Handle initial state when job is queued but hasn't started processing
+        if (!statusText && progress.status === 'running') {
+            statusText = 'Waiting for queue...';
         }
 
         return statusText;
@@ -664,13 +683,25 @@
             const progress = response.data;
 
             if (progress.status === 'running') {
-                const statusText = extractProgressText(progress);
-                if (statusText) {
-                    adminActionStatus.value[action] = { type: 'progress', text: statusText };
+                // Check if operation is stale (no updates for 15+ minutes)
+                if (progress.is_stale) {
+                    staleOperations.value[action] = true;
+                    adminActionStatus.value[action] = {
+                        type: 'warn',
+                        text: 'Operation appears stuck. Click Cancel to clear.'
+                    };
+                } else {
+                    staleOperations.value[action] = false;
+                    const statusText = extractProgressText(progress);
+                    if (statusText) {
+                        adminActionStatus.value[action] = { type: 'progress', text: statusText };
+                    }
                 }
             } else if (progress.status === 'complete') {
+                staleOperations.value[action] = false;
                 handleOperationComplete(action, progress);
             } else if (progress.status === 'failed') {
+                staleOperations.value[action] = false;
                 handleOperationFailed(action, progress);
             }
         } catch (error) {
@@ -743,6 +774,38 @@
         runAdminAction('pubmed', 'sync-pubmed');
     }
 
+    function repairRelease() {
+        runAdminAction('repair', 'repair-release');
+    }
+
+    // Clear a stale operation so the button becomes available again
+    async function clearStaleOperation(action) {
+        const operation = actionToOperation[action];
+        if (!operation) return;
+
+        try {
+            await axios.delete(`/api/admin/progress/${operation}`);
+            stopProgressPolling(action);
+            adminActionLoading.value[action] = false;
+            staleOperations.value[action] = false;
+            adminActionStatus.value[action] = null;
+            toast.add({
+                severity: 'info',
+                summary: 'Cleared',
+                detail: 'Stale operation cleared. You can now restart it.',
+                life: 3000
+            });
+        } catch (error) {
+            console.error('Failed to clear stale operation:', error);
+            toast.add({
+                severity: 'error',
+                summary: 'Error',
+                detail: error.response?.data?.message || 'Failed to clear operation',
+                life: 5000
+            });
+        }
+    }
+
     // On mount: check if any operations are currently running and resume polling
     onMounted(async () => {
         if (!props.is_admin) return;
@@ -753,11 +816,23 @@
                 const progress = response.data;
 
                 if (progress.status === 'running') {
-                    // Resume tracking this running operation
-                    adminActionLoading.value[action] = true;
-                    const statusText = extractProgressText(progress);
-                    adminActionStatus.value[action] = { type: 'progress', text: statusText || 'Running...' };
-                    startProgressPolling(action);
+                    // Check if operation is stale
+                    if (progress.is_stale) {
+                        adminActionLoading.value[action] = true;
+                        staleOperations.value[action] = true;
+                        adminActionStatus.value[action] = {
+                            type: 'warn',
+                            text: 'Operation appears stuck. Click Cancel to clear.'
+                        };
+                        startProgressPolling(action);
+                    } else {
+                        // Resume tracking this running operation
+                        adminActionLoading.value[action] = true;
+                        staleOperations.value[action] = false;
+                        const statusText = extractProgressText(progress);
+                        adminActionStatus.value[action] = { type: 'progress', text: statusText || 'Running...' };
+                        startProgressPolling(action);
+                    }
                 }
             } catch (error) {
                 // Ignore — operation not running
@@ -1004,6 +1079,39 @@
                                 Last run: {{ admin_logs.run_publish.executed_at_human }}
                                 <span v-if="admin_logs.run_publish.duration_seconds" class="text-gray-400">({{ admin_logs.run_publish.duration_seconds }}s)</span>
                             </div>
+                            <!-- Repair Release Button (only shown when repair is needed) -->
+                            <div v-if="needs_release_repair" class="mt-2 pt-2 border-t border-gray-200">
+                                <div class="flex flex-wrap gap-2 items-center">
+                                    <Button
+                                        label="Repair Release"
+                                        icon="pi pi-wrench"
+                                        severity="warning"
+                                        size="small"
+                                        :loading="adminActionLoading.repair"
+                                        @click="repairRelease"
+                                        title="Regenerate release outputs for failed publish"
+                                    />
+                                </div>
+                                <div class="text-xs text-amber-600 mt-1 pl-1">
+                                    <i class="pi pi-exclamation-triangle mr-1"></i>
+                                    {{ release_repair_reason }}
+                                </div>
+                                <!-- Repair Progress/Status feedback -->
+                                <div v-if="adminActionStatus.repair" class="text-xs pl-1 mt-1 max-w-64">
+                                    <span v-if="adminActionStatus.repair.type === 'progress'" class="text-blue-600">
+                                        <i class="pi pi-spin pi-spinner mr-1"></i>
+                                        {{ adminActionStatus.repair.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.repair.type === 'success'" class="text-green-600">
+                                        <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.repair.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.repair.type === 'error'" class="text-red-600">
+                                        <i class="pi pi-times-circle mr-1"></i>
+                                        {{ adminActionStatus.repair.text }}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </Fieldset>
                 </div>
@@ -1067,9 +1175,20 @@
                                         icon="pi pi-refresh"
                                         severity="info"
                                         size="small"
-                                        :loading="adminActionLoading.diseases"
+                                        :loading="adminActionLoading.diseases && !staleOperations.diseases"
+                                        :disabled="adminActionLoading.diseases"
                                         @click="updateDiseases"
                                         title="Update disease data from MONDO, OMIM, Orphanet"
+                                    />
+                                    <Button
+                                        v-if="staleOperations.diseases"
+                                        label="Cancel"
+                                        icon="pi pi-times"
+                                        severity="danger"
+                                        size="small"
+                                        outlined
+                                        @click="clearStaleOperation('diseases')"
+                                        title="Clear stuck operation"
                                     />
                                 </div>
                                 <!-- Progress/Status feedback -->
@@ -1144,9 +1263,20 @@
                                         icon="pi pi-refresh"
                                         severity="info"
                                         size="small"
-                                        :loading="adminActionLoading.genes"
+                                        :loading="adminActionLoading.genes && !staleOperations.genes"
+                                        :disabled="adminActionLoading.genes"
                                         @click="updateGenes"
                                         title="Update gene data from HGNC"
+                                    />
+                                    <Button
+                                        v-if="staleOperations.genes"
+                                        label="Cancel"
+                                        icon="pi pi-times"
+                                        severity="danger"
+                                        size="small"
+                                        outlined
+                                        @click="clearStaleOperation('genes')"
+                                        title="Clear stuck operation"
                                     />
                                 </div>
                                 <!-- Progress/Status feedback -->
@@ -1161,6 +1291,10 @@
                                     </span>
                                     <span v-else-if="adminActionStatus.genes.type === 'success'" class="text-green-600">
                                         <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.genes.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.genes.type === 'warn'" class="text-amber-600">
+                                        <i class="pi pi-exclamation-triangle mr-1"></i>
                                         {{ adminActionStatus.genes.text }}
                                     </span>
                                     <span v-else-if="adminActionStatus.genes.type === 'error'" class="text-red-600">
@@ -1205,9 +1339,20 @@
                                         icon="pi pi-sync"
                                         severity="info"
                                         size="small"
-                                        :loading="adminActionLoading.pubmed"
+                                        :loading="adminActionLoading.pubmed && !staleOperations.pubmed"
+                                        :disabled="adminActionLoading.pubmed"
                                         @click="syncPubmed"
                                         title="Fetch metadata for pending PMIDs from NCBI"
+                                    />
+                                    <Button
+                                        v-if="staleOperations.pubmed"
+                                        label="Cancel"
+                                        icon="pi pi-times"
+                                        severity="danger"
+                                        size="small"
+                                        outlined
+                                        @click="clearStaleOperation('pubmed')"
+                                        title="Clear stuck operation"
                                     />
                                 </div>
                                 <!-- Progress/Status feedback -->
@@ -1222,6 +1367,10 @@
                                     </span>
                                     <span v-else-if="adminActionStatus.pubmed.type === 'success'" class="text-green-600">
                                         <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.pubmed.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.pubmed.type === 'warn'" class="text-amber-600">
+                                        <i class="pi pi-exclamation-triangle mr-1"></i>
                                         {{ adminActionStatus.pubmed.text }}
                                     </span>
                                     <span v-else-if="adminActionStatus.pubmed.type === 'error'" class="text-red-600">

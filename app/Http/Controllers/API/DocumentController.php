@@ -723,7 +723,9 @@ class DocumentController extends Controller
 
         // Build lookup caches to avoid repeated database queries for each row
         // This dramatically improves performance for large files (e.g., 3000+ rows)
-        $allDiseases = Disease::all();
+        \Log::info('DocumentController@parser: Loading diseases...');
+        $allDiseases = Disease::select('id', 'curie', 'name', 'type', 'xrefs')->get();
+        \Log::info('DocumentController@parser: Loaded ' . $allDiseases->count() . ' diseases');
 
         // Build disease cache - this is keyed by exact CURIE for direct lookups
         // Used to find the original disease record that was uploaded
@@ -731,6 +733,7 @@ class DocumentController extends Controller
 
         // Build MONDO mapping cache - maps any disease ID (MONDO, OMIM, Orphanet) to its MONDO record
         // Used to normalize all diseases to MONDO
+        \Log::info('DocumentController@parser: Building MONDO mapping cache...');
         $mondoMappingCache = collect();
 
         foreach ($allDiseases as $disease) {
@@ -754,15 +757,17 @@ class DocumentController extends Controller
                 }
             }
         }
+        \Log::info('DocumentController@parser: Built MONDO mapping cache with ' . $mondoMappingCache->count() . ' entries');
 
+        \Log::info('DocumentController@parser: Loading other lookup tables...');
         $lookupCaches = [
-            'genes' => Gene::all()->keyBy('hgnc_id'),
+            'genes' => Gene::select('id', 'hgnc_id', 'symbol')->get()->keyBy('hgnc_id'),
             'diseases' => $diseaseCache,  // Exact disease lookups by CURIE
             'mondo_mappings' => $mondoMappingCache,  // MONDO normalization mappings
-            'moi' => Inheritance::all()->keyBy('curie'),
-            'classifications' => Classification::all()->keyBy('curie'),
-            'mechanisms' => Mechanism::all()->keyBy('curie'),
-            'pubmeds' => Pubmed::all()->keyBy('pmid'),  // Cache existing PMIDs
+            'moi' => Inheritance::select('id', 'curie', 'name')->get()->keyBy('curie'),
+            'classifications' => Classification::select('id', 'curie', 'name')->get()->keyBy('curie'),
+            'mechanisms' => Mechanism::select('id', 'curie', 'name')->get()->keyBy('curie'),
+            'pubmeds' => Pubmed::select('id', 'pmid', 'uid', 'status')->get()->keyBy('pmid'),  // Cache existing PMIDs
         ];
         \Log::info('DocumentController@parser: Built lookup caches', [
             'genes' => $lookupCaches['genes']->count(),

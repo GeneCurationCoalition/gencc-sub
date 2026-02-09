@@ -12,6 +12,7 @@ class VerifyCsrfToken extends Middleware
      * @var array<int, string>
      */
     protected $except = [
-        // TODO add routes / and /Login - login issue gencc-sub #2
+        // Admin API endpoints called via axios from the dashboard
+        'api/admin/*',
     ];
 }
