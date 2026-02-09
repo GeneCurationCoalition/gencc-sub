@@ -3,10 +3,9 @@
 #
 # If APP_VERSION environment variable is already set, returns that value.
 # Otherwise generates version from git:
-#   - Tagged release: v1.2.3
-#   - Tagged pre-release: pre-v1.3.0-beta
-#   - Committed, no tag: PR-abc1234
 #   - Uncommitted changes: dev-2026-01-14T13:45:00Z
+#   - Committed, no tag: commit-abc1234
+#   - Tagged commit: v1.2.3 or v1.3.0-beta
 
 get_version() {
     # If APP_VERSION is already set in environment, use it
@@ -15,17 +14,8 @@ get_version() {
         return
     fi
 
-    # Check for uncommitted changes first
+    # Check for uncommitted changes
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-        echo "dev-$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        return
-    fi
-
-    # Get the current commit hash
-    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null)
-
-    if [ -z "$COMMIT_HASH" ]; then
-        # Not a git repository
         echo "dev-$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         return
     fi
@@ -33,18 +23,19 @@ get_version() {
     # Check if current commit has a tag
     TAG=$(git describe --tags --exact-match 2>/dev/null)
 
-    if [ -n "$TAG" ]; then
-        # Check if it's a pre-release (contains -alpha, -beta, -rc, -pre, etc.)
-        if [[ "$TAG" =~ -(alpha|beta|rc|pre) ]]; then
-            echo "pre-$TAG"
+    if [ -z "$TAG" ]; then
+        # No tag - return short commit hash with prefix
+        HASH=$(git rev-parse --short HEAD 2>/dev/null)
+        if [ -n "$HASH" ]; then
+            echo "commit-$HASH"
         else
-            echo "$TAG"
+            echo "dev-$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         fi
         return
     fi
 
-    # No exact tag - output as PR with commit hash
-    echo "PR-$COMMIT_HASH"
+    # Return the tag as-is
+    echo "$TAG"
 }
 
 get_version
