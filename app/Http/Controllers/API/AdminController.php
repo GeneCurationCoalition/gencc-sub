@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\RunAdminCommand;
+use App\Mail\NewUserWelcome;
 use App\Mail\PasswordResetByAdmin;
 use App\Models\AdminLog;
 use App\Models\Submitter;
@@ -100,6 +101,37 @@ class AdminController extends Controller
     }
 
     /**
+     * Run the gencc:release repair command to fix a failed release.
+     */
+    public function repairRelease(Request $request)
+    {
+        $this->checkAdmin();
+        $user = Auth::user();
+
+        // Clear any stale progress tracker state first
+        AdminProgressTracker::clear('run_publish');
+
+        Log::info("Admin action: Dispatching gencc:release repair", ['user' => $user->email]);
+
+        // Initialize progress tracking
+        AdminProgressTracker::start('run_publish');
+
+        // Dispatch repair command with --no-interaction flag
+        RunAdminCommand::dispatch(
+            AdminLog::OP_RUN_PUBLISH,
+            'gencc:release repair --user_id=' . $user->id . ' --no-interaction',
+            $user->id,
+            'publish'
+        );
+
+        return response()->json([
+            'success' => true,
+            'started' => true,
+            'message' => 'Release repair started',
+        ]);
+    }
+
+    /**
      * Get progress for a running admin operation.
      *
      * Note: This endpoint is outside the web middleware to avoid session locking
@@ -121,6 +153,41 @@ class AdminController extends Controller
         }
 
         return response()->json($progress);
+    }
+
+    /**
+     * Clear a stale admin operation.
+     * Operations are considered stale if they've been "running" for 15+ minutes without updates.
+     */
+    public function clearStaleOperation(Request $request, string $operation)
+    {
+        $this->checkAdmin();
+
+        $progress = AdminProgressTracker::get($operation);
+
+        if (!$progress) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Operation not found',
+            ], 404);
+        }
+
+        // Only allow clearing stale or completed operations
+        if ($progress['status'] === 'running' && empty($progress['is_stale'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot clear an actively running operation. Wait for it to complete or become stale.',
+            ], 409);
+        }
+
+        AdminProgressTracker::clear($operation);
+
+        Log::info("Admin action: Cleared stale operation {$operation}", ['user' => Auth::user()->email]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Operation cleared successfully',
+        ]);
     }
 
     // =========================================================================
@@ -191,8 +258,14 @@ class AdminController extends Controller
             'name' => 'required|string|max:248',
             'description' => 'nullable|string|max:1000',
             'website' => 'nullable|url|max:500',
-            'assertion' => 'nullable|url|max:500',
+            'assertion' => 'nullable|string|max:1000',
+            'downloadable' => 'nullable|boolean',
         ]);
+
+        // Convert downloadable to boolean if present
+        if ($request->has('downloadable')) {
+            $validated['downloadable'] = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
+        }
 
         $submitter = Submitter::createSubmitter($validated);
 
@@ -222,12 +295,12 @@ class AdminController extends Controller
             'name' => 'required|string|max:248',
             'description' => 'nullable|string|max:1000',
             'website' => 'nullable|url|max:500',
-            'assertion' => 'nullable|url|max:500',
+            'assertion' => 'nullable|string|max:1000',
             'status' => 'nullable|integer',
             'logo' => 'nullable|file|max:500',
             'remove_logo' => 'nullable',
             'contact_id' => 'nullable|integer|exists:users,id',
-            'member' => 'nullable',
+            'allow_submissions' => 'nullable',
             'downloadable' => 'nullable',
         ]);
 
@@ -240,9 +313,9 @@ class AdminController extends Controller
             $submitter->status = $validated['status'];
         }
 
-        // Handle member and downloadable flags
-        if ($request->has('member')) {
-            $submitter->member = filter_var($request->member, FILTER_VALIDATE_BOOLEAN);
+        // Handle allow_submissions and downloadable flags
+        if ($request->has('allow_submissions')) {
+            $submitter->allow_submissions = filter_var($request->allow_submissions, FILTER_VALIDATE_BOOLEAN);
         }
         if ($request->has('downloadable')) {
             $submitter->downloadable = filter_var($request->downloadable, FILTER_VALIDATE_BOOLEAN);
@@ -389,6 +462,7 @@ class AdminController extends Controller
     /**
      * Create a new user.
      * User is assigned to either a submitter OR the admin team (mutually exclusive).
+     * A temporary password is auto-generated and emailed to the user.
      */
     public function storeUser(Request $request)
     {
@@ -397,7 +471,6 @@ class AdminController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email|max:255',
-            'password' => 'required|string|min:8',
             'submitter_id' => 'nullable|integer|exists:submitters,id',
             'is_admin' => 'nullable|boolean',
             'title' => 'nullable|string|max:255',
@@ -410,11 +483,19 @@ class AdminController extends Controller
             return response()->json(['message' => 'Either a submitter or admin team assignment is required.'], 422);
         }
 
+        // Generate temporary password
+        $tempPassword = Str::password(12);
+        $validated['password'] = $tempPassword;
+
         try {
             $user = User::createUser($validated);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
+
+        // Set must_change_password flag
+        $user->must_change_password = true;
+        $user->save();
 
         if ($isAdmin) {
             // Add to admin team, clear submitter
@@ -428,9 +509,12 @@ class AdminController extends Controller
             $this->removeFromAdminTeam($user);
         }
 
+        // Send welcome email with temporary password
+        Mail::to($user->email)->send(new NewUserWelcome($user, $tempPassword));
+
         return response()->json([
             'success' => true,
-            'message' => 'User created',
+            'message' => 'User created. A welcome email with login credentials has been sent.',
             'user' => $user->only(['id', 'name', 'email', 'clingen_id']),
         ], 201);
     }

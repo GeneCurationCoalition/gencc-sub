@@ -1,62 +1,78 @@
 # State Model Quick Reference
 
-**Version**: 2.0 (String-Based States)
-**Last Updated**: November 13, 2025
+**Version**: 3.0 (Simplified Status Model)
+**Last Updated**: February 2026
 
 > **For Users**: Looking for a simpler overview? See [STATE_MODEL_USER_GUIDE.md](STATE_MODEL_USER_GUIDE.md)
 >
 > **This Document**: Technical reference for developers with code examples and API usage
 
-## Submission States (8)
+## Simplified State Model Overview
 
-| State | Code | Description | Editable | Can Delete | Can Cancel |
-|-------|------|-------------|----------|------------|------------|
-| **draft_new** | `Submission::STATUS_DRAFT_NEW` | New submission being drafted | ✅ Yes | ✅ Yes | ❌ No |
-| **submitted_new** | `Submission::STATUS_SUBMITTED_NEW` | New submission awaiting publish | ❌ No | ❌ No | ✅ Yes* |
-| **published** | `Submission::STATUS_PUBLISHED` | Published to public | ❌ No | ❌ No | ❌ No |
-| **draft_republish** | `Submission::STATUS_DRAFT_REPUBLISH` | Published submission being updated | ✅ Yes | ❌ No | ✅ Yes |
-| **submitted_republish** | `Submission::STATUS_SUBMITTED_REPUBLISH` | Updated submission awaiting publish | ❌ No | ❌ No | ✅ Yes* |
-| **draft_unpublish** | `Submission::STATUS_DRAFT_UNPUBLISH` | Published submission marked for unpublish | ❌ No | ❌ No | ✅ Yes |
-| **submitted_unpublish** | `Submission::STATUS_SUBMITTED_UNPUBLISH` | Submission awaiting unpublish | ❌ No | ❌ No | ✅ Yes* |
-| **unpublished** | `Submission::STATUS_UNPUBLISHED` | Unpublished, hidden from public | ❌ No | ❌ No | ❌ No |
+The V3 state model uses **5 submission statuses** (reduced from 8):
 
-*Can cancel if job is cancelled before run:publish
+- **Pending statuses** (action-based): `new`, `republish`, `unpublish`
+- **Released statuses** (visibility-based): `published`, `unpublished`
+
+**Key concept**: Stage (draft/submitted) is derived from `Job.status`, not stored in submission.
+
+## Submission Statuses (5)
+
+| Status | Constant | Description | Editable | Can Delete |
+|--------|----------|-------------|----------|------------|
+| **new** | `Submission::STATUS_NEW` | New submission awaiting first release | ✅ In draft job | ✅ In draft job |
+| **republish** | `Submission::STATUS_REPUBLISH` | Update to existing submission | ✅ In draft job | ❌ No |
+| **unpublish** | `Submission::STATUS_UNPUBLISH` | Marked for unpublishing | ❌ Read-only | ❌ No |
+| **published** | `Submission::STATUS_PUBLISHED` | Published to public | ❌ No | ❌ No |
+| **unpublished** | `Submission::STATUS_UNPUBLISHED` | Hidden from public | ❌ No | ❌ No |
+
+### Legacy Compatibility Constants
+
+These constants map to the same values for backwards compatibility:
+
+```php
+// All map to 'new'
+Submission::STATUS_DRAFT_NEW = 'new';
+Submission::STATUS_SUBMITTED_NEW = 'new';
+
+// All map to 'republish'
+Submission::STATUS_DRAFT_REPUBLISH = 'republish';
+Submission::STATUS_SUBMITTED_REPUBLISH = 'republish';
+
+// All map to 'unpublish'
+Submission::STATUS_DRAFT_UNPUBLISH = 'unpublish';
+Submission::STATUS_SUBMITTED_UNPUBLISH = 'unpublish';
+```
 
 ## Job States (3)
 
-| State | Code | Description | Editable | Can Delete | Can Submit | Can Cancel |
-|-------|------|-------------|----------|------------|------------|------------|
-| **draft** | `Job::STATUS_DRAFT` | Draft job, submissions can be added/edited | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
-| **submitted** | `Job::STATUS_SUBMITTED` | Submitted, awaiting publication | ❌ No | ❌ No | ❌ No | ✅ Yes* |
-| **completed** | `Job::STATUS_COMPLETED` | All submissions processed | ❌ No | ❌ No | ❌ No | ❌ No |
-
-*Can cancel before run:publish starts
+| State | Constant | Description | Editable | Can Delete | Can Submit |
+|-------|----------|-------------|----------|------------|------------|
+| **draft** | `Job::STATUS_DRAFT` | Draft job, submissions editable | ✅ Yes | ✅ Yes | ✅ Yes |
+| **submitted** | `Job::STATUS_SUBMITTED` | Awaiting release processing | ❌ No | ❌ No | ❌ No |
+| **released** | `Job::STATUS_RELEASED` | All submissions released | ❌ No | ❌ No | ❌ No |
 
 ## State Transitions
 
 ### New Submission Flow
 ```
-draft_new → submitted_new → published
+new → published (via run:publish when job released)
 ```
 
-### Republish Flow (from published)
+### Republish Flow
 ```
-published → draft_republish → submitted_republish → published
-```
-
-### Republish Flow (from unpublished)
-```
-unpublished → draft_republish → submitted_republish → published
+published → republish → published (via run:publish)
+unpublished → republish → published (via run:publish)
 ```
 
 ### Unpublish Flow
 ```
-published → draft_unpublish → submitted_unpublish → unpublished
+published → unpublish → unpublished (via run:publish)
 ```
 
 ### Job Flow
 ```
-draft → submitted → completed
+draft → submitted → released
 ```
 
 ## State Machine Usage
@@ -66,7 +82,7 @@ draft → submitted → completed
 use App\Services\SubmissionStateMachine;
 
 // Check transition
-if (SubmissionStateMachine::canTransition($submission->status, 'published')) {
+if (SubmissionStateMachine::canTransition($submission, 'published')) {
     // Transition is valid
 }
 
@@ -78,56 +94,74 @@ try {
 }
 ```
 
+### Check if Submission is Pending or Released
+```php
+use App\Services\SubmissionStateMachine;
+
+// Check if pending (awaiting release)
+SubmissionStateMachine::isPending($submission); // true for new, republish, unpublish
+SubmissionStateMachine::isPendingState('new'); // true
+
+// Check if released
+SubmissionStateMachine::isReleased($submission); // true for published, unpublished
+SubmissionStateMachine::isReleasedState('published'); // true
+```
+
+### Check if Submission is Immutable
+```php
+use App\Services\SubmissionStateMachine;
+
+// Immutable = cannot edit fields
+// True for: released statuses OR submissions in submitted jobs
+SubmissionStateMachine::isImmutable($submission);
+```
+
 ### Execute State Transition
 ```php
 use App\Services\SubmissionStateMachine;
 
 // Transition submission
-SubmissionStateMachine::transition($submission, 'submitted_new');
+SubmissionStateMachine::transition($submission, 'published');
 $submission->save();
-
-// Transition with origin state (for draft_republish)
-SubmissionStateMachine::transition(
-    $submission,
-    'draft_republish',
-    'published' // origin_state
-);
-$submission->save();
-```
-
-### Cancel Draft Operation
-```php
-use App\Services\SubmissionStateMachine;
-
-// Cancel draft_republish or draft_unpublish
-if (SubmissionStateMachine::isCancellable($submission->status)) {
-    SubmissionStateMachine::cancel($submission);
-    $submission->save();
-}
 ```
 
 ### Submit a Job
 ```php
 use App\Services\JobStateMachine;
 
-// Submit job (validates all submissions are draft_xxx with no errors)
+// Submit job (validates all submissions are pending with no errors)
 try {
     JobStateMachine::submit($job);
     $job->save();
+    // Job.status = submitted
+    // All submissions now immutable
+    // submitted_at timestamp set on submissions
 } catch (Exception $e) {
     // Job cannot be submitted
 }
 ```
 
-### Cancel a Job
+### Cancel a Submitted Job
 ```php
 use App\Services\JobStateMachine;
 
-// Cancel submitted job (reverts all submissions to draft)
+// Cancel submitted job (before run:publish)
 if (JobStateMachine::canCancel($job->status)) {
-    JobStateMachine::cancel($job);
+    $job->status = Job::STATUS_DRAFT;
     $job->save();
+    // Submissions become editable again
 }
+```
+
+### Complete a Job After Release
+```php
+use App\Services\JobStateMachine;
+
+// Complete job after successful run:publish
+JobStateMachine::complete($job);
+$job->save();
+// Job.status = released
+// Job.released_at = now()
 ```
 
 ### Handle Partial Failure
@@ -137,7 +171,7 @@ use App\Services\JobStateMachine;
 // Create new draft job with failed submissions
 $failedIds = [1, 2, 3];
 $newDraftJob = JobStateMachine::handlePartialFailure($job, $failedIds);
-// Original job is marked completed
+// Original job is marked released
 // Failed submissions moved to new draft job
 ```
 
@@ -147,31 +181,24 @@ $newDraftJob = JobStateMachine::handlePartialFailure($job, $failedIds);
 ```php
 use App\Services\SubmissionStateMachine;
 
-// Check if draft state
-SubmissionStateMachine::isDraftState('draft_new'); // true
+// Check if pending state
+SubmissionStateMachine::isPendingState('new'); // true
+SubmissionStateMachine::isPendingState('published'); // false
 
-// Check if submitted state
-SubmissionStateMachine::isSubmittedState('submitted_new'); // true
+// Check if released state
+SubmissionStateMachine::isReleasedState('published'); // true
+SubmissionStateMachine::isReleasedState('new'); // false
 
-// Check if editable
-SubmissionStateMachine::isEditable('draft_new'); // true
-SubmissionStateMachine::isEditable('draft_unpublish'); // false
+// Check if editable (only new and republish in draft job)
+SubmissionStateMachine::isEditable('new'); // true
+SubmissionStateMachine::isEditable('unpublish'); // false (read-only)
 
 // Check if deletable
-SubmissionStateMachine::canDelete('draft_new'); // true
-
-// Check if cancellable
-SubmissionStateMachine::isCancellable('draft_republish'); // true
-
-// Get submitted state for draft
-SubmissionStateMachine::getSubmittedStateFor('draft_new'); // 'submitted_new'
-
-// Get draft state for submitted
-SubmissionStateMachine::getDraftStateFor('submitted_new'); // 'draft_new'
+SubmissionStateMachine::canDelete('new'); // true
 
 // Get description
-SubmissionStateMachine::getStateDescription('draft_new');
-// "New submission being drafted"
+SubmissionStateMachine::getStateDescription('new');
+// "New submission (v1) awaiting release"
 ```
 
 ### Job State Checks
@@ -190,20 +217,23 @@ JobStateMachine::canSubmit('draft'); // true
 // Check if can cancel
 JobStateMachine::canCancel('submitted'); // true
 
+// Check if immutable (cannot edit)
+JobStateMachine::isImmutable('submitted'); // true
+
 // Check if terminal
-JobStateMachine::isTerminal('completed'); // true
+JobStateMachine::isTerminal('released'); // true
 
 // Get state counts
 $counts = JobStateMachine::getStateCounts();
-// ['draft' => 5, 'submitted' => 2, 'completed' => 100]
+// ['draft' => 5, 'submitted' => 2, 'released' => 100]
 ```
 
 ## Database Queries
 
-### Query by State
+### Query by Status
 ```php
-// Get all draft submissions
-$drafts = Submission::where('status', Submission::STATUS_DRAFT_NEW)->get();
+// Get all new submissions
+$new = Submission::where('status', Submission::STATUS_NEW)->get();
 
 // Get all published submissions
 $published = Submission::where('status', Submission::STATUS_PUBLISHED)->get();
@@ -215,25 +245,41 @@ $draftJobs = Job::where('status', Job::STATUS_DRAFT)->get();
 $submittedJobs = Job::where('status', Job::STATUS_SUBMITTED)->get();
 ```
 
-### Query Multiple States
+### Query Pending vs Released
 ```php
-// Get all draft_xxx submissions
-$draftSubmissions = Submission::whereIn('status', [
-    Submission::STATUS_DRAFT_NEW,
-    Submission::STATUS_DRAFT_REPUBLISH,
-    Submission::STATUS_DRAFT_UNPUBLISH
+// Get all pending submissions (awaiting release)
+$pending = Submission::whereIn('status', [
+    Submission::STATUS_NEW,
+    Submission::STATUS_REPUBLISH,
+    Submission::STATUS_UNPUBLISH
 ])->get();
 
-// Get all submitted_xxx submissions
-$submittedSubmissions = Submission::whereIn('status', [
-    Submission::STATUS_SUBMITTED_NEW,
-    Submission::STATUS_SUBMITTED_REPUBLISH,
-    Submission::STATUS_SUBMITTED_UNPUBLISH
+// Get all released submissions
+$released = Submission::whereIn('status', [
+    Submission::STATUS_PUBLISHED,
+    Submission::STATUS_UNPUBLISHED
 ])->get();
+```
 
-// Using LIKE for pattern matching
-$allDrafts = Submission::where('status', 'LIKE', 'draft_%')->get();
-$allSubmitted = Submission::where('status', 'LIKE', 'submitted_%')->get();
+### Query by Stage (via Job)
+```php
+// Get all submissions in draft stage (pending + draft job)
+$draftStage = Submission::whereIn('status', [
+    Submission::STATUS_NEW,
+    Submission::STATUS_REPUBLISH,
+    Submission::STATUS_UNPUBLISH,
+])->whereHas('job', function($query) {
+    $query->where('status', Job::STATUS_DRAFT);
+})->get();
+
+// Get all submissions in submitted stage (pending + submitted job)
+$submittedStage = Submission::whereIn('status', [
+    Submission::STATUS_NEW,
+    Submission::STATUS_REPUBLISH,
+    Submission::STATUS_UNPUBLISH,
+])->whereHas('job', function($query) {
+    $query->where('status', Job::STATUS_SUBMITTED);
+})->get();
 ```
 
 ### Query with Job
@@ -246,27 +292,10 @@ $submissions = Submission::whereHas('job', function($query) {
 // Get job with submissions
 $job = Job::with('submissions')->find($id);
 
-// Count submissions by state in a job
+// Count submissions by status in a job
 $job->submissions()
-    ->where('status', Submission::STATUS_DRAFT_NEW)
+    ->where('status', Submission::STATUS_NEW)
     ->count();
-```
-
-## Display Strings
-
-### Submission States
-```php
-// In Submission model
-$submission->status_strings['draft_new']; // "Draft (New)"
-$submission->status_strings['published']; // "Published"
-```
-
-### Job States
-```php
-// In Job model
-$job->status_strings['draft']; // "Draft"
-$job->status_strings['submitted']; // "Submitted"
-$job->status_strings['completed']; // "Completed"
 ```
 
 ## Common Workflows
@@ -274,7 +303,8 @@ $job->status_strings['completed']; // "Completed"
 ### Create New Submission
 ```php
 $submission = Submission::create([
-    'status' => Submission::STATUS_DRAFT_NEW,
+    'status' => Submission::STATUS_NEW,
+    'job_id' => $draftJob->id,
     // ... other fields
 ]);
 ```
@@ -282,7 +312,7 @@ $submission = Submission::create([
 ### Move Published to Republish
 ```php
 // User clicks "Republish"
-$submission->status = Submission::STATUS_DRAFT_REPUBLISH;
+$submission->status = Submission::STATUS_REPUBLISH;
 $submission->origin_state = Submission::STATUS_PUBLISHED;
 $submission->original_job_id = $submission->job_id;
 $submission->job_id = $draftJob->id;
@@ -292,22 +322,21 @@ $submission->save();
 ### Move Published to Unpublish
 ```php
 // User clicks "Unpublish"
-$submission->status = Submission::STATUS_DRAFT_UNPUBLISH;
+$submission->status = Submission::STATUS_UNPUBLISH;
+$submission->origin_state = Submission::STATUS_PUBLISHED;
 $submission->original_job_id = $submission->job_id;
-$submission->job_id = $unpublishJob->id;
+$submission->job_id = $draftJob->id;
 $submission->save();
 ```
 
 ### Cancel Draft Operation
 ```php
-// User clicks "Cancel"
-if ($submission->status === Submission::STATUS_DRAFT_REPUBLISH) {
-    $submission->status = $submission->origin_state; // Back to published or unpublished
-    $submission->job_id = $submission->original_job_id;
-    $submission->origin_state = null;
-    $submission->original_job_id = null;
-    $submission->save();
-}
+// User clicks "Cancel" on republish or unpublish
+$submission->status = $submission->origin_state; // Back to published or unpublished
+$submission->job_id = $submission->original_job_id;
+$submission->origin_state = null;
+$submission->original_job_id = null;
+$submission->save();
 ```
 
 ### Submit a Draft Job
@@ -319,20 +348,21 @@ $job = Job::find($id);
 JobStateMachine::submit($job);
 $job->save();
 
-// All draft_xxx submissions are now submitted_xxx
+// Submissions are now immutable (Job.status = submitted)
+// submitted_at timestamp set on all pending submissions
 ```
 
-### Publish Submissions
+### Release Submissions (in run:publish)
 ```php
 // In run:publish command
 foreach ($job->submissions as $submission) {
     switch ($submission->status) {
-        case Submission::STATUS_SUBMITTED_NEW:
-        case Submission::STATUS_SUBMITTED_REPUBLISH:
+        case Submission::STATUS_NEW:
+        case Submission::STATUS_REPUBLISH:
             // Send to GenCC-Search
             $this->publishToGenCC($submission);
 
-            // Update state
+            // Update status
             $submission->status = Submission::STATUS_PUBLISHED;
             $submission->released_at = now();
             $submission->origin_state = null;
@@ -340,11 +370,11 @@ foreach ($job->submissions as $submission) {
             $submission->save();
             break;
 
-        case Submission::STATUS_SUBMITTED_UNPUBLISH:
+        case Submission::STATUS_UNPUBLISH:
             // Send unpublish to GenCC-Search
             $this->unpublishFromGenCC($submission);
 
-            // Update state
+            // Update status
             $submission->status = Submission::STATUS_UNPUBLISHED;
             $submission->released_at = null;
             $submission->save();
@@ -352,49 +382,27 @@ foreach ($job->submissions as $submission) {
     }
 }
 
-// Mark job as completed
-$job->status = Job::STATUS_COMPLETED;
+// Mark job as released
+JobStateMachine::complete($job);
 $job->save();
-```
-
-## Migration Notes
-
-The status model migration has been completed. The `status` column now uses string-based states
-(e.g., 'published', 'draft_new') instead of integer constants. The old `status` column has
-been renamed to `status` and the data has been migrated.
-
-## API Endpoints (Phase 2)
-
-### Job Endpoints
-```
-POST   /api/jobs/{id}/submit     # Submit draft job
-POST   /api/jobs/{id}/cancel     # Cancel submitted job
-DELETE /api/jobs/{id}             # Delete draft job
-```
-
-### Submission Endpoints
-```
-POST /api/submissions/{id}/republish  # Move to draft_republish
-POST /api/submissions/{id}/unpublish  # Move to draft_unpublish
-POST /api/submissions/{id}/cancel     # Cancel draft operation
 ```
 
 ## Color Coding (Frontend)
 
-### Submission States
-- 🟡 `draft_new` - Yellow (needs attention)
-- 🔵 `submitted_new` - Blue (in progress)
-- 🟢 `published` - Green (success/live)
-- 🟠 `draft_republish` - Orange (updating)
-- 🔵 `submitted_republish` - Blue (in progress)
-- 🟣 `draft_unpublish` - Purple (removing)
-- 🔵 `submitted_unpublish` - Blue (in progress)
-- ⚫ `unpublished` - Gray (inactive)
+### Submission Statuses (with stage context)
+- 🟡 `new` (draft) - Yellow (new submission in draft)
+- 🔵 `new` (submitted) - Blue (awaiting release)
+- 🟢 `published` - Green (live/active)
+- 🟠 `republish` (draft) - Orange (updating)
+- 🔵 `republish` (submitted) - Blue (awaiting release)
+- 🟤 `unpublish` (draft) - Dark orange (removing, read-only)
+- 🔵 `unpublish` (submitted) - Blue (awaiting release)
+- ⚫ `unpublished` - Gray (hidden)
 
 ### Job States
 - 🟡 `draft` - Yellow (work in progress)
 - 🔵 `submitted` - Blue (awaiting processing)
-- 🟢 `completed` - Green (done)
+- 🟢 `released` - Green (done)
 
 ## Icons (Frontend)
 
@@ -406,14 +414,11 @@ POST /api/submissions/{id}/cancel     # Cancel draft operation
 - Cancel: `pi-times-circle`
 - Delete: `pi-trash`
 
-### States
-- draft_new: `pi-file-edit`
-- submitted_new: `pi-clock`
+### Statuses
+- new: `pi-file-edit`
+- republish: `pi-pencil`
+- unpublish: `pi-ban`
 - published: `pi-check-circle`
-- draft_republish: `pi-pencil`
-- submitted_republish: `pi-clock`
-- draft_unpublish: `pi-ban`
-- submitted_unpublish: `pi-clock`
 - unpublished: `pi-eye-slash`
 
 ## Common Errors
@@ -436,46 +441,36 @@ Cause: Attempting to submit job with validation errors
 Solution: Fix all submission errors before submitting
 ```
 
-### "Cannot cancel from state 'published'"
+### "is not a pending state"
 ```
-Cause: Trying to cancel a submission not in draft state
-Solution: Only draft_republish and draft_unpublish can be cancelled
+Cause: Trying to call draft/submitted methods on released submission
+Solution: Only pending statuses (new, republish, unpublish) can be in jobs
 ```
 
-## Legacy Compatibility
+## Understanding Immutability
 
-### Old Constants (Still Available)
+### When is a submission immutable?
+
+A submission is **immutable** (cannot have fields edited) when:
+
+1. **Released status**: `published` or `unpublished`
+2. **In submitted job**: Status is pending but `Job.status = submitted`
+
 ```php
-// Submissions (LEGACY - use STATUS_* instead)
-Submission::STATUS_INITIALIZING  // 0
-Submission::STATUS_NEW           // 1
-Submission::STATUS_PROCESSING    // 3
-Submission::STATUS_ERRORS        // 4
-Submission::STATUS_REMOVED       // 9
-Submission::STATUS_PUBLISHED     // 20
-
-// Jobs (LEGACY - use STATUS_* instead)
-Job::STATUS_INITIALIZING         // 0
-Job::STATUS_QUEUED               // 1
-Job::STATUS_PROCESSING           // 2
-Job::STATUS_COMPLETE             // 3
-Job::STATUS_ERRORS               // 4
-Job::STATUS_STAGED               // 5
-Job::STATUS_REMOVED              // 9
-Job::STATUS_FAILED               // 99
+// Check if immutable
+SubmissionStateMachine::isImmutable($submission);
 ```
 
-### Old vs New Mapping
+### Stage vs Status
 
-**Jobs**:
-- 0,1,2,4 → `draft`
-- 5 → `submitted`
-- 3 → `completed`
+| Term | Definition |
+|------|------------|
+| **Status** | Stored in `submissions.status` field (new, republish, unpublish, published, unpublished) |
+| **Stage** | Derived from `jobs.status` (draft or submitted) |
 
-**Submissions**:
-- 20 → `published`
-- 3 (with publish_date) → `draft_republish`
-- 0,1,3,4 (without publish_date) → `draft_new`
+A submission with `status = 'new'` could be in either:
+- **Draft stage**: `Job.status = 'draft'` → Editable
+- **Submitted stage**: `Job.status = 'submitted'` → Immutable
 
 ---
 
@@ -483,9 +478,8 @@ Job::STATUS_FAILED               // 99
 
 - [STATE_MODEL_USER_GUIDE.md](STATE_MODEL_USER_GUIDE.md) - User-friendly guide with visual workflows
 - [STATE_MODEL_DIAGRAMS.md](STATE_MODEL_DIAGRAMS.md) - Detailed Mermaid state diagrams
-- [DASHBOARD_TECHNICAL_GUIDE.md](DASHBOARD_TECHNICAL_GUIDE.md) - Dashboard implementation details
 
 ---
 
-**Quick Reference Version**: 2.0
-**Last Updated**: November 13, 2025
+**Quick Reference Version**: 3.0
+**Last Updated**: February 2026

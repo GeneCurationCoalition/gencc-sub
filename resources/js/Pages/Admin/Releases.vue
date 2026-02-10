@@ -4,6 +4,7 @@
     import AppLayout from '@/Layouts/AppLayout.vue'
     import { FilterMatchMode } from 'primevue/api'
     import Tag from 'primevue/tag'
+    import Button from 'primevue/button'
 
     const props = defineProps(['releases'])
 
@@ -91,6 +92,32 @@
                             <Column field="duration_seconds" header="Duration" sortable style="min-width: 5rem">
                                 <template #body="{ data }">
                                     {{ formatDuration(data.duration_seconds) }}
+                                </template>
+                            </Column>
+                            <Column header="Download" style="min-width: 8rem">
+                                <template #body="{ data }">
+                                    <div class="flex gap-1" @click.stop>
+                                        <Button
+                                            v-if="data.submissions_csv_file"
+                                            icon="pi pi-file"
+                                            size="small"
+                                            severity="success"
+                                            text
+                                            rounded
+                                            title="Download CSV"
+                                            @click="window.location.href = route('admin.releases.download-csv', data.id)"
+                                        />
+                                        <Button
+                                            v-if="data.release_notes_file"
+                                            icon="pi pi-file-edit"
+                                            size="small"
+                                            severity="info"
+                                            text
+                                            rounded
+                                            title="Download Release Notes"
+                                            @click="window.location.href = route('admin.releases.download-notes', data.id)"
+                                        />
+                                    </div>
                                 </template>
                             </Column>
 

@@ -20,6 +20,11 @@ class AdminProgressTracker
     protected const CACHE_TTL = 1800;
 
     /**
+     * Stale threshold in seconds - operations running longer than this without updates are considered stale
+     */
+    protected const STALE_THRESHOLD = 900; // 15 minutes
+
+    /**
      * Initialize progress tracking for an operation
      */
     public static function start(string $operation, array $phases = []): void
@@ -173,11 +178,38 @@ class AdminProgressTracker
     }
 
     /**
-     * Get current progress for an operation
+     * Get current progress for an operation.
+     * Automatically detects stale operations and marks them as such.
      */
     public static function get(string $operation): ?array
     {
-        return Cache::get(self::CACHE_PREFIX . $operation);
+        $data = Cache::get(self::CACHE_PREFIX . $operation);
+
+        if (!$data) {
+            return null;
+        }
+
+        // Check for stale operations
+        if ($data['status'] === 'running') {
+            $startedAt = strtotime($data['started_at']);
+            $lastUpdateAt = $startedAt;
+
+            // Check last message time for more accurate staleness detection
+            if (!empty($data['messages'])) {
+                $lastMessage = end($data['messages']);
+                if (isset($lastMessage['time'])) {
+                    $lastUpdateAt = strtotime($lastMessage['time']);
+                }
+            }
+
+            $elapsed = time() - $lastUpdateAt;
+            if ($elapsed > self::STALE_THRESHOLD) {
+                $data['is_stale'] = true;
+                $data['stale_since'] = now()->subSeconds($elapsed - self::STALE_THRESHOLD)->toIso8601String();
+            }
+        }
+
+        return $data;
     }
 
     /**
@@ -189,11 +221,32 @@ class AdminProgressTracker
     }
 
     /**
-     * Check if an operation is currently running
+     * Check if an operation is currently running (and not stale)
      */
     public static function isRunning(string $operation): bool
     {
-        $data = Cache::get(self::CACHE_PREFIX . $operation);
-        return $data && $data['status'] === 'running';
+        $data = self::get($operation);
+        return $data && $data['status'] === 'running' && empty($data['is_stale']);
+    }
+
+    /**
+     * Check if an operation is stale (running but no updates for too long)
+     */
+    public static function isStale(string $operation): bool
+    {
+        $data = self::get($operation);
+        return $data && $data['status'] === 'running' && !empty($data['is_stale']);
+    }
+
+    /**
+     * Force clear a stale operation. Returns true if cleared, false if not stale.
+     */
+    public static function clearIfStale(string $operation): bool
+    {
+        if (self::isStale($operation)) {
+            self::clear($operation);
+            return true;
+        }
+        return false;
     }
 }

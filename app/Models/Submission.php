@@ -184,28 +184,8 @@ class Submission extends Model
      * A map of json to model fields, so we can maintain
      * fexibility in the json schema without having to make
      * model changes
-     * 
+     *
      */
-    /*protected $json_map = [
-        'type' => 'type',
-        'sid' => 'sid',
-        'uuid' => 'uuid',
-        'gene' => 'gene',
-        'disease' => 'disease',
-        'moi' => 'moi',
-        'workflow' => 'workflow',
-        'report' => 'report',
-        'classification' => 'classification',
-        'criteria' => 'criteria',
-        'evidence' => 'evidence',
-        'lumpspit' => 'lumpspit',
-        'notes' => 'notes',
-        'version' => 'version',
-        'submitted_by' => 'submitted_by',
-        'contributors' => 'contributors',
-        'meta' => 'meta',
-        'anciliary' => 'anciliary'
-    ];*/
 
     /**
      * Maintain a temporary errors bag for the model so that custom bulk load methods
@@ -433,7 +413,6 @@ class Submission extends Model
     /**
      * Query scope by status of published
      *
-     * @@param
      * @return Illuminate\Database\Eloquent\Collection
      */
 	public function scopePublished($query)
@@ -622,8 +601,7 @@ class Submission extends Model
     /**
      * Get a display formatted form of submission status for JSON
      *
-     * @@param
-     * @return
+     * @return string
      */
     public function getJsonDisplayStatusAttribute()
     {
@@ -778,8 +756,8 @@ class Submission extends Model
     /**
      * Add an event to the history
      *
-     * @@param string $event
-     * @return Illuminate\Database\Eloquent\Collection
+     * @param string $event
+     * @return void
      */
 	public function addEvent($event)
     {
@@ -1044,34 +1022,6 @@ class Submission extends Model
     }
 
     /**
-     * Initialize a submission for testing
-     * 
-     */
-    public static function initialize($id = 927)
-    {
-        $submission = self::where('sid', $id)->first();
-
-        if ($submission === null)
-            return;
-
-        $eb = $submission->submission_errors;
-
-        $eb->gene_hgnc_id = 'Invalid HGNC ID';
-        $eb->disease_curie_id = 'Invalid Disease ID';
-        $eb->moi_curie_id = 'Invalid MOI ID';
-        $eb->classification_curie_id = 'Invalid Classification ID';
-        $eb->submitter_curie_id = 'Unauthorized  Submitter ID';
-        $eb->publish_date = 'Missing Curation Publish Date';
-        $eb->report_date = 'Missing Report Date';
-       // $eb->report_url = 'Missing Report URL';
-        $eb->submission_id = 'Missing Submission ID';
-
-        $submission->submission_errors = $eb;
-        $submission->save();
-    }
-
-
-    /**
      * Initialize the error bag for a blank submission
      * 
      */
@@ -1132,39 +1082,6 @@ class Submission extends Model
                     "mechanism" => ["id" => "", "name" => "", "comment" => ""],
                     "additional_information" => [["key" => "values"]]
                 ];
-    }
-
-
-    /**
-     * Return an updated version number based on the reason code.
-     */
-    public function newversion($code = null)
-    {
-        $data = self::normalizeJsonField($this->submission_data);
-        $internalVersion = $data['version']['internal'] ?? null;
-
-        if (empty($internalVersion))
-            return "1.0.0";
-
-        $version = explode('.', $internalVersion);
-
-        $version[0]++;
-
-        return implode('.', $version);
-    }
-
-
-    /**
-     * A temporary addition to morph all sids to the specified format.  Will likely
-     * be removed once a standard is approved.
-     */
-    public static function morph()
-    {
-        foreach (Submission::all() as $submission)
-        {
-            $submission->sid = 'SGC-1' . str_pad($submission->id, 5, '0', STR_PAD_LEFT);
-            $submission->save(['timestamps' => false]);
-        }
     }
 
     /**

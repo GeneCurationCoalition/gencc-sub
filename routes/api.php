@@ -177,18 +177,22 @@ Route::post('/sim', [SubmitController::class, 'pubrec']);
 /**
  * Admin-only endpoints for running system commands
  * These require GenCC Administrator privileges
+ * Uses web middleware for session auth; CSRF excluded in VerifyCsrfToken
  */
 Route::group(['middleware' => ['web'], 'prefix' => 'admin'], function () {
     // Operational commands
     Route::post('/run-publish', [AdminController::class, 'runPublish']);
+    Route::post('/repair-release', [AdminController::class, 'repairRelease']);
     Route::post('/update-diseases', [AdminController::class, 'updateDiseases']);
     Route::post('/update-genes', [AdminController::class, 'updateGenes']);
     Route::post('/sync-pubmed', [AdminController::class, 'syncPubmed']);
+    Route::delete('/progress/{operation}', [AdminController::class, 'clearStaleOperation']);
 
     // Submitter management
     Route::get('/submitters', [AdminController::class, 'listSubmitters']);
     Route::get('/submitters/{id}', [AdminController::class, 'showSubmitter']);
     Route::post('/submitters', [AdminController::class, 'storeSubmitter']);
+    Route::post('/submitters/{id}', [AdminController::class, 'updateSubmitter']);
     Route::put('/submitters/{id}', [AdminController::class, 'updateSubmitter']);
     Route::delete('/submitters/{id}', [AdminController::class, 'deleteSubmitter']);
 

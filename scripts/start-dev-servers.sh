@@ -108,7 +108,7 @@ restore_database() {
     echo -e "${YELLOW}  Restoring Database from Baseline${NC}"
     echo -e "${YELLOW}========================================${NC}"
     echo ""
-    "$PROJECT_DIR/restore-db.sh" --no-confirm
+    "$SCRIPT_DIR/restore-db.sh" --no-confirm
     echo ""
 }
 
@@ -158,6 +158,14 @@ start_pm2() {
     echo ""
 
     cd "$PROJECT_DIR"
+
+    # Use existing APP_VERSION if set, otherwise generate from git
+    if [ -z "$APP_VERSION" ]; then
+        APP_VERSION=$("$SCRIPT_DIR/version.sh")
+    fi
+    export APP_VERSION
+    echo -e "${YELLOW}Application version: ${APP_VERSION}${NC}"
+    echo ""
 
     # Restore database if --restore flag was passed (includes migrations + logos)
     if [ "$RESTORE_DB" = true ]; then

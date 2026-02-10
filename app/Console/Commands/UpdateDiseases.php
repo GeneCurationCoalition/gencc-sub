@@ -8,6 +8,7 @@ use App\Models\Disease;
 use App\Models\Submission;
 use App\Console\Traits\CachesFileHeaders;
 use App\Services\AdminProgressTracker;
+use JsonMachine\Items;
 
 class UpdateDiseases extends Command
 {
@@ -142,45 +143,39 @@ class UpdateDiseases extends Command
             return false;
         }
 
-        // Download and cache the file
-        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Downloading MONDO (~50MB)...');
-        $data = $this->downloadAndCacheFile($url, $cacheFilename);
+        // Download the file to disk (not memory) for streaming
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Downloading MONDO (~100MB)...');
+        $cachePath = $this->downloadFileToDisk($url, $cacheFilename);
 
-        if ($data === null) {
-            // Try to use cached file
-            $data = $this->getCachedFile($cacheFilename);
-
-            if ($data === null) {
-                $this->error('......FAILED to retrieve data from MONDO');
-                return false;
-            }
-        }
-
-        // Decode the JSON data (MONDO file is ~50MB, needs extra memory for decode)
-        $previousLimit = ini_get('memory_limit');
-        ini_set('memory_limit', '2G');
-
-        $json = json_decode($data);
-        unset($data); // Free raw string immediately
-
-        if ($json === null) {
-            ini_set('memory_limit', $previousLimit);
-            $this->error('......FAILED to decode MONDO JSON');
+        if ($cachePath === null) {
+            $this->error('......FAILED to retrieve data from MONDO');
             return false;
         }
 
-        $this->info('...processing MONDO diseases and extracting mappings');
+        $this->info('...processing MONDO diseases using streaming parser');
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Processing MONDO diseases...');
 
         $deprecatedCount = 0;
-        $nodes = $json->graphs[0]->nodes;
-        $totalNodes = count($nodes);
         $processedCount = 0;
         $lastProgressUpdate = 0;
 
-        // Loop through the nodes
-        foreach ($nodes as $node)
+        // Use streaming JSON parser to avoid loading entire file into memory
+        // The MONDO file structure is: { "graphs": [{ "nodes": [...] }] }
+        // We stream through graphs/0/nodes
+        try {
+            $nodes = Items::fromFile($cachePath, [
+                'pointer' => '/graphs/0/nodes',
+            ]);
+
+            // Estimate total nodes (MONDO typically has ~25K diseases)
+            $totalNodes = 30000; // Approximate for progress tracking
+
+            // Loop through the nodes (streaming - one at a time)
+            foreach ($nodes as $nodeArray)
         {
+            // Convert array to object for compatibility with existing code
+            $node = json_decode(json_encode($nodeArray));
+
             // MONDO uses underscore instead of colon
             $term = str_replace('_', ':', basename($node->id));
 
@@ -250,8 +245,10 @@ class UpdateDiseases extends Command
         $this->info('...found ' . count($this->mondoExactMatchOmim) . ' OMIM exact_match relationships');
         $this->info('...found ' . count($this->mondoExactMatchOrphanet) . ' Orphanet exact_match relationships');
 
-        // Restore memory limit after MONDO processing
-        ini_set('memory_limit', $previousLimit);
+        } catch (\Exception $e) {
+            $this->error('......FAILED to parse MONDO JSON: ' . $e->getMessage());
+            return false;
+        }
 
         AdminProgressTracker::completePhase(
             self::PROGRESS_OPERATION,
@@ -936,7 +933,7 @@ class UpdateDiseases extends Command
         $cleansed = [];
 
         foreach ($synonyms as $synonym)
-            if ($synonym->pred = "hasExactSynonym")
+            if ($synonym->pred === "hasExactSynonym")
                 $cleansed[] = $synonym->val;
 
         return $cleansed;
@@ -1123,5 +1120,73 @@ class UpdateDiseases extends Command
         }
 
         return $cleansed;
+    }
+
+
+    /**
+     * Download a file directly to disk for streaming (avoids loading into memory)
+     *
+     * @param string $url
+     * @param string $cacheFilename
+     * @return string|null The file path, or null on failure
+     */
+    protected function downloadFileToDisk($url, $cacheFilename)
+    {
+        $dataDir = base_path('data');
+        if (!is_dir($dataDir)) {
+            mkdir($dataDir, 0755, true);
+        }
+
+        $cachePath = $dataDir . '/' . $cacheFilename;
+
+        // Check if we already have a cached file from today
+        if (file_exists($cachePath)) {
+            $fileAge = time() - filemtime($cachePath);
+            // Use cached file if less than 1 hour old
+            if ($fileAge < 3600) {
+                $this->info("......using cached file (age: " . round($fileAge / 60) . " minutes)");
+                return $cachePath;
+            }
+        }
+
+        $this->info("......downloading file to {$cacheFilename}");
+
+        try {
+            // Use cURL for efficient streaming download
+            $ch = curl_init($url);
+            $fp = fopen($cachePath, 'w');
+
+            if (!$fp) {
+                $this->error("......failed to open file for writing");
+                return null;
+            }
+
+            curl_setopt($ch, CURLOPT_FILE, $fp);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 300); // 5 minute timeout
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+
+            $success = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+
+            curl_close($ch);
+            fclose($fp);
+
+            if (!$success || $httpCode !== 200) {
+                $this->error("......download failed (HTTP {$httpCode}): {$error}");
+                @unlink($cachePath);
+                return null;
+            }
+
+            $size = filesize($cachePath);
+            $this->info("......downloaded " . round($size / 1024 / 1024, 1) . " MB");
+
+            return $cachePath;
+
+        } catch (\Exception $e) {
+            $this->error("......download failed: " . $e->getMessage());
+            return null;
+        }
     }
 }

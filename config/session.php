@@ -37,6 +37,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend Idle Timeout
+    |--------------------------------------------------------------------------
+    |
+    | This value controls how long (in milliseconds) the frontend will wait
+    | before showing the idle logout warning dialog. After this timeout,
+    | the user has 100 seconds to interact before being logged out.
+    | Default: 900000 (15 minutes)
+    |
+    */
+
+    'idle_timeout' => env('SESSION_IDLE_TIMEOUT', 900000),
+
+    /*
+    |--------------------------------------------------------------------------
     | Session Encryption
     |--------------------------------------------------------------------------
     |

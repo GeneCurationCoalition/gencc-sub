@@ -61,7 +61,8 @@ wrapper.env.txt
 /.gemini/
 /CLAUDE.local.md
 /gencc-sub-github-action-deploy-key
-/ai/logs/
-/ai/*.log
-/ai/deploy-workflow-run.log
-/build-and-deployment.md
+/ai/
+
+# Database backups
+/data/backups/
+data/hgnc_complete_set.json

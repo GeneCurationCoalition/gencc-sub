@@ -71,7 +71,7 @@ class Action extends Model
      protected $status_strings = [
 	 		0 => 'Initializing',
 	 		1 => 'Pending',
-            2 => 'Conmplete',
+            2 => 'Complete',
 	 		9 => 'Deleted',
 	];
 

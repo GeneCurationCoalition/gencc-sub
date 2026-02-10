@@ -1450,7 +1450,8 @@ class SubmissionFileValidation
             ->keyBy('curie');
 
         // Batch load all diseases and build MONDO mapping cache (same approach as DocumentController)
-        $allDiseases = Disease::all();
+        // Only select needed columns to reduce memory usage (53K+ records)
+        $allDiseases = Disease::select('id', 'curie', 'name', 'type', 'xrefs')->get();
         $diseaseCache = $allDiseases->keyBy('curie');
         $mondoMappingCache = collect();
 

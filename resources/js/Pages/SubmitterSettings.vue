@@ -28,11 +28,7 @@
             if (obj.remove_logo) formData.append('remove_logo', '1');
             if (obj.contact_id !== undefined) formData.append('contact_id', obj.contact_id || '');
 
-            const response = await axios.post('/api/submitters/' + props.submitter.id, formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data'
-                }
-            });
+            const response = await axios.post('/api/submitters/' + props.submitter.id, formData);
 
             if (response.data.hasOwnProperty('status_code') && response.data.status_code == 200) {
                 showEdit.value = false;

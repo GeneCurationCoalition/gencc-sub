@@ -2,6 +2,7 @@
     import { ref, watch, computed } from 'vue'
     import { useForm } from 'vee-validate';
     import * as yup from 'yup';
+    import Checkbox from 'primevue/checkbox';
 
     const props = defineProps(['visible', 'input', 'members']);
 
@@ -15,7 +16,7 @@
         name: yup.string().required().label('Name').max(248),
         description: yup.string().nullable().label('Description').max(1000),
         website: yup.string().nullable().label('Website').url('Must be a valid URL'),
-        assertion: yup.string().nullable().label('Assertion Criteria').url('Must be a valid URL'),
+        assertion: yup.string().nullable().label('Assertion Criteria').max(1000),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
@@ -39,8 +40,8 @@
     // Contact selection
     const selectedContact = ref(null);
 
-    // Member and downloadable flags
-    const member = ref(false);
+    // Allow submissions and downloadable flags
+    const allowSubmissions = ref(true);
     const downloadable = ref(false);
 
     const disabled = computed(() => {
@@ -165,7 +166,7 @@
             'logo': logoFile.value,
             'remove_logo': removeLogo.value,
             'contact_id': selectedContact.value?.id || null,
-            'member': member.value,
+            'allow_submissions': allowSubmissions.value,
             'downloadable': downloadable.value
         });
     }
@@ -188,8 +189,8 @@
         removeLogo.value = false;
         // Set current contact
         selectedContact.value = props.members?.find(m => m.is_contact) || null;
-        // Set member and downloadable flags
-        member.value = props.input.member || false;
+        // Set allow_submissions and downloadable flags
+        allowSubmissions.value = props.input.allow_submissions !== false;  // Default to true
         downloadable.value = props.input.downloadable || false;
     }
 
@@ -204,76 +205,57 @@
                 </div>
             </template>
 
-            <div class="grid grid-cols-4 gap-y-4">
+            <div class="flex flex-col gap-3">
                 <!-- Name -->
                 <div class="flex items-center gap-3">
-                    <label for="nameInput" class="flex items-center font-semibold w-6rem">Name</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
-                    <InputText id="nameInput" type="text" v-model="name" class="flex-auto" autocomplete="off" required />
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-red-600">{{ errors.name }}</small>
+                    <label for="nameInput" class="font-semibold w-32 shrink-0">Name</label>
+                    <div class="flex-1">
+                        <InputText id="nameInput" type="text" v-model="name" class="w-full" autocomplete="off" required />
+                        <small v-if="errors.name" class="text-red-600">{{ errors.name }}</small>
+                    </div>
                 </div>
 
                 <!-- Description -->
-                <div class="flex items-start gap-3 pt-2">
-                    <label for="descriptionInput" class="flex items-center font-semibold w-6rem">Description</label>
-                </div>
-                <div class="flex flex-col col-span-3 gap-1">
-                    <Textarea id="descriptionInput" v-model="description" class="flex-auto" rows="3" autocomplete="off" />
-                    <small class="text-gray-500">Markdown formatting supported</small>
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-red-600">{{ errors.description }}</small>
+                <div class="flex items-start gap-3">
+                    <label for="descriptionInput" class="font-semibold w-32 shrink-0 pt-2">Description</label>
+                    <div class="flex-1">
+                        <Textarea id="descriptionInput" v-model="description" class="w-full" rows="2" autocomplete="off" />
+                        <small class="text-gray-500">Markdown supported</small>
+                        <small v-if="errors.description" class="text-red-600 block">{{ errors.description }}</small>
+                    </div>
                 </div>
 
-                <!-- Website -->
-                <div class="flex items-center gap-3">
-                    <label for="websiteInput" class="flex items-center font-semibold w-6rem">Website</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
-                    <InputText id="websiteInput" type="text" v-model="website" class="flex-auto" autocomplete="off" placeholder="https://example.org" />
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-red-600">{{ errors.website }}</small>
+                <!-- Website & Assertion side by side -->
+                <div class="flex gap-4">
+                    <div class="flex items-center gap-3 flex-1">
+                        <label for="websiteInput" class="font-semibold w-32 shrink-0">Website</label>
+                        <div class="flex-1">
+                            <InputText id="websiteInput" type="text" v-model="website" class="w-full" autocomplete="off" placeholder="https://example.org" />
+                            <small v-if="errors.website" class="text-red-600">{{ errors.website }}</small>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Assertion Criteria -->
-                <div class="flex items-center gap-3">
-                    <label for="assertionInput" class="flex items-center font-semibold w-6rem">Assertion Criteria</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
-                    <InputText id="assertionInput" type="text" v-model="assertion" class="flex-auto" autocomplete="off" placeholder="https://example.org/criteria" />
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-red-600">{{ errors.assertion }}</small>
+                <div class="flex items-start gap-3">
+                    <label for="assertionInput" class="font-semibold w-32 shrink-0 pt-2">Assertion Criteria</label>
+                    <div class="flex-1">
+                        <Textarea id="assertionInput" v-model="assertion" class="w-full" rows="2" autocomplete="off" placeholder="https://example.org/criteria or markdown text" />
+                        <small class="text-gray-500">URL or Markdown supported</small>
+                        <small v-if="errors.assertion" class="text-red-600 block">{{ errors.assertion }}</small>
+                    </div>
                 </div>
 
                 <!-- Contact -->
                 <div class="flex items-center gap-3">
-                    <label for="contactInput" class="flex items-center font-semibold w-6rem">Contact</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
+                    <label for="contactInput" class="font-semibold w-32 shrink-0">Contact</label>
                     <Dropdown
                         id="contactInput"
                         v-model="selectedContact"
                         :options="members"
                         optionLabel="name"
                         placeholder="Select a contact"
-                        class="flex-auto"
+                        class="flex-1"
                         showClear
                     >
                         <template #option="slotProps">
@@ -290,89 +272,57 @@
                         </template>
                     </Dropdown>
                 </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-gray-500">Select the primary contact for this submitter</small>
-                </div>
 
-                <!-- Member Flag -->
-                <div class="flex items-center gap-3">
-                    <label for="memberInput" class="flex items-center font-semibold w-6rem">Member</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
-                    <Checkbox id="memberInput" v-model="member" :binary="true" />
-                    <label for="memberInput" class="ml-2 text-gray-700">This submitter is a GenCC member</label>
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-gray-500">Member submitters are displayed on the GenCC website</small>
-                </div>
-
-                <!-- Downloadable Flag -->
-                <div class="flex items-center gap-3">
-                    <label for="downloadableInput" class="flex items-center font-semibold w-6rem">Downloadable</label>
-                </div>
-                <div class="flex items-center col-span-3 gap-3">
-                    <Checkbox id="downloadableInput" v-model="downloadable" :binary="true" />
-                    <label for="downloadableInput" class="ml-2 text-gray-700">Include submissions in public downloads</label>
-                </div>
-                <div class="flex items-center gap-3">
-                    &nbsp;
-                </div>
-                <div class="flex items-center col-span-3">
-                    <small class="text-gray-500">Downloadable submitters have their data included in the GenCC data exports</small>
+                <!-- Checkboxes side by side -->
+                <div class="flex gap-6 mt-2">
+                    <div class="flex items-center gap-2">
+                        <Checkbox id="allowSubmissionsInput" v-model="allowSubmissions" :binary="true" />
+                        <label for="allowSubmissionsInput" class="text-gray-700">Allow submissions</label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <Checkbox id="downloadableInput" v-model="downloadable" :binary="true" />
+                        <label for="downloadableInput" class="text-gray-700">Include in downloads</label>
+                    </div>
                 </div>
 
                 <!-- Logo -->
-                <div class="flex items-start gap-3 pt-2">
-                    <label class="flex items-center font-semibold w-6rem">Logo</label>
-                </div>
-                <div class="flex flex-col col-span-3 gap-3">
-                    <!-- Current logo display -->
-                    <div v-if="currentLogo && !removeLogo" class="flex items-center gap-3">
-                        <img :src="currentLogo" alt="Current logo" class="h-16 w-auto object-contain border rounded p-1" />
-                        <Button icon="pi pi-times" severity="danger" text rounded @click="markLogoForRemoval" title="Remove logo" />
-                    </div>
+                <div class="flex items-start gap-3 mt-2 pt-2 border-t">
+                    <label class="font-semibold w-32 shrink-0">Logo</label>
+                    <div class="flex-1 flex flex-wrap items-center gap-3">
+                        <!-- Current logo display -->
+                        <div v-if="currentLogo && !removeLogo" class="flex items-center gap-2">
+                            <img :src="currentLogo" alt="Current logo" class="h-12 w-auto object-contain border rounded p-1" />
+                            <Button icon="pi pi-times" severity="danger" text rounded size="small" @click="markLogoForRemoval" title="Remove logo" />
+                        </div>
 
-                    <!-- New logo preview -->
-                    <div v-if="logoPreview && logoValidated" class="flex items-center gap-3">
-                        <img :src="logoPreview" alt="New logo preview" class="h-16 w-auto object-contain border rounded p-1" />
-                        <span class="text-sm text-green-600">
-                            <i class="pi pi-check-circle mr-1"></i>
-                            Valid logo ({{ logoDimensions?.width }}x{{ logoDimensions?.height }} PNG)
-                        </span>
-                    </div>
+                        <!-- New logo preview -->
+                        <div v-if="logoPreview && logoValidated" class="flex items-center gap-2">
+                            <img :src="logoPreview" alt="New logo preview" class="h-12 w-auto object-contain border rounded p-1" />
+                            <span class="text-sm text-green-600"><i class="pi pi-check-circle mr-1"></i>Valid</span>
+                        </div>
 
-                    <!-- Logo error -->
-                    <div v-if="logoError" class="text-red-600 text-sm">
-                        <i class="pi pi-times-circle mr-1"></i>
-                        {{ logoError }}
-                    </div>
+                        <!-- File upload -->
+                        <FileUpload
+                            mode="basic"
+                            accept=".png"
+                            :maxFileSize="500000"
+                            @select="onLogoSelect"
+                            @clear="onLogoClear"
+                            chooseLabel="Select Logo"
+                            class="p-button-outlined p-button-sm"
+                        />
 
-                    <!-- File upload -->
-                    <FileUpload
-                        mode="basic"
-                        accept=".png"
-                        :maxFileSize="500000"
-                        @select="onLogoSelect"
-                        @clear="onLogoClear"
-                        chooseLabel="Select Logo"
-                        class="p-button-outlined"
-                    />
-                    <small class="text-gray-500">
-                        Required: PNG format, exactly 800x400 pixels, max 500KB
-                    </small>
+                        <!-- Logo error -->
+                        <div v-if="logoError" class="text-red-600 text-sm w-full"><i class="pi pi-times-circle mr-1"></i>{{ logoError }}</div>
+                        <small class="text-gray-500 w-full">PNG, 800x400px, max 500KB</small>
+                    </div>
                 </div>
             </div>
 
             <template #footer>
-                <div class="flex gap-8 bg-slate-50 m-0 p-4">
-                    <Button label="Update" @click="closeCallback" outlined severity="info" class="ml-4 p-3" :disabled="disabled" />
-                    <Button label="Cancel" @click="visible = false" severity="secondary" class="mr-4 p-3" />
+                <div class="flex justify-end gap-3">
+                    <Button label="Cancel" @click="visible = false" severity="secondary" />
+                    <Button label="Update" @click="closeCallback" severity="info" :disabled="disabled" />
                 </div>
             </template>
         </Dialog>

@@ -145,22 +145,4 @@ class Alias extends Model
     }
 
 
-    /**
-     * Initialize a new table with the standard values
-     * 
-     * 
-     */
-    public static function initialize()
-    {
-      // universal reason codes
-      $codes = ["NEW_CURATION", "RECURATION_NEW_EVIDENCE", "RECURATION_COMMUNITY_REQUEST", "RECURATION_ERR-R_SCORE_CLASS", "RECURATION_TIMING",
-                "RECURATION_DISCREP_RESOLUTION", "REFCURATION_FRAMEWORK"];
-
-      foreach ($codes as $code)
-      {
-        // 
-      }
-    
-    }
-
 }

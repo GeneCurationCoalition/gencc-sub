@@ -1,7 +1,7 @@
 # Submission and Job State Model - Visual Diagrams
 
-**Version**: 2.0 (String-Based States)
-**Last Updated**: November 13, 2025
+**Version**: 3.0 (Simplified Status Model)
+**Last Updated**: February 2026
 
 This document contains Mermaid state diagrams for the submission and job state workflows.
 
@@ -10,15 +10,46 @@ This document contains Mermaid state diagrams for the submission and job state w
 > **This Document**: Complete technical diagrams for all state transitions and workflows
 >
 > **Note**: These diagrams render in GitHub, GitLab, and any Markdown viewer that supports Mermaid.
-> Colors and styling are defined using Mermaid's theming capabilities.
 
 ## Table of Contents
 
-- [Complete Submission State Diagram](#complete-submission-state-diagram) - All 8 submission states
+- [Simplified State Model Overview](#simplified-state-model-overview) - Key concepts
+- [Complete Submission State Diagram](#complete-submission-state-diagram) - All 5 submission statuses
 - [Complete Job State Diagram](#complete-job-state-diagram) - All 3 job states
 - [Combined System Flow](#combined-system-flow) - Jobs + Submissions together
 - [Individual Workflows](#submission-lifecycle-by-action) - Detailed flow charts
 - [State Transition Matrix](#state-transition-matrix) - Reference table
+
+---
+
+## Simplified State Model Overview
+
+### Key Concepts
+
+The V3 state model simplifies submission status from 8 states to **5 statuses**:
+
+1. **Stage is derived from Job.status**, not stored in submission
+   - Submission's `status` field only tracks the action/visibility
+   - Whether a submission is in "draft" or "submitted" stage comes from the parent Job
+
+2. **Pending statuses (action-based)**:
+   - `new` - New submission awaiting first release
+   - `republish` - Update to existing submission awaiting release
+   - `unpublish` - Submission marked for unpublishing
+
+3. **Released statuses (visibility-based)**:
+   - `published` - Published and visible to public
+   - `unpublished` - Unpublished and hidden from public
+
+### Status vs Stage
+
+| Submission Status | Job Status = draft | Job Status = submitted |
+|-------------------|-------------------|------------------------|
+| `new` | Draft new | Submitted new |
+| `republish` | Draft republish | Submitted republish |
+| `unpublish` | Draft unpublish | Submitted unpublish |
+| `published` | N/A (not in job) | N/A (not in job) |
+| `unpublished` | N/A (not in job) | N/A (not in job) |
 
 ---
 
@@ -32,7 +63,7 @@ graph TB
         J1[Create Draft Job]
         J2[Submit Job]
         J3[Process Job run:publish]
-        J4[Job Processed]
+        J4[Job Released]
 
         J1 -->|Add submissions| J1
         J1 -->|All valid| J2
@@ -42,40 +73,38 @@ graph TB
     end
 
     subgraph New[New Submission Flow]
-        S1[draft_new]
-        S2[submitted_new]
-        S3[published]
+        S1[status: new<br>stage: draft]
+        S2[status: new<br>stage: submitted]
+        S3[status: published]
 
         S1 -->|Job submitted| S2
         S2 -->|run:publish| S3
     end
 
     subgraph Republish[Republish Flow]
-        S4[draft_republish]
-        S5[submitted_republish]
+        S4[status: republish<br>stage: draft]
+        S5[status: republish<br>stage: submitted]
 
         S3 -->|Click Edit| S4
-        S4 -->|Store origin_snapshot| S4
         S4 -->|Job submitted| S5
         S5 -->|run:publish| S3
-        S4 -->|Restore| S3
+        S4 -->|Cancel| S3
     end
 
     subgraph Unpublish[Unpublish Flow]
-        S6[draft_unpublish]
-        S7[submitted_unpublish]
-        S8[unpublished]
+        S6[status: unpublish<br>stage: draft]
+        S7[status: unpublish<br>stage: submitted]
+        S8[status: unpublished]
 
         S3 -->|Click Unpublish| S6
         S6 -->|Job submitted| S7
         S7 -->|run:publish| S8
-        S6 -->|Restore| S3
+        S6 -->|Cancel| S3
         S8 -->|Click Republish| S4
     end
 
     J1 -.->|Contains| S1
     J2 -.->|Contains| S2
-    J4 -.->|Records| REC[processed_submission_ids]
 
     style J1 fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px
     style J2 fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px
@@ -89,113 +118,93 @@ graph TB
     style S6 fill:#FBBF24,stroke:#F59E0B,stroke-width:2px
     style S7 fill:#60A5FA,stroke:#3B82F6,stroke-width:2px
     style S8 fill:#D1D5DB,stroke:#6B7280,stroke-width:2px
-    style REC fill:#FEE2E2,stroke:#EF4444,stroke-width:2px
 ```
 
 **Legend:**
 
-- 🟡 **Yellow** = Draft states (editable)
-- 🔵 **Blue** = Submitted states (awaiting processing)
-- 🟢 **Green** = Published/Processed (active/complete)
+- 🟡 **Yellow** = Draft stage (editable)
+- 🔵 **Blue** = Submitted stage (awaiting processing)
+- 🟢 **Green** = Published/Released (active/complete)
 - ⚫ **Gray** = Unpublished (hidden)
 
 ---
 
 ## Complete Submission State Diagram
 
-This diagram shows all possible state transitions for submissions in the V2 state machine.
+This diagram shows all possible state transitions for submissions in the V3 (simplified) state machine.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> draft_new: Create New Submission
+    [*] --> new: Create New Submission
 
-    draft_new --> submitted_new: Submit Job
-    draft_new --> [*]: Delete Submission
+    new --> published: Release (via run:publish)
+    new --> [*]: Delete Submission
 
-    submitted_new --> published: Publish Success
-    submitted_new --> draft_new: Restore Job
+    published --> republish: Click Edit
+    published --> unpublish: Click Unpublish
 
-    published --> draft_republish: Click Edit
-    published --> draft_unpublish: Click Unpublish
+    republish --> published: Release Success
+    republish --> published: Cancel (was published)
+    republish --> unpublished: Cancel (was unpublished)
 
-    draft_republish --> submitted_republish: Submit Job
-    draft_republish --> published: Restore from published
-    draft_republish --> unpublished: Restore from unpublished
+    unpublish --> unpublished: Release Success
+    unpublish --> published: Cancel
 
-    submitted_republish --> published: Publish Success
-    submitted_republish --> draft_republish: Restore Job
+    unpublished --> republish: Click Republish
 
-    draft_unpublish --> submitted_unpublish: Submit Job
-    draft_unpublish --> published: Restore
-
-    submitted_unpublish --> unpublished: Unpublish Success
-    submitted_unpublish --> draft_unpublish: Restore Job
-
-    unpublished --> draft_republish: Click Republish
-
-    note right of draft_new
-        🟡 Draft New
+    note right of new
+        🟡/🔵 New
         ━━━━━━━━━━━━━━
-        • Editable
-        • In draft job
+        • Pending status
+        • Stage from Job.status
+        • Editable in draft stage
         • Can have errors
-        • Stores: origin_job_id
-    end note
-
-    note right of submitted_new
-        🔵 Submitted New
-        ━━━━━━━━━━━━━━━━
-        • Not editable
-        • In submitted job
-        • No errors allowed
-        • Awaits daily processing
     end note
 
     note right of published
         🟢 Published
         ━━━━━━━━━━━━
+        • Released status
         • Public visible
         • Not editable
         • Has SGC ID
         • Can republish/unpublish
     end note
 
-    note right of draft_republish
-        🟠 Draft Republish
+    note right of republish
+        🟠/🔵 Republish
         ━━━━━━━━━━━━━━━━━
-        • Editable
-        • In draft job
-        • Stores: origin_state,
-          origin_snapshot,
-          origin_job_id
+        • Pending status
+        • Stage from Job.status
+        • Editable in draft stage
+        • Stores origin_state
     end note
 
-    note right of draft_unpublish
-        🟤 Draft Unpublish
+    note right of unpublish
+        🟤/🔵 Unpublish
         ━━━━━━━━━━━━━━━━━
-        • Read-only
-        • In draft job
-        • Stores: origin_state,
-          origin_job_id
+        • Pending status
+        • Stage from Job.status
+        • NOT editable (read-only)
+        • Stores origin_state
     end note
 
     note right of unpublished
         ⚫ Unpublished
         ━━━━━━━━━━━━━━
+        • Released status
         • Hidden from public
         • Not editable
         • Has SGC ID
         • Can republish
     end note
 
-    classDef draftStyle fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px,color:#000
-    classDef submittedStyle fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#000
-    classDef publishedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
+    classDef pendingStyle fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px,color:#000
+    classDef releasedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
     classDef unpublishedStyle fill:#D1D5DB,stroke:#6B7280,stroke-width:2px,color:#000
 
-    class draft_new,draft_republish,draft_unpublish draftStyle
-    class submitted_new,submitted_republish,submitted_unpublish submittedStyle
-    class published publishedStyle
+    class new,republish,unpublish pendingStyle
+    class published releasedStyle
     class unpublished unpublishedStyle
 ```
 
@@ -203,84 +212,51 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> draft_new: Create via UI or Upload
+    [*] --> new: Create via UI or Upload
 
-    draft_new --> submitted_new: Job Submitted
-    draft_new --> [*]: Delete
+    state new {
+        draft_stage --> submitted_stage: Job Submitted
+        submitted_stage --> draft_stage: Job Cancelled
+    }
 
-    submitted_new --> published: Publish Success
-    submitted_new --> draft_new: Job Restored
+    new --> published: Release Success
+    new --> [*]: Delete
 
-    note right of draft_new
-        Initial State
-        - Editable
-        - In draft job
-        - Has validation
-    end note
-
-    note right of submitted_new
-        Awaiting Publish
-        - Not editable
-        - In submitted job
-        - No errors allowed
+    note right of new
+        Pending Status: new
+        - Stage derived from Job.status
+        - Editable when Job.status = draft
+        - Immutable when Job.status = submitted
     end note
 
     note right of published
-        Terminal State
+        Released Status
         - Public visible
         - Can republish or unpublish
     end note
 ```
 
-## Republish Workflow (from Published)
+## Republish Workflow
 
 ```mermaid
 stateDiagram-v2
-    published --> draft_republish: Click Republish
+    published --> republish: Click Republish
+    unpublished --> republish: Click Republish
 
-    draft_republish --> submitted_republish: Job Submitted
-    draft_republish --> published: Restore
+    state republish {
+        draft_stage --> submitted_stage: Job Submitted
+        submitted_stage --> draft_stage: Job Cancelled
+    }
 
-    submitted_republish --> published: Publish Success
-    submitted_republish --> draft_republish: Job Restored
+    republish --> published: Release Success
+    republish --> published: Cancel (origin_state=published)
+    republish --> unpublished: Cancel (origin_state=unpublished)
 
-    note right of draft_republish
-        Update Mode
-        - Editable
-        - In draft job
-        - origin_state = 'published'
-    end note
-
-    note right of submitted_republish
-        Awaiting Republish
-        - Not editable
-        - In submitted job
-    end note
-```
-
-## Republish Workflow (from Unpublished)
-
-```mermaid
-stateDiagram-v2
-    unpublished --> draft_republish: Click Republish
-
-    draft_republish --> submitted_republish: Job Submitted
-    draft_republish --> unpublished: Restore
-
-    submitted_republish --> published: Publish Success
-    submitted_republish --> draft_republish: Job Restored
-
-    note right of draft_republish
-        Restore Mode
-        - Editable
-        - In draft job
-        - origin_state = 'unpublished'
-    end note
-
-    note right of unpublished
-        Hidden State
-        - Not public visible
-        - Can be restored
+    note right of republish
+        Pending Status: republish
+        - origin_state tracks where to restore
+        - Editable when Job.status = draft
+        - Immutable when Job.status = submitted
     end note
 ```
 
@@ -288,36 +264,32 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    published --> draft_unpublish: Click Unpublish
+    published --> unpublish: Click Unpublish
 
-    draft_unpublish --> submitted_unpublish: Job Submitted
-    draft_unpublish --> published: Restore
+    state unpublish {
+        draft_stage --> submitted_stage: Job Submitted
+        submitted_stage --> draft_stage: Job Cancelled
+    }
 
-    submitted_unpublish --> unpublished: Unpublish Success
-    submitted_unpublish --> draft_unpublish: Job Restored
+    unpublish --> unpublished: Release Success
+    unpublish --> published: Cancel
 
-    note right of draft_unpublish
-        Unpublish Mode
-        - NOT editable
-        - In draft job
-    end note
-
-    note right of submitted_unpublish
-        Awaiting Unpublish
-        - Not editable
-        - In submitted job
+    note right of unpublish
+        Pending Status: unpublish
+        - NOT editable (read-only)
+        - Only action is submit or cancel
     end note
 
     note right of unpublished
-        Hidden State
-        - Not public visible
+        Released Status
+        - Hidden from public
         - Can be republished
     end note
 ```
 
 ## Complete Job State Diagram
 
-This diagram shows all possible state transitions for jobs in the V2 state machine.
+This diagram shows all possible state transitions for jobs in the V3 state machine.
 
 ```mermaid
 stateDiagram-v2
@@ -326,18 +298,18 @@ stateDiagram-v2
     draft --> submitted: Submit Job
     draft --> [*]: Delete Job
 
-    submitted --> processed: Publish Success
-    submitted --> submitted: Publish All Failed
-    submitted --> draft: Restore Before Processing
+    submitted --> released: Release Success
+    submitted --> submitted: Release All Failed
+    submitted --> draft: Cancel Before Processing
 
-    processed --> [*]
+    released --> [*]
 
     note right of draft
         🟡 Draft
         ━━━━━━━━━━
         • Add/edit/remove submissions
-        • All submissions must be draft_xxx
-        • Can delete if empty
+        • All submissions editable
+        • Can delete if appropriate
         • One per submitter limit
     end note
 
@@ -345,28 +317,27 @@ stateDiagram-v2
         🔵 Submitted
         ━━━━━━━━━━━━━
         • No edits allowed
-        • Can restore before run:publish
-        • Processed daily automatically
-        • Blocks new draft creation
+        • Can cancel before run:publish
+        • Processed by scheduled job
+        • Submissions immutable
     end note
 
-    note right of processed
-        🟢 Processed
+    note right of released
+        🟢 Released
         ━━━━━━━━━━━━━
         • Terminal state
-        • All submissions processed
+        • All submissions released
         • Cannot be deleted
-        • Records processed_submission_ids:
-          [{sid, action}]
+        • Tracks released_at timestamp
     end note
 
     classDef draftStyle fill:#FEF3C7,stroke:#F59E0B,stroke-width:2px,color:#000
     classDef submittedStyle fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#000
-    classDef processedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
+    classDef releasedStyle fill:#86EFAC,stroke:#10B981,stroke-width:2px,color:#000
 
     class draft draftStyle
     class submitted submittedStyle
-    class processed processedStyle
+    class released releasedStyle
 ```
 
 ## Job State with Failure Handling
@@ -377,13 +348,13 @@ stateDiagram-v2
 
     draft --> submitted: Submit
 
-    submitted --> processing: Publish Starts
+    submitted --> processing: Release Starts
 
-    processing --> processed: All Success
+    processing --> released: All Success
     processing --> failed_partial: Some Failed
     processing --> submitted: All Failed
 
-    failed_partial --> processed: Mark Original
+    failed_partial --> released: Mark Original
     failed_partial --> draft: Create New Job with Failures
 
     note right of processing
@@ -395,9 +366,9 @@ stateDiagram-v2
 
     note right of failed_partial
         Partial Failure
-        - Successful submissions → processed
+        - Successful submissions → released
         - Failed submissions → new draft job
-        - Failed submissions reset to draft_xxx
+        - Failed submissions keep pending status
     end note
 ```
 
@@ -408,19 +379,20 @@ stateDiagram-v2
 ```mermaid
 flowchart TD
     A[User Creates Submission] --> B{Has Errors?}
-    B -->|Yes| C[draft_new with errors]
-    B -->|No| D[draft_new no errors]
+    B -->|Yes| C[status: new, has_errors: true]
+    B -->|No| D[status: new, no errors]
 
     C --> E[User Fixes Errors]
     E --> D
 
     D --> F[User Submits Job]
-    F --> G[submitted_new]
+    F --> G[Job.status: submitted]
+    G --> H[Submission immutable]
 
-    G --> H[run:publish Executes]
-    H --> I{Success?}
-    I -->|Yes| J[published]
-    I -->|No| K[Back to draft_new with errors]
+    H --> I[run:publish Executes]
+    I --> J{Success?}
+    J -->|Yes| K[status: published]
+    J -->|No| L[Move to new draft job]
 ```
 
 ### Republish Existing Submission
@@ -429,24 +401,21 @@ flowchart TD
 flowchart TD
     A[published submission] --> B[User clicks Republish]
     B --> C[Move to draft job]
-    C --> D[draft_republish state]
+    C --> D[status: republish]
     D --> E{Store origin data}
     E --> F[origin_state = 'published']
-    E --> G[origin_snapshot = field values]
-    E --> H[origin_job_id = original job]
 
-    H --> I[User Edits]
-    I --> J{User Action?}
+    F --> G[User Edits]
+    G --> H{User Action?}
 
-    J -->|Submit| K[Job Submitted]
-    K --> L[submitted_republish]
-    L --> M[run:publish]
-    M --> N[published + processed_submission_ids]
+    H -->|Submit| I[Job Submitted]
+    I --> J[Job.status: submitted]
+    J --> K[run:publish]
+    K --> L[status: published]
 
-    J -->|Restore| O[Revert all changes]
-    O --> P[Restore from origin_snapshot]
-    O --> Q[Back to published state]
-    O --> R[Back to original_job_id]
+    H -->|Cancel| M[Revert all changes]
+    M --> N[Back to published status]
+    M --> O[Back to original job]
 ```
 
 ### Unpublish Submission
@@ -455,28 +424,27 @@ flowchart TD
 flowchart TD
     A[published submission] --> B[User clicks Unpublish]
     B --> C[Move to draft job]
-    C --> D[draft_unpublish state - READ ONLY]
+    C --> D[status: unpublish - READ ONLY]
     D --> E{Store origin data}
     E --> F[origin_state = 'published']
-    E --> G[origin_job_id = original job]
 
-    G --> H{User Action?}
+    F --> G{User Action?}
 
-    H -->|Submit| I[Job Submitted]
-    I --> J[submitted_unpublish]
-    J --> K[run:publish unpublish]
-    K --> L[unpublished + processed_submission_ids]
+    G -->|Submit| H[Job Submitted]
+    H --> I[Job.status: submitted]
+    I --> J[run:publish]
+    J --> K[status: unpublished]
 
-    H -->|Restore| M[Revert]
-    M --> N[Back to published]
-    M --> O[Back to original job]
+    G -->|Cancel| L[Revert]
+    L --> M[Back to published]
+    L --> N[Back to original job]
 ```
 
 ## Job Lifecycle
 
 ```mermaid
 flowchart TD
-    A[Create Job] --> B[draft state]
+    A[Create Job] --> B[status: draft]
 
     B --> C[Add Submissions]
     C --> D{All Valid?}
@@ -485,128 +453,96 @@ flowchart TD
     D -->|Yes| F[Ready to Submit]
 
     F --> G[User Submits]
-    G --> H[submitted state]
+    G --> H[status: submitted]
+    H --> I[Submissions immutable]
 
-    H --> I{run:publish Scheduled?}
-    I -->|Not Yet| J{User Restores?}
-    J -->|Yes| K[Restore Job]
-    K --> B
+    I --> J{run:publish Scheduled?}
+    J -->|Not Yet| K{User Cancels?}
+    K -->|Yes| L[Cancel Job]
+    L --> B
 
-    I -->|Yes| L[run:publish Executes Daily]
-    L --> M{Results?}
+    J -->|Yes| M[run:publish Executes]
+    M --> N{Results?}
 
-    M -->|All Success| N[processed state]
-    N --> O[Record processed_submission_ids]
-    M -->|All Fail| P[Stay submitted with errors]
-    M -->|Partial| Q[Split]
+    N -->|All Success| O[status: released]
+    O --> P[Record released_at]
+    N -->|All Fail| Q[Stay submitted with errors]
+    N -->|Partial| R[Split]
 
-    Q --> R[Successful → processed]
-    R --> O
-    Q --> S[Failed → new draft job]
+    R --> S[Successful → released]
+    S --> P
+    R --> T[Failed → new draft job]
 ```
 
 ## State Transition Matrix
 
-### Submission States
+### Submission Statuses
 
-| From State | To State(s) | Trigger | Validation |
-|------------|------------|---------|------------|
-| `draft_new` | `submitted_new` | Job submitted | No errors |
-| `draft_new` | DELETED | User deletes | In draft job |
-| `submitted_new` | `published` | run:publish success | - |
-| `submitted_new` | `draft_new` | Job restored | Before run:publish |
-| `published` | `draft_republish` | User republishes | - |
-| `published` | `draft_unpublish` | User unpublishes | - |
-| `draft_republish` | `submitted_republish` | Job submitted | No errors |
-| `draft_republish` | `published` | User restores | origin_state='published' |
-| `draft_republish` | `unpublished` | User restores | origin_state='unpublished' |
-| `submitted_republish` | `published` | run:publish success | - |
-| `submitted_republish` | `draft_republish` | Job restored | Before run:publish |
-| `draft_unpublish` | `submitted_unpublish` | Job submitted | - |
-| `draft_unpublish` | `published` | User restores | - |
-| `submitted_unpublish` | `unpublished` | run:publish success | - |
-| `submitted_unpublish` | `draft_unpublish` | Job restored | Before run:publish |
-| `unpublished` | `draft_republish` | User republishes | - |
+| From Status | To Status(es) | Trigger | Validation |
+|-------------|---------------|---------|------------|
+| `new` | `published` | run:publish success | In submitted job |
+| `new` | DELETED | User deletes | In draft job |
+| `published` | `republish` | User republishes | - |
+| `published` | `unpublish` | User unpublishes | - |
+| `republish` | `published` | run:publish success | In submitted job |
+| `republish` | `published` | User cancels | origin_state='published' |
+| `republish` | `unpublished` | User cancels | origin_state='unpublished' |
+| `unpublish` | `unpublished` | run:publish success | In submitted job |
+| `unpublish` | `published` | User cancels | - |
+| `unpublished` | `republish` | User republishes | - |
 
 ### Job States
 
 | From State | To State(s) | Trigger | Validation |
-|------------|------------|---------|------------|
+|------------|-------------|---------|------------|
 | `draft` | `submitted` | User submits | All submissions valid, no errors |
-| `draft` | DELETED | User deletes | Can delete if empty or only draft submissions |
-| `submitted` | `processed` | run:publish success | At least one submission succeeds |
+| `draft` | DELETED | User deletes | Can delete if empty or only pending submissions |
+| `submitted` | `released` | run:publish success | At least one submission succeeds |
 | `submitted` | `submitted` | run:publish failure | All submissions fail |
-| `submitted` | `draft` | User restores | Before run:publish starts |
+| `submitted` | `draft` | User cancels | Before run:publish starts |
 
-### Job Processing Actions
+### Stage Derivation
 
-When a job transitions to `processed` state, the following data is recorded:
+The submission's "stage" (draft vs submitted) is determined by its parent Job:
 
-- **processed_submission_ids**: Array of objects tracking each processed submission
-  - Structure: `[{"sid": "SGC-12345", "action": "published|republished|unpublished"}]`
-  - Actions:
-    - `published`: New submission (submitted_new → published)
-    - `republished`: Updated submission (submitted_republish → published)
-    - `unpublished`: Removed submission (submitted_unpublish → unpublished)
-- This data persists even if submissions are moved to other jobs
+| Job.status | Pending Submission Stage | Can Edit Submission? |
+|------------|--------------------------|---------------------|
+| `draft` | Draft | ✅ Yes (except unpublish) |
+| `submitted` | Submitted | ❌ No (immutable) |
+| `released` | N/A | N/A (submissions are released) |
 
 ## Color Coding Guide
 
-Actual implementation uses the following color scheme:
+### Submission Statuses
 
-### Submission States (Tag Colors)
-- `draft_new`: **Light Orange** (#FEF3C7) - New submission in draft
-- `submitted_new`: **Light Blue** (#DBEAFE) - New submission processing
-- `published`: **Green** (#86EFAC) - Live/active submission
-- `draft_republish`: **Medium Orange** (#FDE68A) - Editing published submission
-- `submitted_republish`: **Medium Blue** (#BFDBFE) - Update processing
-- `draft_unpublish`: **Dark Orange** (#FBBF24) - Pending removal (read-only)
-- `submitted_unpublish`: **Dark Blue** (#60A5FA) - Unpublish processing
-- `unpublished`: **Dark Gray** (#3F3F46) - Removed/hidden
-
-### Submission Row Colors
-- **Normal**: White background (#ffffff)
-- **With Errors**: Light red background (#fef2f2)
-- Error indicator: Red warning triangle icon
+| Status | Color | Description |
+|--------|-------|-------------|
+| `new` (draft) | **Light Orange** (#FEF3C7) | New submission in draft job |
+| `new` (submitted) | **Light Blue** (#DBEAFE) | New submission awaiting release |
+| `republish` (draft) | **Medium Orange** (#FDE68A) | Editing published submission |
+| `republish` (submitted) | **Medium Blue** (#BFDBFE) | Update awaiting release |
+| `unpublish` (draft) | **Dark Orange** (#FBBF24) | Pending removal (read-only) |
+| `unpublish` (submitted) | **Dark Blue** (#60A5FA) | Unpublish awaiting release |
+| `published` | **Green** (#86EFAC) | Live/active submission |
+| `unpublished` | **Dark Gray** (#3F3F46) | Removed/hidden |
 
 ### Job States
-- `draft`: **Orange/Yellow** tag - Work in progress
-- `submitted`: **Blue** tag - Awaiting daily processing
-- `processed`: **Green** tag - Completed processing
 
-### Job Header Colors (Detail View)
-- `draft`: Yellow header (bg-yellow-500)
-- `submitted`: Blue header (bg-blue-500)
-- `processed`: Green header (bg-green-500)
-
-## Icon Recommendations
-
-### Submission Actions (Actual Implementation)
-- **Create New**: Not specific icon, part of job creation
-- **Edit (Republish)**: `pi-pencil` (pencil icon)
-- **Unpublish**: `pi-eye-slash` (eye-slash icon)
-- **Restore**: `pi-times-circle` (times-circle icon) - Used for cancel/restore
-- **View/Edit**: `pi-arrow-right` (arrow icon)
-- **Submit Job**: Button with "Submit" text
-- **Delete**: `pi-trash`
-
-### Submission Error Indicators
-- **Has Errors**: `pi-exclamation-triangle` (red warning triangle)
-
-### Job Error Indicators
-- **Draft with Errors**: `pi-exclamation-triangle` (red warning triangle in status column)
+| State | Color | Description |
+|-------|-------|-------------|
+| `draft` | **Orange/Yellow** | Work in progress |
+| `submitted` | **Blue** | Awaiting daily processing |
+| `released` | **Green** | Completed processing |
 
 ## Glossary
 
-- **Draft State** (`draft_xxx`): Submission can be edited (except draft_unpublish), belongs to a draft job
-- **Submitted State** (`submitted_xxx`): Submission locked, awaiting run:publish processing
-- **Terminal State**: Final state that cannot transition (except `published` and `unpublished` which can be republished)
-- **Origin State** (`origin_state`): Stored state for restore operations (published/unpublished)
-- **Origin Snapshot** (`origin_snapshot`): JSON snapshot of all editable field values before entering draft_republish or draft_unpublish state
-- **Origin Job** (`origin_job_id`): Foreign key to the job the submission belonged to before being moved to a draft job
-- **Processed Submission IDs** (`processed_submission_ids`): Array tracking which submissions were processed by a job with their action type
-- **run:publish**: Backend command that processes submitted jobs daily and publishes to GenCC-Search
-- **Restore**: Action to cancel draft changes and return submission to its original state, job, and field values
+- **Pending Status** (`new`, `republish`, `unpublish`): Submission awaiting release
+- **Released Status** (`published`, `unpublished`): Submission has been released
+- **Stage**: Derived from Job.status - either "draft" (editable) or "submitted" (immutable)
+- **Origin State** (`origin_state`): Stored status for cancel operations (published/unpublished)
+- **Immutable**: Cannot have fields edited - either released or in submitted job
+- **run:publish**: Backend command that processes submitted jobs and releases submissions
+- **Cancel**: Action to cancel draft changes and return submission to its original status and job
 - **Republish**: Action to edit and re-publish an already published submission
 - **Unpublish**: Action to remove a published submission from public view
 
@@ -616,9 +552,8 @@ Actual implementation uses the following color scheme:
 
 - [STATE_MODEL_USER_GUIDE.md](STATE_MODEL_USER_GUIDE.md) - User-friendly guide with simple visual workflows
 - [STATE_MODEL_QUICK_REFERENCE.md](STATE_MODEL_QUICK_REFERENCE.md) - Technical reference with code examples
-- [DASHBOARD_TECHNICAL_GUIDE.md](DASHBOARD_TECHNICAL_GUIDE.md) - Dashboard implementation details
 
 ---
 
-**Version**: 2.0
-**Last Updated**: November 13, 2025
+**Version**: 3.0
+**Last Updated**: February 2026

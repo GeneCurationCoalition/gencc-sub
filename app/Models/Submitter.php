@@ -51,7 +51,7 @@ class Submitter extends Model
                             'logo_contents', 'logo_mime_type',
                             'website', 'assertion',
                             'counts', 'contacts', 'activity', 'notes',
-                            'member', 'downloadable',
+                            'allow_submissions', 'downloadable',
                             'status' ];
 
 	/**
@@ -257,6 +257,8 @@ class Submitter extends Model
             'name' => $data['name'],
             'status' => $data['status'] ?? self::STATUS_INITIALIZING,
             'type' => $data['type'] ?? self::TYPE_SUBMITTER,
+            'downloadable' => $data['downloadable'] ?? true,  // Default to downloadable
+            'allow_submissions' => $data['allow_submissions'] ?? true,  // Default to allow submissions
         ];
 
         // Optional fields
