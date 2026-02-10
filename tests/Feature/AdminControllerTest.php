@@ -103,16 +103,16 @@ class AdminControllerTest extends TestCase
     public function test_unauthenticated_cannot_access_admin_endpoints(): void
     {
         $response = $this->postJson('/api/admin/run-publish');
-        $response->assertStatus(403);
+        $response->assertStatus(401);
 
         $response = $this->postJson('/api/admin/update-diseases');
-        $response->assertStatus(403);
+        $response->assertStatus(401);
 
         $response = $this->postJson('/api/admin/update-genes');
-        $response->assertStatus(403);
+        $response->assertStatus(401);
 
         $response = $this->postJson('/api/admin/sync-pubmed');
-        $response->assertStatus(403);
+        $response->assertStatus(401);
     }
 
     /**
