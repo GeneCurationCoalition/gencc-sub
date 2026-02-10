@@ -158,12 +158,25 @@ jobs:
             User ${{ steps.oslogin.outputs.oslogin_username }}
             IdentityFile ${RUNNER_TEMP}/oslogin_key
             IdentitiesOnly yes
+            ControlMaster auto
+            ControlPersist 20m
+            ControlPath ~/.ssh/cm-%r@%h:%p
+            ServerAliveInterval 30
+            ServerAliveCountMax 4
+            TCPKeepAlive yes
+            ConnectTimeout 20
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ProxyCommand gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project ${GCP_PROJECT_ID} --zone ${GCP_ZONE}
           EOF
 
           chmod 600 "${HOME}/.ssh/config"
+
+      - name: Warm SSH master connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -F "${HOME}/.ssh/config" -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=20m -Nf "${GCP_INSTANCE_NAME}" || true
 
       - name: Build Ansible extra-vars
         shell: bash
