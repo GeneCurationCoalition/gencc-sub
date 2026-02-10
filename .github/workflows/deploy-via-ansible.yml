@@ -53,11 +53,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Guard trusted branch
-        # TODO change back to main after testing
-        if: ${{ github.ref != 'refs/heads/kf/fresh-deployment' }}
+        if: ${{ github.ref != 'refs/heads/main' }}
         shell: bash
         run: |
-          echo "This workflow is trusted only on refs/heads/kf/fresh-deployment."
+          echo "This workflow is trusted only on refs/heads/main."
           echo "Current ref: ${GITHUB_REF}"
           exit 1
 
@@ -158,6 +157,13 @@ jobs:
             User ${{ steps.oslogin.outputs.oslogin_username }}
             IdentityFile ${RUNNER_TEMP}/oslogin_key
             IdentitiesOnly yes
+            ControlMaster auto
+            ControlPersist 20m
+            ControlPath ~/.ssh/cm-%r@%h:%p
+            ServerAliveInterval 30
+            ServerAliveCountMax 4
+            TCPKeepAlive yes
+            ConnectTimeout 20
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ProxyCommand gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project ${GCP_PROJECT_ID} --zone ${GCP_ZONE}
@@ -165,15 +171,16 @@ jobs:
 
           chmod 600 "${HOME}/.ssh/config"
 
-      - name: Build Ansible inventory and extra-vars
+      - name: Warm SSH master connection
         shell: bash
         run: |
           set -euo pipefail
+          ssh -F "${HOME}/.ssh/config" -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=20m -Nf "${GCP_INSTANCE_NAME}" || true
 
-          cat > "${RUNNER_TEMP}/inventory.ini" <<EOF
-          [gcp_vms]
-          ${GCP_INSTANCE_NAME}
-          EOF
+      - name: Build Ansible extra-vars
+        shell: bash
+        run: |
+          set -euo pipefail
 
           jq -n \
             --arg sub_image "${{ steps.validate.outputs.sub_image }}" \
@@ -195,7 +202,7 @@ jobs:
           set -euo pipefail
           cd deployment/ansible
           ansible-playbook \
-            -i "${RUNNER_TEMP}/inventory.ini" \
+            -i inventories/gencc.ini \
             playbooks/site.yml \
             --vault-password-file "${RUNNER_TEMP}/.vault-pass" \
             -e @"${RUNNER_TEMP}/extra-vars.json"

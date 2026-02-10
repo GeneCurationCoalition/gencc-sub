@@ -1,0 +1,9 @@
+[Unit]
+Description=Backup GenCC MySQL database to GCS
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gencc/bin/backup-db.sh
+

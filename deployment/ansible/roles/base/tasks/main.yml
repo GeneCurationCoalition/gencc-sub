@@ -1,0 +1,131 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - jq
+      - unzip
+      - sudo
+      - podman
+      - uidmap
+      - slirp4netns
+      - dbus-user-session
+      - mysql-client
+      - mysql-server
+    state: present
+
+- name: Check if snap is installed
+  ansible.builtin.stat:
+    path: /usr/bin/snap
+  register: gencc_snap_bin
+
+- name: Read snap allowed home directories (snapd confinement)
+  ansible.builtin.command: snap get system homedirs
+  register: gencc_snap_homedirs
+  changed_when: false
+  failed_when: false
+  when: gencc_snap_bin.stat.exists
+
+- name: Allow OS Login home roots for confined snaps (gcloud snap)
+  ansible.builtin.command: >-
+    snap set system homedirs={{ gencc_snap_homedirs_desired }}
+  vars:
+    gencc_snap_homedirs_current: "{{ gencc_snap_homedirs.stdout | trim }}"
+    gencc_snap_homedirs_desired: >-
+      {{
+        '/home,/home/unix'
+        if gencc_snap_homedirs_current in ['', 'null']
+        else (
+          gencc_snap_homedirs_current
+          if '/home/unix' in (gencc_snap_homedirs_current.split(',') | map('trim') | list)
+          else gencc_snap_homedirs_current ~ ',/home/unix'
+        )
+      }}
+  when:
+    - gencc_snap_bin.stat.exists
+    - (gencc_snap_homedirs.stdout | trim) != (gencc_snap_homedirs_desired | trim)
+
+- name: Ensure deploy user exists
+  ansible.builtin.user:
+    name: "{{ gencc_deploy_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Enable lingering for deploy user (rootless podman survives reboot)
+  ansible.builtin.command: "loginctl enable-linger {{ gencc_deploy_user }}"
+  changed_when: false
+
+- name: Create secrets directory
+  ansible.builtin.file:
+    path: "{{ gencc_secrets_dir }}"
+    state: directory
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+
+- name: Create data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+  loop:
+    - "{{ gencc_data_dir }}"
+    - "{{ gencc_data_dir }}/gencc-sub/storage"
+    - "{{ gencc_data_dir }}/gencc-search/storage"
+
+- name: Ensure Laravel storage subdirectories exist and are writable (rootless podman)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    # Rootless containers run app processes as non-root users (e.g. www-data).
+    # These users are uid-mapped and won't match host ownership, so we rely on
+    # parent directory traversal restrictions for safety and make the storage
+    # tree writable here.
+    mode: "0777"
+  loop:
+    - "{{ gencc_data_dir }}/gencc-sub/storage"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/app"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/cache"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/sessions"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/framework/views"
+    - "{{ gencc_data_dir }}/gencc-sub/storage/logs"
+    - "{{ gencc_data_dir }}/gencc-search/storage"
+    - "{{ gencc_data_dir }}/gencc-search/storage/app"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/cache"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/sessions"
+    - "{{ gencc_data_dir }}/gencc-search/storage/framework/views"
+    - "{{ gencc_data_dir }}/gencc-search/storage/logs"
+
+- name: Ensure Laravel log files are writable by app user (prevents silent 500s)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: touch
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0666"
+  loop:
+    - "{{ gencc_data_dir }}/gencc-sub/storage/logs/laravel.log"
+    - "{{ gencc_data_dir }}/gencc-search/storage/logs/laravel.log"
+
+- name: Verify gcloud is installed on the VM (required for IAP/ops scripts)
+  ansible.builtin.command: gcloud version
+  register: gencc_gcloud_version
+  changed_when: false
+
+- name: Verify gsutil is installed on the VM (required for backup/restore scripts)
+  ansible.builtin.command: gsutil version
+  register: gencc_gsutil_version
+  changed_when: false

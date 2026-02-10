@@ -1,0 +1,69 @@
+---
+- name: Write application .env files from vault
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ gencc_secrets_dir }}/{{ item.name }}.env"
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    # NOTE: This file is mounted into the container as `/var/www/html/.env`.
+    # It must be readable by the web user (e.g. www-data/nginx) inside the image.
+    # Host-side access is still restricted by `gencc_secrets_dir` permissions (0750 root:gencc).
+    mode: "0644"
+  loop:
+    - { name: "gencc-sub", content: "{{ gencc_sub_env | default('') }}" }
+    - { name: "gencc-search", content: "{{ gencc_search_env | default('') }}" }
+  no_log: true
+
+- name: Ensure application .env files are set
+  ansible.builtin.assert:
+    that:
+      - gencc_sub_env is defined
+      - gencc_search_env is defined
+      - gencc_sub_env | length > 0
+      - gencc_search_env | length > 0
+    fail_msg: "Set app .env contents in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
+
+- name: Ensure Quadlet directory exists for deploy user
+  ansible.builtin.file:
+    path: "/home/{{ gencc_deploy_user }}/.config/containers/systemd"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+
+- name: Install gencc-sub quadlet unit
+  ansible.builtin.template:
+    src: gencc-sub.container.j2
+    dest: "/home/{{ gencc_deploy_user }}/.config/containers/systemd/gencc-sub.container"
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0644"
+
+- name: Install gencc-search quadlet unit
+  ansible.builtin.template:
+    src: gencc-search.container.j2
+    dest: "/home/{{ gencc_deploy_user }}/.config/containers/systemd/gencc-search.container"
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0644"
+
+- name: Reload user systemd for Quadlet (requires lingering)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid="$(id -u {{ gencc_deploy_user }})"
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    systemctl --user daemon-reload
+  args:
+    executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
+
+- name: Start (or restart) quadlet services
+  ansible.builtin.shell: |
+    set -euo pipefail
+    uid="$(id -u {{ gencc_deploy_user }})"
+    export XDG_RUNTIME_DIR="/run/user/${uid}"
+    systemctl --user restart gencc-sub.service
+    systemctl --user restart gencc-search.service
+  args:
+    executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"

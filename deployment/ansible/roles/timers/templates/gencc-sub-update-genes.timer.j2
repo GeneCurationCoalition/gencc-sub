@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule gencc-sub update:genes
+
+[Timer]
+OnCalendar={{ gencc_update_genes_oncalendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

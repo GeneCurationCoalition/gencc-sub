@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule GenCC MySQL backup
+
+[Timer]
+OnCalendar={{ gencc_backup_oncalendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule gencc-sub update:diseases
+
+[Timer]
+OnCalendar={{ gencc_update_diseases_oncalendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

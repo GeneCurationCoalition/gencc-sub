@@ -2,6 +2,19 @@
 
 This document provides instructions for deploying the GenCC Submission Portal to production environments.
 
+## Automated GCP VM deployment (Terraform + Ansible + Podman)
+
+This repo includes a **local-only** infrastructure + configuration scaffold matching the deployment plans in `ai/`:
+- Terraform: `deployment/terraform/`
+- Ansible: `deployment/ansible/`
+
+These directories are safe to commit (no secrets). They target a single GCP VM with:
+- External HTTPS Load Balancer (TLS termination + host-based routing)
+- Rootless Podman containers for `gencc-sub` and `gencc-search`
+- Host MySQL as the shared database
+
+Health check endpoint (used by load balancer checks): `GET /-/healthz` (public, returns `200 ok`).
+
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)

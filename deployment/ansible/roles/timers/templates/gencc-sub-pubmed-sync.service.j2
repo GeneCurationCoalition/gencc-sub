@@ -1,0 +1,10 @@
+[Unit]
+Description=Run gencc-sub pubmed:sync inside container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=GENCC_USER={{ gencc_deploy_user }}
+ExecStart=/usr/bin/sudo -u {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u {{ gencc_deploy_user }}); podman exec gencc-sub php artisan pubmed:sync'
+

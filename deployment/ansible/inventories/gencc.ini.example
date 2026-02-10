@@ -1,0 +1,27 @@
+[gcp_vms]
+# Example using ssh over IAP tunneling with gcloud. Update these values to point to the correct instance:
+#   - `HOST`: This should be the shortname of the instance within that region. e.g. 'gencc-vm'
+#   - `PROJECT`: The project the instance is in
+#   - `ZONE`: The zone the instance is in
+#   - `IdentityFile`: Whatever ssh key your user has configured either in their GCP account metadata. See console.cloud.google.com > Metadata > SSH Keys. Or `gcloud compute os-login ssh-keys`.
+#
+# This block can be placed in ~/.ssh/config locally to enable the `ssh` command to be used opaquely to connect
+# to a VM through IAP, both with one-off ssh commands and for ansible.
+#Host <HOST>
+#    ProxyCommand gcloud compute start-iap-tunnel %h 22 --listen-on-stdin --project <PROJECT> --zone <ZONE> --verbosity=warning
+#    IdentityFile /path/to/private/key
+#    IdentitiesOnly=yes
+#    CheckHostIP=no
+#
+# If the above HOST is set to `myinstance`, then here in [gcp_vms] you'd put (uncommented):
+#
+# myinstance
+
+
+[gcp_vms:vars]
+# Instance group specific var overrides. You can also set up the ssh IAP tunneling config here instead
+# in ~/.ssh/config, but then it's just for ansible and you cannot use it for your own ssh commands.
+#
+# Example:
+#
+# ansible_ssh_common_args='-o ProxyCommand="gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project=<PROJECT> --zone=<ZONE>"'

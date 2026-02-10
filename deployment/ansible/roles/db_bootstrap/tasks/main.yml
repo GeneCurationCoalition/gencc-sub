@@ -1,0 +1,101 @@
+---
+- name: Validate db bootstrap mode
+  ansible.builtin.assert:
+    that:
+      - gencc_db_bootstrap_mode in ["migrate_only", "restore_and_migrate"]
+    fail_msg: >-
+      Invalid gencc_db_bootstrap_mode={{ gencc_db_bootstrap_mode | default('undefined') }}.
+      Use migrate_only or restore_and_migrate.
+
+- name: Validate restore settings when restore is enabled
+  ansible.builtin.assert:
+    that:
+      - gencc_db_restore_force | bool
+      - gencc_db_restore_source is defined
+      - gencc_db_restore_source | length > 0
+    fail_msg: >-
+      Refusing to restore DB without explicit opt-in.
+      Set gencc_db_restore_force=true and gencc_db_restore_source to an https:// or gs:// .sql.gz URL.
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Ensure restore directory exists
+  ansible.builtin.file:
+    path: "{{ gencc_db_restore_tmp_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Download database dump over HTTPS
+  ansible.builtin.get_url:
+    url: "{{ gencc_db_restore_source }}"
+    dest: "{{ gencc_db_restore_tmp_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_db_restore_source is match('^https?://')
+
+- name: Download database dump from GCS
+  ansible.builtin.command: "gsutil cp {{ gencc_db_restore_source | quote }} {{ gencc_db_restore_tmp_path | quote }}"
+  changed_when: true
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_db_restore_source is match('^gs://')
+
+- name: Drop and recreate database (destructive)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mysql -e "DROP DATABASE IF EXISTS \`{{ gencc_mysql_database }}\`;"
+    mysql -e "CREATE DATABASE \`{{ gencc_mysql_database }}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  args:
+    executable: /bin/bash
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Restore database from dump (gzip -> mysql)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -f "{{ gencc_db_restore_tmp_path }}"
+    gunzip -c "{{ gencc_db_restore_tmp_path }}" | mysql "{{ gencc_mysql_database }}"
+  args:
+    executable: /bin/bash
+  async: 7200
+  poll: 0
+  register: gencc_db_restore_job
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Wait for database restore to complete
+  ansible.builtin.async_status:
+    jid: "{{ gencc_db_restore_job.ansible_job_id }}"
+  register: gencc_db_restore_status
+  until: gencc_db_restore_status.finished
+  retries: 720
+  delay: 10
+  failed_when:
+    - gencc_db_restore_status.finished | bool
+    - (gencc_db_restore_status.rc | default(0)) != 0
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Run Laravel migrations inside gencc-sub container
+  ansible.builtin.shell: |
+    set -euo pipefail
+    # Avoid Ansible become_user + async (can trigger ACL/chmod issues on some controllers).
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan migrate --force'
+  args:
+    executable: /bin/bash
+  async: 3600
+  poll: 0
+  register: gencc_db_migrate_job
+
+- name: Wait for migrations to complete
+  ansible.builtin.async_status:
+    jid: "{{ gencc_db_migrate_job.ansible_job_id }}"
+  register: gencc_db_migrate_status
+  until: gencc_db_migrate_status.finished
+  retries: 720
+  delay: 5
+  failed_when:
+    - gencc_db_migrate_status.finished | bool
+    - (gencc_db_migrate_status.rc | default(0)) != 0

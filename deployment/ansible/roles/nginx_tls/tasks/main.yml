@@ -1,0 +1,123 @@
+---
+- name: Install nginx + certbot dependencies
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - certbot
+      - jq
+      - ca-certificates
+      - curl
+      - dnsutils
+    state: present
+    update_cache: true
+
+- name: Ensure GenCC secrets directory exists
+  ansible.builtin.file:
+    path: "{{ gencc_secrets_dir }}"
+    state: directory
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+
+- name: Ensure GenCC bin directory exists
+  ansible.builtin.file:
+    path: /opt/gencc/bin
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write Let’s Encrypt DNS hook environment
+  ansible.builtin.template:
+    src: letsencrypt.env.j2
+    dest: "{{ gencc_secrets_dir }}/letsencrypt.env"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install certbot Cloud DNS hook scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/opt/gencc/bin/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - src: certbot-dns-auth.sh.j2
+      dest: certbot-dns-auth.sh
+    - src: certbot-dns-cleanup.sh.j2
+      dest: certbot-dns-cleanup.sh
+
+- name: Disable default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Install temporary HTTP-only nginx config (pre-certificate)
+  ansible.builtin.template:
+    src: gencc-http.conf.j2
+    dest: /etc/nginx/sites-available/gencc.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
+
+- name: Enable GenCC nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/gencc.conf
+    dest: /etc/nginx/sites-enabled/gencc.conf
+    state: link
+    force: true
+  notify: reload nginx
+
+- name: Ensure nginx is enabled and running
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Check if Let's Encrypt certificate already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem"
+  register: gencc_le_cert
+
+- name: Obtain/renew Let's Encrypt certificate (DNS-01)
+  ansible.builtin.command: >
+    certbot certonly
+    --manual
+    --preferred-challenges dns
+    --manual-auth-hook /opt/gencc/bin/certbot-dns-auth.sh
+    --manual-cleanup-hook /opt/gencc/bin/certbot-dns-cleanup.sh
+    --non-interactive
+    --agree-tos
+    --cert-name {{ gencc_letsencrypt_cert_name }}
+    -m {{ gencc_letsencrypt_email }}
+    {% for d in gencc_letsencrypt_domains %}-d {{ d }} {% endfor %}
+    --deploy-hook "systemctl reload nginx"
+  when:
+    - gencc_enable_letsencrypt | bool
+    - not gencc_le_cert.stat.exists
+
+- name: Re-check if Let's Encrypt certificate exists (post-issuance)
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem"
+  register: gencc_le_cert_after
+
+- name: Install HTTPS nginx config (post-certificate)
+  ansible.builtin.template:
+    src: gencc-https.conf.j2
+    dest: /etc/nginx/sites-available/gencc.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists or gencc_le_cert_after.stat.exists
+  notify: reload nginx
+
+- name: Enable certbot renewal timer
+  ansible.builtin.service:
+    name: certbot.timer
+    state: started
+    enabled: true
+  when: gencc_enable_letsencrypt | bool

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f "{{ gencc_secrets_dir }}/letsencrypt.env" ]]; then
+  # shellcheck disable=SC1091
+  . "{{ gencc_secrets_dir }}/letsencrypt.env"
+fi
+
+ZONE="${GENCC_GCP_DNS_ZONE:?GENCC_GCP_DNS_ZONE is required (see {{ gencc_secrets_dir }}/letsencrypt.env)}"
+
+DOMAIN="${CERTBOT_DOMAIN:?CERTBOT_DOMAIN missing}"
+VALIDATION="${CERTBOT_VALIDATION:?CERTBOT_VALIDATION missing}"
+
+curl_common=(--silent --show-error)
+if curl --help all 2>/dev/null | grep -q -- '--fail-with-body'; then
+  curl_common+=(--fail-with-body)
+else
+  curl_common+=(--fail)
+fi
+curl_common+=(--retry 6 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30)
+
+base_domain="$DOMAIN"
+if [[ "$base_domain" == \*.* ]]; then
+  base_domain="${base_domain#*.}"
+fi
+record_name="_acme-challenge.${base_domain}."
+
+project_id="$(curl "${curl_common[@]}" -H 'Metadata-Flavor: Google' \
+  'http://metadata.google.internal/computeMetadata/v1/project/project-id')"
+
+access_token="$(curl "${curl_common[@]}" -H 'Metadata-Flavor: Google' \
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
+  | jq -r .access_token)"
+
+api_base="https://dns.googleapis.com/dns/v1/projects/${project_id}/managedZones/${ZONE}"
+
+# If a CNAME exists at the challenge name, we didn't (and can't) create a TXT record there.
+cname_json="$(curl "${curl_common[@]}" -H "Authorization: Bearer ${access_token}" \
+  "${api_base}/rrsets?name=${record_name}&type=CNAME" \
+  | jq -c '.rrsets[0] // empty')"
+if [[ -n "${cname_json}" ]]; then
+  exit 0
+fi
+
+rrset_json="$(curl "${curl_common[@]}" -H "Authorization: Bearer ${access_token}" \
+  "${api_base}/rrsets?name=${record_name}&type=TXT" \
+  | jq -c '.rrsets[0] // empty')"
+
+if [[ -z "${rrset_json}" ]]; then
+  exit 0
+fi
+
+quoted_validation="\"${VALIDATION}\""
+
+remaining_rrdatas="$(echo "${rrset_json}" | jq -c --arg val "$quoted_validation" '
+  (.rrdatas // []) | map(select(. != $val))
+')"
+
+if [[ "${remaining_rrdatas}" == "[]" ]]; then
+  changes="$(jq -nc --argjson del "$rrset_json" '{additions:[], deletions:[$del]}')"
+else
+  new_rrset="$(echo "${rrset_json}" | jq -c --argjson rrdatas "$remaining_rrdatas" '
+    .rrdatas = $rrdatas
+  ')"
+  changes="$(jq -nc --argjson del "$rrset_json" --argjson add "$new_rrset" '{additions:[$add], deletions:[$del]}')"
+fi
+
+curl "${curl_common[@]}" -X POST -H "Authorization: Bearer ${access_token}" -H "Content-Type: application/json" \
+  -d "${changes}" \
+  "${api_base}/changes" > /tmp/gencc-dns-change.json
+
+change_id="$(jq -r '.id // empty' /tmp/gencc-dns-change.json)"
+rm -f /tmp/gencc-dns-change.json
+
+if [[ -n "${change_id}" ]]; then
+  deadline="$((SECONDS + 180))"
+  while true; do
+    status="$(curl "${curl_common[@]}" -H "Authorization: Bearer ${access_token}" \
+      "${api_base}/changes/${change_id}" \
+      | jq -r '.status // empty')"
+
+    if [[ "${status}" == "done" ]]; then
+      break
+    fi
+
+    if (( SECONDS >= deadline )); then
+      echo "Timed out waiting for Cloud DNS change ${change_id} to become done (last status: ${status})" >&2
+      exit 1
+    fi
+
+    sleep 2
+  done
+fi

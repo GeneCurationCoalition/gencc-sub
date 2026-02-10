@@ -1,0 +1,13 @@
+---
+# Database bootstrap strategy.
+# - migrate_only: preserve current DB contents; just run Laravel migrations.
+# - restore_and_migrate: drop + restore the DB from a .sql.gz dump, then run migrations.
+gencc_db_bootstrap_mode: migrate_only
+
+# Restore controls (only used when gencc_db_bootstrap_mode=restore_and_migrate)
+gencc_db_restore_source: ""
+gencc_db_restore_force: false
+
+# Where to store the downloaded dump on the VM (must end with .sql.gz for clarity)
+gencc_db_restore_tmp_path: /var/backups/gencc/gencc_sub_restore.sql.gz
+
