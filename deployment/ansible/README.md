@@ -1,6 +1,6 @@
 # Ansible — VM configuration + Podman/Quadlet deployment
 
-This is a **local-only** automation scaffold that matches the deployment architecture in `ai/2026-02-05T001502Z-synthesized-gencc-deploy-plan.GEMINI.md`.
+This automation scaffold matches the deployment architecture in `ai/2026-02-05T001502Z-synthesized-gencc-deploy-plan.GEMINI.md`.
 
 It is intentionally written so it can be run safely after Terraform provisions the VM (SSH via IAP is supported).
 
@@ -16,6 +16,22 @@ It is intentionally written so it can be run safely after Terraform provisions t
    - `ansible-vault encrypt inventories/group_vars/all/vault.yml`
 3. Run:
    - `ansible-playbook -i inventories/gencc.ini playbooks/site.yml --ask-vault-pass`
+
+## Running from GitHub Actions
+Repository workflow:
+- `.github/workflows/deploy-via-ansible.yml`
+
+This workflow:
+- Authenticates to GCP using Workload Identity Federation (OIDC)
+- Creates an ephemeral OS Login SSH key
+- Connects to the VM via IAP tunnel
+- Runs this same playbook with image/db mode overrides
+- Opens a PR updating pinned image tags in `inventories/group_vars/all/vars.yml`
+
+Required GitHub secret:
+- `ANSIBLE_VAULT_PASSWORD`
+
+GCP/instance identifiers are currently stored directly in the workflow `env`.
 
 ## Database bootstrap
 By default the playbook **does not reset** the MySQL database; it only runs Laravel migrations inside the `gencc-sub` container.
@@ -33,3 +49,4 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 - Terminates TLS on the VM using **nginx + certbot** (Let’s Encrypt). Wildcard issuance (`*.clingen.app`) uses DNS-01 via **GCP Cloud DNS**.
 - SSH access is expected via **IAP tunneling** + **OS Login**; ensure your operator account has `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin`.
 - Installs systemd units for periodic tasks as **systemd timers** (preferred over crontab).
+- The ansible vault passphrase is stored in a GCP secret named `gencc-ansible-vault-passphrase`.

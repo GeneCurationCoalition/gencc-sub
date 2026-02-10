@@ -51,11 +51,6 @@ variable "boot_disk_gb" {
   default     = 200
 }
 
-variable "ssh_user" {
-  type        = string
-  description = "OS Login Linux username Ansible will SSH as (see `gcloud compute os-login describe-profile`)."
-}
-
 variable "backup_bucket_name" {
   type        = string
   description = "Optional: existing GCS bucket name for DB backups. If set, Terraform grants the VM service account write access."
@@ -89,4 +84,43 @@ variable "dns_managed_zone_name" {
     condition     = var.enable_dns_records == false || var.dns_managed_zone_name != null
     error_message = "dns_managed_zone_name must be set when enable_dns_records=true."
   }
+}
+
+# -----------------------------------------------------------------------------
+# GitHub Actions deployment identity (OIDC/WIF)
+# -----------------------------------------------------------------------------
+variable "enable_github_actions_wif" {
+  type        = bool
+  description = "If true, create a dedicated deploy service account and GitHub OIDC Workload Identity Federation resources."
+  default     = false
+}
+
+variable "github_repository" {
+  type        = string
+  description = "GitHub repository allowed to impersonate deploy SA via WIF (owner/repo)."
+  default     = "GeneCurationCoalition/gencc-sub"
+}
+
+variable "github_deploy_workflow_file" {
+  type        = string
+  description = "Workflow file under .github/workflows that is allowed to impersonate deploy SA."
+  default     = "deploy-via-ansible.yml"
+}
+
+variable "github_deploy_branch" {
+  type        = string
+  description = "Git branch name trusted for deploy workflow impersonation."
+  default     = "main"
+}
+
+variable "github_wif_pool_id" {
+  type        = string
+  description = "Workload Identity Pool ID for GitHub OIDC."
+  default     = "gencc-sub-gha"
+}
+
+variable "github_wif_provider_id" {
+  type        = string
+  description = "Workload Identity Provider ID within the GitHub pool."
+  default     = "gencc-sub-oidc"
 }
