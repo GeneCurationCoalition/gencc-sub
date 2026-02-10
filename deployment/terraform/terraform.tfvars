@@ -20,6 +20,6 @@ search_hostname = "gencc-search-stage.clingen.app"
 enable_github_actions_wif   = true
 github_repository           = "GeneCurationCoalition/gencc-sub"
 github_deploy_workflow_file = "deploy-via-ansible.yml"
-github_deploy_branch        = "kf/fresh-deployment" # TODO change back to main after testing
+github_deploy_branch        = "main"
 github_wif_pool_id          = "gencc-sub-gha"
 github_wif_provider_id      = "gencc-sub-oidc"
