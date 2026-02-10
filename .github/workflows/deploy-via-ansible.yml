@@ -1,0 +1,227 @@
+name: Deploy v2 to Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      sub_image_tag:
+        description: "gencc-sub image tag (e.g. 2.0-beta5)"
+        required: true
+        type: string
+      search_image_tag:
+        description: "gencc-search image tag (e.g. 2.0-beta4a)"
+        required: true
+        type: string
+      db_bootstrap_mode:
+        description: "Database bootstrap strategy"
+        required: true
+        default: "migrate_only"
+        type: choice
+        options:
+          - migrate_only
+          - restore_and_migrate
+      db_restore_source:
+        description: "Restore source URL (https:// or gs:// .sql.gz), required only for restore_and_migrate"
+        required: false
+        type: string
+      confirm_restore:
+        description: "Type RESTORE to allow destructive restore mode"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: staging
+    env:
+      # Keep these in versioned workflow config for now.
+      GCP_PROJECT_ID: clingen-dev
+      GCP_ZONE: us-east1-b
+      GCP_INSTANCE_NAME: gencc-vm
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/522856288592/locations/global/workloadIdentityPools/gencc-sub-gha/providers/gencc-sub-oidc
+      GCP_DEPLOY_SERVICE_ACCOUNT: gencc-deploy@clingen-dev.iam.gserviceaccount.com
+      GENCC_SUB_IMAGE_REPO: ghcr.io/genecurationcoalition/gencc-sub
+      GENCC_SEARCH_IMAGE_REPO: ghcr.io/genecurationcoalition/gencc-search
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard trusted branch
+        # TODO change back to main after testing
+        if: ${{ github.ref != 'refs/heads/kf/fresh-deployment' }}
+        shell: bash
+        run: |
+          echo "This workflow is trusted only on refs/heads/kf/fresh-deployment."
+          echo "Current ref: ${GITHUB_REF}"
+          exit 1
+
+      - name: Validate inputs and derive deploy values
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SUB_IMAGE="${GENCC_SUB_IMAGE_REPO}:${{ inputs.sub_image_tag }}"
+          SEARCH_IMAGE="${GENCC_SEARCH_IMAGE_REPO}:${{ inputs.search_image_tag }}"
+          DB_MODE="${{ inputs.db_bootstrap_mode }}"
+          RESTORE_SOURCE="${{ inputs.db_restore_source }}"
+          RESTORE_CONFIRM="${{ inputs.confirm_restore }}"
+
+          RESTORE_FORCE="false"
+          if [[ "${DB_MODE}" == "restore_and_migrate" ]]; then
+            if [[ "${RESTORE_CONFIRM}" != "RESTORE" ]]; then
+              echo "Refusing restore_and_migrate without confirm_restore=RESTORE"
+              exit 1
+            fi
+            if [[ -z "${RESTORE_SOURCE}" ]]; then
+              echo "db_restore_source is required when db_bootstrap_mode=restore_and_migrate"
+              exit 1
+            fi
+            RESTORE_FORCE="true"
+          fi
+
+          echo "sub_image=${SUB_IMAGE}" >> "${GITHUB_OUTPUT}"
+          echo "search_image=${SEARCH_IMAGE}" >> "${GITHUB_OUTPUT}"
+          echo "db_mode=${DB_MODE}" >> "${GITHUB_OUTPUT}"
+          echo "db_restore_source=${RESTORE_SOURCE}" >> "${GITHUB_OUTPUT}"
+          echo "db_restore_force=${RESTORE_FORCE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to Google Cloud (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Ansible
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Prepare Ansible vault password file
+        shell: bash
+        env:
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANSIBLE_VAULT_PASSWORD}" ]]; then
+            echo "ANSIBLE_VAULT_PASSWORD secret is required."
+            exit 1
+          fi
+          printf '%s' "${ANSIBLE_VAULT_PASSWORD}" > "${RUNNER_TEMP}/.vault-pass"
+          chmod 600 "${RUNNER_TEMP}/.vault-pass"
+
+      - name: Create ephemeral OS Login SSH key
+        id: oslogin
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh-keygen -t ed25519 -f "${RUNNER_TEMP}/oslogin_key" -N '' -C "gha-${GITHUB_RUN_ID}"
+
+          gcloud compute os-login ssh-keys add \
+            --key-file="${RUNNER_TEMP}/oslogin_key.pub" \
+            --ttl=20m \
+            --project="${GCP_PROJECT_ID}"
+
+          OSLOGIN_USERNAME="$(gcloud compute os-login describe-profile \
+            --project="${GCP_PROJECT_ID}" \
+            --format='value(posixAccounts[0].username)')"
+
+          if [[ -z "${OSLOGIN_USERNAME}" ]]; then
+            echo "Failed to resolve OS Login username."
+            exit 1
+          fi
+
+          echo "oslogin_username=${OSLOGIN_USERNAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure SSH for IAP tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.ssh"
+          chmod 700 "${HOME}/.ssh"
+
+          cat > "${HOME}/.ssh/config" <<EOF
+          Host ${GCP_INSTANCE_NAME}
+            HostName ${GCP_INSTANCE_NAME}
+            User ${{ steps.oslogin.outputs.oslogin_username }}
+            IdentityFile ${RUNNER_TEMP}/oslogin_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand gcloud compute start-iap-tunnel %h %p --listen-on-stdin --project ${GCP_PROJECT_ID} --zone ${GCP_ZONE}
+          EOF
+
+          chmod 600 "${HOME}/.ssh/config"
+
+      - name: Build Ansible inventory and extra-vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "${RUNNER_TEMP}/inventory.ini" <<EOF
+          [gcp_vms]
+          ${GCP_INSTANCE_NAME}
+          EOF
+
+          jq -n \
+            --arg sub_image "${{ steps.validate.outputs.sub_image }}" \
+            --arg search_image "${{ steps.validate.outputs.search_image }}" \
+            --arg db_mode "${{ steps.validate.outputs.db_mode }}" \
+            --arg db_restore_source "${{ steps.validate.outputs.db_restore_source }}" \
+            --arg db_restore_force "${{ steps.validate.outputs.db_restore_force }}" \
+            '{
+              gencc_sub_image: $sub_image,
+              gencc_search_image: $search_image,
+              gencc_db_bootstrap_mode: $db_mode,
+              gencc_db_restore_source: $db_restore_source,
+              gencc_db_restore_force: ($db_restore_force == "true")
+            }' > "${RUNNER_TEMP}/extra-vars.json"
+
+      - name: Run Ansible deploy playbook
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd deployment/ansible
+          ansible-playbook \
+            -i "${RUNNER_TEMP}/inventory.ini" \
+            playbooks/site.yml \
+            --vault-password-file "${RUNNER_TEMP}/.vault-pass" \
+            -e @"${RUNNER_TEMP}/extra-vars.json"
+
+      - name: Update checked-in image tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          VARS_FILE="deployment/ansible/inventories/group_vars/all/vars.yml"
+
+          sed -Ei.bak "s|^gencc_sub_image:.*|gencc_sub_image: ${{ steps.validate.outputs.sub_image }}|" "${VARS_FILE}"
+          sed -Ei.bak "s|^gencc_search_image:.*|gencc_search_image: ${{ steps.validate.outputs.search_image }}|" "${VARS_FILE}"
+          rm -f "${VARS_FILE}.bak"
+
+      - name: Open PR for pinned image updates
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(deploy): record deployed image tags"
+          title: "chore(deploy): record deployed image tags"
+          body: |
+            Updates deployed image tags in `deployment/ansible/inventories/group_vars/all/vars.yml`.
+
+            - gencc-sub: `${{ steps.validate.outputs.sub_image }}`
+            - gencc-search: `${{ steps.validate.outputs.search_image }}`
+            - db mode: `${{ steps.validate.outputs.db_mode }}`
+          branch: "chore/deploy-image-pins-${{ github.run_id }}"
+          delete-branch: true
+          add-paths: |
+            deployment/ansible/inventories/group_vars/all/vars.yml
