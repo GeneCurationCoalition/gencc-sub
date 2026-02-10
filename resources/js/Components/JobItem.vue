@@ -467,8 +467,13 @@ const pollUploadProgress = async () => {
 
   } catch (error) {
     console.error('[Upload] Polling error:', error);
-    // Retry after 5 seconds on network error
-    setTimeout(pollUploadProgress, 5000);
+    const status = error.response?.status;
+    if (status === 401 || status === 403 || status === 419) {
+      // Session expired or unauthorized — stop polling, don't flood the server
+      stopPolling();
+      return;
+    }
+    // For transient/network errors: let the existing setInterval handle retries
   }
 };
 

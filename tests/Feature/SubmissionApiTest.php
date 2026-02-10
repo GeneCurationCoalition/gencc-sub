@@ -484,12 +484,7 @@ class SubmissionApiTest extends TestCase
             'job' => $this->job->ident
         ]);
 
-        $response->assertStatus(200);
-        $response->assertJson([
-            'success' => 'false',
-            'status_code' => 3001,
-            'message' => 'Unauthorized'
-        ]);
+        $response->assertStatus(401);
     }
 
     /**
@@ -643,7 +638,6 @@ class SubmissionApiTest extends TestCase
 
     /**
      * Test update requires authentication
-     * Routes under web middleware return 403 when not authenticated
      */
     public function test_update_requires_authentication(): void
     {
@@ -652,8 +646,7 @@ class SubmissionApiTest extends TestCase
             'public' => 'test'
         ]);
 
-        // Without authentication, web middleware returns 403
-        $response->assertStatus(403);
+        $response->assertStatus(401);
     }
 
     /**
@@ -1058,11 +1051,7 @@ class SubmissionApiTest extends TestCase
             'sids' => [$this->submission->sid]
         ]);
 
-        $response->assertStatus(200);
-        $response->assertJson([
-            'success' => 'false',
-            'status_code' => 3001
-        ]);
+        $response->assertStatus(401);
     }
 
     /**

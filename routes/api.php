@@ -75,7 +75,7 @@ Route::get('/status/job/{id}', [SubmitController::class, 'status']);
  * Various calls for validating and updating the submission relations
  * 
  */
-Route::group(['middleware' => ['web']], function () {
+Route::group(['middleware' => ['auth:sanctum']], function () {
 
     // endpoint for checking on a disease
     Route::get('/lookup/disease/{id}', [DiseaseController::class, 'show']);
@@ -179,7 +179,7 @@ Route::post('/sim', [SubmitController::class, 'pubrec']);
  * These require GenCC Administrator privileges
  * Uses web middleware for session auth; CSRF excluded in VerifyCsrfToken
  */
-Route::group(['middleware' => ['web'], 'prefix' => 'admin'], function () {
+Route::group(['middleware' => ['auth:sanctum'], 'prefix' => 'admin'], function () {
     // Operational commands
     Route::post('/run-publish', [AdminController::class, 'runPublish']);
     Route::post('/repair-release', [AdminController::class, 'repairRelease']);
