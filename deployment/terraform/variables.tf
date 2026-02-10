@@ -51,6 +51,18 @@ variable "boot_disk_gb" {
   default     = 200
 }
 
+variable "gencc_data_bucket_name" {
+  type        = string
+  description = "Managed GCS bucket name for GenCC data artifacts (restore/backup sources)."
+  default     = "gencc-dev"
+}
+
+variable "gencc_data_bucket_location" {
+  type        = string
+  description = "Location/region for the managed GenCC data bucket."
+  default     = "us-east1"
+}
+
 variable "backup_bucket_name" {
   type        = string
   description = "Optional: existing GCS bucket name for DB backups. If set, Terraform grants the VM service account write access."

@@ -10,8 +10,10 @@ This repo change is **safe to commit**: it does not contain secrets and does not
 - Ingress firewall for `80/tcp` and `443/tcp` (nginx terminates TLS on the VM)
 - Firewall rules:
   - IAP SSH (`22/tcp`) from `35.235.240.0/20`
+- A managed GCS data bucket (default: `gencc-dev`, location `us-east1`)
 - Optional Cloud DNS A records for `submit_hostname` and `search_hostname`
 - IAM: grants the VM service account `roles/dns.admin` on the managed zone (so certbot DNS-01 automation can work)
+- IAM: grants the VM service account `roles/storage.objectAdmin` on the managed data bucket
 - Optional GitHub Actions OIDC Workload Identity Federation resources for CI deploys
 
 ## Usage (operator runbook)
@@ -32,6 +34,16 @@ Your account will also need `roles/compute.osAdminLogin` (for sudo) and `roles/i
 
 ### TLS termination
 TLS termination is intentionally handled on the VM (nginx + certbot/Let’s Encrypt) via Ansible in `deployment/ansible/`.
+
+### Managed GenCC data bucket
+Terraform creates a managed GCS bucket for GenCC data artifacts:
+
+- `gencc_data_bucket_name` (default `gencc-dev`)
+- `gencc_data_bucket_location` (default `us-east1`)
+
+The VM service account receives object-level read/write/delete permissions (`roles/storage.objectAdmin`) on this bucket. This allows Ansible `restore_and_migrate` runs to read dumps from `gs://` URLs using VM identity.
+
+Because GCS bucket names are globally unique, update `gencc_data_bucket_name` in `terraform.tfvars` if `gencc-dev` is unavailable.
 
 ### Optional: GitHub Actions Workload Identity Federation
 To allow GitHub Actions to deploy through IAP + OS Login without static GCP keys:
@@ -65,6 +77,7 @@ Use these outputs in GitHub Actions auth setup:
 ## Outputs
 - `vm_internal_ip` — internal IP used by Ansible inventory
 - `vm_external_ip` — external IP for DNS (if `enable_dns_records=true`)
+- `gencc_data_bucket_name` — managed data bucket name used for GenCC artifacts
 - `ansible_inventory` — inventory snippet using IAP tunneling
 - `ansible_ssh_config` — SSH config snippet using IAP tunneling
 - `github_deploy_service_account` — deploy SA email for CI auth (when WIF enabled)

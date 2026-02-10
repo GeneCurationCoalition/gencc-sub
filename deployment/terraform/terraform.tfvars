@@ -3,6 +3,9 @@ region      = "us-east1"
 zone        = "us-east1-b"
 name_prefix = "gencc"
 
+gencc_data_bucket_name     = "gencc-dev"
+gencc_data_bucket_location = "us-east1"
+
 
 # Needed for certbot DNS-01 automation (TXT updates)
 dns_managed_zone_name = "clingen-app"

@@ -55,6 +55,20 @@ resource "google_compute_instance" "vm" {
   }
 }
 
+resource "google_storage_bucket" "gencc_data" {
+  name                        = var.gencc_data_bucket_name
+  location                    = var.gencc_data_bucket_location
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+}
+
+resource "google_storage_bucket_iam_member" "gencc_data_vm_object_admin" {
+  bucket = google_storage_bucket.gencc_data.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}
+
 resource "google_storage_bucket_iam_member" "backup_writer" {
   count  = var.backup_bucket_name != null ? 1 : 0
   bucket = var.backup_bucket_name

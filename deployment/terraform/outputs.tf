@@ -18,6 +18,11 @@ output "vm_service_account" {
   description = "Service account email attached to the VM."
 }
 
+output "gencc_data_bucket_name" {
+  value       = google_storage_bucket.gencc_data.name
+  description = "Managed GCS bucket name for GenCC data artifacts."
+}
+
 output "ansible_inventory" {
   value       = <<-EOT
     [gcp_vms]
