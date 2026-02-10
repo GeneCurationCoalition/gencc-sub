@@ -189,8 +189,6 @@ jobs:
         run: |
           set -euo pipefail
           cd deployment/ansible
-          test -f inventories/gencc.ini
-          ansible-inventory -i inventories/gencc.ini --list >/dev/null
           ansible-playbook \
             -i inventories/gencc.ini \
             playbooks/site.yml \
