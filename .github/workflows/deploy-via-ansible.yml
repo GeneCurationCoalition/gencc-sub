@@ -165,15 +165,10 @@ jobs:
 
           chmod 600 "${HOME}/.ssh/config"
 
-      - name: Build Ansible inventory and extra-vars
+      - name: Build Ansible extra-vars
         shell: bash
         run: |
           set -euo pipefail
-
-          cat > "${RUNNER_TEMP}/inventory.ini" <<EOF
-          [gcp_vms]
-          ${GCP_INSTANCE_NAME}
-          EOF
 
           jq -n \
             --arg sub_image "${{ steps.validate.outputs.sub_image }}" \
@@ -194,8 +189,10 @@ jobs:
         run: |
           set -euo pipefail
           cd deployment/ansible
+          test -f inventories/gencc.ini
+          ansible-inventory -i inventories/gencc.ini --list >/dev/null
           ansible-playbook \
-            -i "${RUNNER_TEMP}/inventory.ini" \
+            -i inventories/gencc.ini \
             playbooks/site.yml \
             --vault-password-file "${RUNNER_TEMP}/.vault-pass" \
             -e @"${RUNNER_TEMP}/extra-vars.json"
