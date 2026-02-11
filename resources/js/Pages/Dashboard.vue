@@ -38,7 +38,7 @@ async function syncClingenSubmissions() {
     isSyncingClingen.value = true;
     try {
         console.log('[Dashboard] Starting ClinGen sync...');
-        const response = await axios.post('/api/clingen/sync');
+        const response = await axios.post('/clingen/sync');
         console.log('[Dashboard] Sync response:', response.data);
 
         if (response.data.success) {
