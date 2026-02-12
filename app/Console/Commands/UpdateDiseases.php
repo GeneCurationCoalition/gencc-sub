@@ -256,16 +256,14 @@ class UpdateDiseases extends Command
                 ];
 
                 // Handle name based on deprecation and existence
+                // Note: All records must have identical columns for batch upsert
                 $label = $node['lbl'] ?? '';
                 if ($is_deprecated) {
                     $record['deprecated_name'] = $label;
-                    if (!$existing) {
-                        $record['name'] = $this->x_mondo_label($label);
-                        $record['description'] = null;
-                        $record['synonyms'] = null;
-                    }
-                    // For existing deprecated diseases, don't include name/description/synonyms in record
-                    // They will not be updated (upsert only updates specified columns)
+                    // For existing deprecated diseases, preserve their current values
+                    $record['name'] = $existing ? $existing['name'] : $this->x_mondo_label($label);
+                    $record['description'] = null;
+                    $record['synonyms'] = $existing ? json_encode([]) : null;
                 } else {
                     $record['name'] = $label;
                     $record['description'] = $meta['definition']['val'] ?? '';
@@ -741,12 +739,12 @@ class UpdateDiseases extends Command
             ];
 
             // Handle name based on deprecation and existence
+            // Note: All records must have identical columns for batch upsert
             if ($isDeprecated) {
                 $record['deprecated_name'] = $newName;
-                if (!$existing) {
-                    $record['name'] = $newName;
-                    $record['description'] = null;
-                }
+                // For existing deprecated diseases, preserve their current name
+                $record['name'] = $existing ? $existing['name'] : $newName;
+                $record['description'] = $existing ? null : null;
             } else {
                 $record['name'] = $newName;
                 $record['description'] = null;
@@ -927,13 +925,12 @@ class UpdateDiseases extends Command
             ];
 
             // Handle names based on deprecation status
+            // Note: All records must have identical columns for batch upsert
             if ($isDeprecated) {
                 $record['deprecated_name'] = $newName;
-                if (!$existing) {
-                    $record['name'] = $this->x_orphanet_label($newName);
-                    $record['description'] = null;
-                }
-                // For existing deprecated diseases, don't include name/description in record
+                // For existing deprecated diseases, preserve their current name
+                $record['name'] = $existing ? $existing['name'] : $this->x_orphanet_label($newName);
+                $record['description'] = null;
             } else {
                 $record['name'] = $this->x_orphanet_label($newName);
                 $record['deprecated_name'] = null;

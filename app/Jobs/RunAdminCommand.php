@@ -66,6 +66,27 @@ class RunAdminCommand implements ShouldQueue
             $endTime = Carbon::now();
             $duration = $startTime->diffInSeconds($endTime);
 
+            // Check output size - TEXT column limit is 64KB
+            $outputBytes = strlen($output);
+            $maxBytes = 60000; // Leave some margin below 64KB
+
+            if ($outputBytes > $maxBytes) {
+                // Log full output to file for debugging
+                $logFile = storage_path('logs/admin-command-output-' . date('Y-m-d-His') . '.log');
+                file_put_contents($logFile, $output);
+
+                Log::warning("Admin command output exceeded {$maxBytes} bytes", [
+                    'command' => $this->command,
+                    'output_bytes' => $outputBytes,
+                    'log_file' => $logFile,
+                ]);
+
+                // Truncate for database storage
+                $output = substr($output, 0, $maxBytes)
+                    . "\n\n--- OUTPUT TRUNCATED ({$outputBytes} bytes total) ---"
+                    . "\n--- Full output saved to: {$logFile} ---";
+            }
+
             $summary = $this->generateSummary($output, $exitCode);
 
             // Log to database
