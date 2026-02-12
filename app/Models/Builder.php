@@ -69,7 +69,6 @@ class Builder extends Model
       $node->mechanism_id = null;
       $node->mechanism_name = null;
       $node->mechanism_comment = null;
-      $node->workflow_dates = $data['workflow_dates'] ?? [];
       $node->publish_date = $data['report_date'];
       $node->report_date = $data['report_date'];
       $node->report_url = $data['public_report_url'];

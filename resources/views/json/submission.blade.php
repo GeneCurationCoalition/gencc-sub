@@ -24,12 +24,6 @@
 		"moi": {
 			"id": "{{ $d->hp_id }}",
 			"name": "{{ $d->moi_name }}"
-		}, 
-		"workflow": {
-			@foreach ($d->workflow_dates as $key => $value)
-			"{{ $key }}": "{{ $value }}",
-			@endforeach
-			"publish_date": ""
 		},
 		"report": {
 			"display_date": "{{ $d->report_date }}",

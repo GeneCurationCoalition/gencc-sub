@@ -1075,7 +1075,6 @@ class Submission extends Model
                     "version" => ["display" => "1.0", "reasons" => ["NEW_CURATION"], "internal" => "1.0.0.0", "description" => ""],
                     "criteria" => ["url" => "", "name" => ""],
                     "evidence" => [["pmid" => ""]],
-                    "workflow"=> ["creation_date" => Carbon::now()],
                     //"lumpsplit" => [["key" => "value"]],
                     "contributors"=> ["primary" => ["id" => "", "name" => ""]],
                     "classification" => ["id" => "", "name" => ""],

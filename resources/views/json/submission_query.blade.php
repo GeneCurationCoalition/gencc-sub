@@ -30,14 +30,6 @@
 			"moi": {
 				"id": "{{ $submission->inheritance->curie }}",
 				"name": "{{ $submission->inheritance->name }}"
-			}, 
-			"workflow": {
-				@foreach ($submission->submission_data->workflow as $key => $value)
-				@if(!$loop->first)
-				,
-				@endif
-				"{{ $key }}": "{{ $value }}"
-				@endforeach
 			},
 			"report": {
 				"display_date": "{{ $submission->report_date }}",

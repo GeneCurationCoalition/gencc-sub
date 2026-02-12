@@ -245,7 +245,6 @@ class UpdateOmim extends Command
                             "version" => ["display" => "1.0", "reasons" => ["PARTNER_IMPORT"], "internal" => "1.0.0.0", "description" => "OMIM Import"],
                             "criteria" => ["url" => "", "name" => ""],
                             "evidence" => [],
-                            "workflow"=> ["created_at" => Carbon::now(), "publish_date" => Carbon::now()],
                             "contributors"=> ["primary" => ["id" => "", "name" => ""]],
                             "classification" => ["id" => $classification->curie, "name" => $classification->name],
                             "mechanism" => ["id" => "", "name" => "", "comment" => ""],
