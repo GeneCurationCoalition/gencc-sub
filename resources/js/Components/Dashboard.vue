@@ -6,7 +6,7 @@
     import Message from 'primevue/message';
     import Tag from 'primevue/tag';
     import Button from 'primevue/button';
-    import { computed, ref, onMounted, onUnmounted } from 'vue';
+    import { computed, ref, onMounted, onUnmounted, watch } from 'vue';
     import { Link, router } from '@inertiajs/vue3';
     import axios from 'axios';
     import { useToast } from 'primevue/usetoast';
@@ -669,8 +669,8 @@
         // Immediate first poll after a short delay
         setTimeout(() => pollProgress(action), 500);
 
-        // Then poll every 2 seconds
-        progressPollingIntervals.value[action] = setInterval(() => pollProgress(action), 2000);
+        // Then poll every 5 seconds
+        progressPollingIntervals.value[action] = setInterval(() => pollProgress(action), 5000);
     }
 
     // Single poll iteration
@@ -845,6 +845,7 @@
         for (const action of Object.keys(actionToOperation)) {
             stopProgressPolling(action);
         }
+        stopJobPolling();
     });
 
     // Check if admin view (admin with no selected submitter)
@@ -855,6 +856,40 @@
 
     // Check if there are valid pending PMIDs to sync (excludes PMID=0)
     const hasPendingPubmeds = computed(() => props.pubmed_status?.pending > 0);
+
+    // Check if any jobs have active processing/publishing spinners
+    const hasActiveJobs = computed(() => {
+        if (!props.all_pending_jobs) return false;
+        return props.all_pending_jobs.some(job => job.is_publishing || job.is_processing);
+    });
+
+    // Polling for active job completion
+    const jobPollingInterval = ref(null);
+
+    function startJobPolling() {
+        if (jobPollingInterval.value) return; // Already polling
+
+        // Poll every 30 seconds
+        jobPollingInterval.value = setInterval(() => {
+            router.reload({ only: ['all_pending_jobs'] });
+        }, 30000);
+    }
+
+    function stopJobPolling() {
+        if (jobPollingInterval.value) {
+            clearInterval(jobPollingInterval.value);
+            jobPollingInterval.value = null;
+        }
+    }
+
+    // Watch for changes in active jobs to start/stop polling
+    watch(hasActiveJobs, (isActive) => {
+        if (isActive) {
+            startJobPolling();
+        } else {
+            stopJobPolling();
+        }
+    }, { immediate: true });
 
 </script>
 
@@ -1137,9 +1172,7 @@
                             <tbody>
                                 <tr v-for="job in all_pending_jobs" :key="job.id" class="border-b border-gray-200 hover:bg-gray-50">
                                     <td class="py-2 px-2">
-                                        <Link :href="'/jobs/' + job.ident" class="font-mono text-blue-600 hover:text-blue-800 hover:underline">
-                                            {{ job.slug }}
-                                        </Link>
+                                        <span class="font-mono text-gray-700">{{ job.slug }}</span>
                                         <i v-if="job.is_publishing" class="pi pi-spin pi-spinner text-blue-500 ml-1" title="Publishing..."></i>
                                         <i v-if="job.is_processing" class="pi pi-spin pi-spinner text-amber-500 ml-1" title="Processing..."></i>
                                     </td>
