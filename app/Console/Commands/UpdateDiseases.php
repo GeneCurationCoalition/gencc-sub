@@ -9,6 +9,7 @@ use App\Models\Submission;
 use App\Console\Traits\CachesFileHeaders;
 use App\Services\AdminProgressTracker;
 use JsonMachine\Items;
+use JsonMachine\JsonDecoder\ExtJsonDecoder;
 use Illuminate\Support\Str;
 
 class UpdateDiseases extends Command
@@ -208,12 +209,13 @@ class UpdateDiseases extends Command
         try {
             $nodes = Items::fromFile($cachePath, [
                 'pointer' => '/graphs/0/nodes',
+                'decoder' => new ExtJsonDecoder(true), // true = return assoc arrays
             ]);
 
             $totalNodes = 30000; // Approximate for progress tracking
 
             foreach ($nodes as $node) {
-                // JsonMachine returns arrays - use direct access
+                // ExtJsonDecoder(true) returns associative arrays
                 $nodeId = $node['id'] ?? '';
                 $term = str_replace('_', ':', basename($nodeId));
 

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use JsonMachine\Items;
+use JsonMachine\JsonDecoder\ExtJsonDecoder;
 
 use App\Models\Gene;
 use App\Console\Traits\CachesFileHeaders;
@@ -108,10 +109,11 @@ class UpdateGenes extends Command
         try {
             $genes = Items::fromFile($cachePath, [
                 'pointer' => '/response/docs',
+                'decoder' => new ExtJsonDecoder(true), // true = return assoc arrays
             ]);
 
             foreach ($genes as $record) {
-                // JsonMachine returns arrays - use direct access (no json_decode needed)
+                // ExtJsonDecoder(true) returns associative arrays
                 $hgncId = $record['hgnc_id'];
 
                 // Use existing ident if gene exists, otherwise generate new UUID
