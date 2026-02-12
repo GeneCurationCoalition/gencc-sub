@@ -15,7 +15,6 @@
 		'id' => $d->hp_id ?? '',
 		'name' => $d->moi_name ?? ''
 	],
-	'workflow' => (object) ($d->workflow_dates ?? []),
 	'report' => [
 		'display_date' => $d->report_date ?? '',
 		'ext_url' => $d->report_url ?? ''

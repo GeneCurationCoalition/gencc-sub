@@ -965,7 +965,6 @@ class DocumentController extends Controller
             $data->disease_name = $row['disease_name'];
             $data->hp_id = $row['moi_id'];
             $data->moi_name = $row['moi_name'];
-            $data->workflow_dates = [];
 
             // the date can get tricky due to excels auto format
             if (is_numeric($row['date']))

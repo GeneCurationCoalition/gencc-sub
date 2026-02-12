@@ -205,7 +205,6 @@ class ClientController extends Controller
             'disease_name' => "brain small vessel disease 3",
             'moi_id' => "HP:0000007",
             'moi_name' => "Autosomal recessive inheritance",
-            'workflow_dates' => ['approval date' => "2020-12-12 15:27:20"],
             'report_date' => Carbon::now(),
             'classification_id' => "GENCC:100001",
             'classification_name' => "Definitive",
@@ -255,7 +254,6 @@ class ClientController extends Controller
         $data->disease_name = "brain small vessel disease 3";
         $data->hp_id = "HP:0000007";
         $data->moi_name = "Autosomal recessive inheritance";
-        $data->workflow_dates = ['approval date' => "2020-12-12 15:27:20"];
         $data->publish_date = Carbon::now();
         $data->report_date = Carbon::now();
         $data->report_url = "https://search.thegencc.org/genes/HGNC:13666";
