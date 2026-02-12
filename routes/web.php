@@ -67,7 +67,7 @@ Route::get('/-/healthz', function () {
 
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    Route::post('/api/clingen/sync', [DashboardController::class, 'clingenSync'])->name('clingen.sync');
+    Route::post('/clingen/sync', [DashboardController::class, 'clingenSync'])->name('clingen.sync');
 
     Route::get('/jobs', [JobController::class, 'index'])->name('jobs.index');
 
