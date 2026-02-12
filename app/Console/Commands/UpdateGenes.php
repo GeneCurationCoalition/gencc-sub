@@ -9,6 +9,7 @@ use JsonMachine\JsonDecoder\ExtJsonDecoder;
 use App\Models\Gene;
 use App\Console\Traits\CachesFileHeaders;
 use App\Services\AdminProgressTracker;
+use Illuminate\Support\Facades\DB;
 
 class UpdateGenes extends Command
 {
@@ -229,108 +230,164 @@ class UpdateGenes extends Command
             return 0;
         }
 
-        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 0, 100, 'Downloading UniProt...');
-        try {
+        // Download and decompress the file to disk (avoids loading ~200MB into memory)
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 0, 100, 'Downloading UniProt (~100MB compressed)...');
+        $cachePath = $this->downloadGzFileToDisk($url, 'uniprot_sprot_human.dat');
+        if (!$cachePath) {
+            $this->error('......FAILED to download/decompress UniProt data');
+            AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 0, 100, 'Download failed');
+            return 0;
+        }
 
-			$results = file_get_contents($url);
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 50, 100, 'Loading gene data...');
 
-		} catch (\Exception $e) {
+        // Pre-load all genes by symbol to avoid per-protein SELECT queries
+        // This reduces ~20,000 SELECT queries to a single query
+        $geneMap = Gene::whereNotNull('symbol')
+            ->select('id', 'symbol', 'xrefs')
+            ->get()
+            ->keyBy('symbol')
+            ->toArray();
+        $this->info("......loaded " . count($geneMap) . " genes into memory");
 
-			$this->error('......FAILED to retrieve data from UNIPROT');
-			AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 0, 100, 'Download failed');
-			return 0;
-
-		}
-
-		// unzip the data
-		$data = gzdecode($results);
-
-        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 50, 100, 'Processing UniProt descriptions...');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 60, 100, 'Parsing UniProt file...');
 
         $current = ['gn' => null, 'fn' => [], 'ac' => null];
         $state = 0;
+        $updates = []; // Collect updates: symbol => ['uniprot_id' => ..., 'description' => ...]
 
-        $line = strtok($data, "\n");
+        // Stream the file line by line to minimize memory usage
+        $handle = fopen($cachePath, 'r');
+        if (!$handle) {
+            $this->error('......FAILED to open cached UniProt file');
+            return 0;
+        }
 
-		// parse the remaining file
-        while ($line !== false)
-        {
+        // Parse the file line by line, collecting updates instead of saving immediately
+        while (($line = fgets($handle)) !== false) {
+            $line = rtrim($line, "\r\n");
             $parms = preg_split('/\s+/', $line, 2);
-            switch ($parms[0])
-            {
+
+            if (count($parms) < 1) {
+                continue;
+            }
+
+            switch ($parms[0]) {
                 case 'ID':      // start of new section
                     $state = 1;     // seen a valid id
                     break;
                 case 'AC':      // uniprot id
-                    if ($state != 1)
-                    {
-                        $line = strtok("\n");
-
+                    if ($state != 1) {
                         continue 2;
                     }
                     $state = 2;
-                    $ac = preg_split('/;/', $parms[1], 2);
+                    $ac = preg_split('/;/', $parms[1] ?? '', 2);
                     $current['ac'] = $ac[0];
                     break;
                 case 'GN':      // gene name
-                    if ($state != 2)
-                    {
-                        $line = strtok("\n");
-
+                    if ($state != 2) {
                         continue 2;
                     }
                     $state = 3;
-                    $gn = preg_split('/[ ;]/', substr($parms[1], 5));
+                    $gn = preg_split('/[ ;]/', substr($parms[1] ?? '', 5));
                     $current['gn'] = $gn[0];
                     break;
                 case 'CC':      // annotations, possibly function
-                    if ($state < 3)
-                    {
-                        $line = strtok("\n");
-
+                    if ($state < 3) {
                         continue 2;
                     }
-                    if (strpos($parms[1], '-!- FUNCTION: ') === 0)
-                    {
+                    $content = $parms[1] ?? '';
+                    if (strpos($content, '-!- FUNCTION: ') === 0) {
                         $state = 4;
-                        $parms[1] = substr($parms[1], 14);
-                    }
-                    else if (strpos($parms[1], '-!- ') === 0 && $state == 4)
-                    {
+                        $content = substr($content, 14);
+                    } else if (strpos($content, '-!- ') === 0 && $state == 4) {
                         $state = 0;
 
-                        // combine the function lines into one.
+                        // Combine the function lines into one
                         $function = implode(' ', $current['fn']);
                         $function = str_replace("\n", "", $function);
 
-                        $record = Gene::symbol($current['gn'])->first();
-
-                        if ($record !== null)
-                        {
-                            $record->xrefs->uniprot_id = $current['ac'];
-                            $record->description = $function;
-                            $record->save();
+                        // Collect update if gene exists (no DB query here)
+                        if (isset($geneMap[$current['gn']])) {
+                            $updates[$current['gn']] = [
+                                'uniprot_id' => $current['ac'],
+                                'description' => $function,
+                            ];
                         }
 
                         $current = ['gn' => null, 'fn' => [], 'ac' => null];
-
                     }
-                    if ($state == 4)
-                        $current['fn'][] = $parms[1];
+                    if ($state == 4) {
+                        $current['fn'][] = $content;
+                    }
                     break;
                 default:
             }
-
-            $line = strtok("\n");
         }
+
+        fclose($handle);
+        $this->info("......found " . count($updates) . " genes to update");
+
+        // Batch update genes - uses raw SQL for efficiency
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', 80, 100, 'Updating gene descriptions...');
+        $updateCount = $this->batchUpdateUniprotDescriptions($updates, $geneMap);
 
         // Update cached headers after successful processing
         $this->updateCachedHeaders($fileIdentifier, $url);
 
+        $this->info("......updated {$updateCount} gene descriptions");
         $this->info('...UNIPROT update complete');
-        AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'uniprot', 'Descriptions updated');
+        AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'uniprot', "{$updateCount} descriptions updated");
     }
 
+    /**
+     * Batch update UniProt descriptions using MySQL JSON_SET for efficiency.
+     * This avoids loading/saving Eloquent models for each gene.
+     *
+     * @param array $updates Map of symbol => ['uniprot_id' => ..., 'description' => ...]
+     * @param array $geneMap Pre-loaded gene data keyed by symbol
+     * @return int Number of genes updated
+     */
+    protected function batchUpdateUniprotDescriptions(array $updates, array $geneMap): int
+    {
+        $updateCount = 0;
+        $batchSize = 500;
+        $chunks = array_chunk($updates, $batchSize, true);
+        $totalChunks = count($chunks);
+
+        foreach ($chunks as $chunkIndex => $chunk) {
+            // Use a transaction for each batch
+            \DB::transaction(function () use ($chunk, $geneMap, &$updateCount) {
+                foreach ($chunk as $symbol => $data) {
+                    $gene = $geneMap[$symbol] ?? null;
+                    if (!$gene) {
+                        continue;
+                    }
+
+                    // Use MySQL's JSON_SET to update only the uniprot_id key
+                    // This avoids loading and re-encoding the entire xrefs JSON
+                    \DB::table('genes')
+                        ->where('id', $gene['id'])
+                        ->update([
+                            'xrefs' => \DB::raw("JSON_SET(COALESCE(xrefs, '{}'), '\$.uniprot_id', " . \DB::getPdo()->quote($data['uniprot_id']) . ")"),
+                            'description' => $data['description'],
+                            'updated_at' => now(),
+                        ]);
+
+                    $updateCount++;
+                }
+            });
+
+            // Progress update every few batches
+            if ($chunkIndex % 5 === 0) {
+                $progress = 80 + (int)(($chunkIndex / $totalChunks) * 15);
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'uniprot', $progress, 100,
+                    "Updating genes... ({$updateCount}/" . count($updates) . ")");
+            }
+        }
+
+        return $updateCount;
+    }
 
     /**
      * Update the gene table with MANE information
@@ -351,70 +408,178 @@ class UpdateGenes extends Command
             return 0;
         }
 
+        // Download and decompress the file to disk
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mane', 0, 100, 'Downloading MANE...');
-		try {
-
-			$results = file_get_contents($url);
-
-		} catch (\Exception $e) {
-
-			$this->error('......FAILED to retrieve data from NIH');
+        $cachePath = $this->downloadGzFileToDisk($url, 'mane_summary.txt');
+        if (!$cachePath) {
+            $this->error('......FAILED to download/decompress MANE data');
             AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mane', 0, 100, 'Download failed');
-			return 0;
+            return 0;
+        }
 
-		}
-
-		// unzip the data
-		$data = gzdecode($results);
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mane', 50, 100, 'Processing MANE transcripts...');
 
-		// discard the header
-		$line = strtok($data, "\n");
+        // Clear the plus fields since there can be any number of them
+        Gene::query()->update(['coordinates->mane_plus' => null]);
+        Gene::query()->update(['coordinates->mane_select' => null]);
 
-		// hgncid is col2, plus/select is col9, transcipt is 10 through 13 (chr, start, stop, strand)
+        // hgncid is col2, plus/select is col9, transcript is 10 through 13 (chr, start, stop, strand)
 
-		// clear the plus fields since there can be any number of them
-		Gene::query()->update(['coordinates->mane_plus' => null]);
-		Gene::query()->update(['coordinates->mane_select' => null]);
+        $handle = fopen($cachePath, 'r');
+        if (!$handle) {
+            $this->error('......FAILED to open cached MANE file');
+            return 0;
+        }
 
-		// parse the remaining file
-		while (($line = strtok("\n")) !== false)
-		{
-			$parts = explode("\t", $line);
+        // Discard the header
+        fgets($handle);
 
-			$gene = Gene::hgnc_id($parts[2])->first();
+        // Parse the remaining file
+        while (($line = fgets($handle)) !== false) {
+            $line = rtrim($line, "\r\n");
+            $parts = explode("\t", $line);
 
-			// there is at least one record with no hgncid, but it does have a symbol.
-			if (empty($gene))
-			{
-				$gene = Gene::symbol($parts[3])->first();
-			}
+            if (count($parts) < 14) {
+                continue;
+            }
 
-			if (empty($gene))
-				continue;
+            $gene = Gene::hgnc_id($parts[2])->first();
 
-			$xscript = [
-					'chr' => $parts[10],
-					'start' => $parts[11],
-					'stop' => $parts[12],
-					'strand' => $parts[13],
-					'refseq_nuc' => $parts[5],
-					'ensembl_nuc' => $parts[7]
-				];
+            // there is at least one record with no hgncid, but it does have a symbol.
+            if (empty($gene)) {
+                $gene = Gene::symbol($parts[3])->first();
+            }
 
-			if ($parts[9] == 'MANE Select')
-				$gene->update(['coordinates->mane_select' => $xscript]);
-			else if ($parts[9] == 'MANE Plus Clinical')
-				$gene->update(['coordinates->mane_plus' => $xscript]);
-			else
-				$this->warn("Unknown MANE status: {$parts[9]}");
-		}
+            if (empty($gene)) {
+                continue;
+            }
+
+            $xscript = [
+                'chr' => $parts[10],
+                'start' => $parts[11],
+                'stop' => $parts[12],
+                'strand' => $parts[13],
+                'refseq_nuc' => $parts[5],
+                'ensembl_nuc' => $parts[7]
+            ];
+
+            if ($parts[9] == 'MANE Select') {
+                $gene->update(['coordinates->mane_select' => $xscript]);
+            } else if ($parts[9] == 'MANE Plus Clinical') {
+                $gene->update(['coordinates->mane_plus' => $xscript]);
+            } else {
+                $this->warn("Unknown MANE status: {$parts[9]}");
+            }
+        }
+
+        fclose($handle);
 
         // Update cached headers after successful processing
         $this->updateCachedHeaders($fileIdentifier, $url);
 
         $this->info('...MANE update complete');
         AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'mane', 'Transcripts updated');
+    }
+
+    /**
+     * Download a gzipped file to disk and decompress it.
+     * Returns the path to the decompressed file on success, null on failure.
+     * Uses cached decompressed file if less than 1 hour old.
+     */
+    protected function downloadGzFileToDisk(string $url, string $cacheFilename): ?string
+    {
+        $dataDir = base_path('data');
+        if (!is_dir($dataDir)) {
+            mkdir($dataDir, 0755, true);
+        }
+
+        $gzPath = $dataDir . '/' . $cacheFilename . '.gz';
+        $txtPath = $dataDir . '/' . $cacheFilename;
+
+        // Check if we already have a cached decompressed file
+        if (file_exists($txtPath)) {
+            $fileAge = time() - filemtime($txtPath);
+            // Use cached file if less than 1 hour old
+            if ($fileAge < 3600) {
+                $this->info("......using cached file (age: " . round($fileAge / 60) . " minutes)");
+                return $txtPath;
+            }
+        }
+
+        $this->info("......downloading gzipped file...");
+
+        try {
+            // Download the gzipped file using cURL streaming
+            $ch = curl_init($url);
+            $fp = fopen($gzPath, 'w');
+
+            if (!$fp) {
+                $this->error("......failed to open file for writing");
+                return null;
+            }
+
+            curl_setopt($ch, CURLOPT_FILE, $fp);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 600); // 10 minute timeout for large files
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30);
+
+            $success = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+
+            curl_close($ch);
+            fclose($fp);
+
+            if (!$success || $httpCode !== 200) {
+                $this->error("......download failed (HTTP {$httpCode}): {$error}");
+                @unlink($gzPath);
+                return null;
+            }
+
+            $gzSize = filesize($gzPath);
+            $this->info("......downloaded " . round($gzSize / 1024 / 1024, 1) . " MB compressed");
+
+            // Decompress the file using streaming to avoid memory issues
+            $this->info("......decompressing...");
+
+            $gzHandle = gzopen($gzPath, 'rb');
+            if (!$gzHandle) {
+                $this->error("......failed to open gzipped file for reading");
+                @unlink($gzPath);
+                return null;
+            }
+
+            $outHandle = fopen($txtPath, 'w');
+            if (!$outHandle) {
+                $this->error("......failed to open output file for writing");
+                gzclose($gzHandle);
+                @unlink($gzPath);
+                return null;
+            }
+
+            // Stream decompression in chunks
+            while (!gzeof($gzHandle)) {
+                $chunk = gzread($gzHandle, 8192); // 8KB chunks
+                fwrite($outHandle, $chunk);
+            }
+
+            gzclose($gzHandle);
+            fclose($outHandle);
+
+            // Clean up the gzipped file
+            @unlink($gzPath);
+
+            $txtSize = filesize($txtPath);
+            $this->info("......decompressed to " . round($txtSize / 1024 / 1024, 1) . " MB");
+
+            return $txtPath;
+
+        } catch (\Exception $e) {
+            $this->error("......download/decompress failed: " . $e->getMessage());
+            @unlink($gzPath);
+            @unlink($txtPath);
+            return null;
+        }
     }
 
     /**

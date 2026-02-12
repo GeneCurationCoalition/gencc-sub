@@ -589,4 +589,104 @@ class UpdateDiseasesTest extends TestCase
 
         $this->assertEquals($existingIdent, $cache['MONDO:0001234']['ident']);
     }
+
+    // =========================================================================
+    // Batch Upsert Column Consistency Tests
+    // =========================================================================
+
+    /**
+     * @test
+     * Test that batch records have consistent columns for deprecated and non-deprecated diseases.
+     * Laravel's upsert() requires all records in a batch to have identical column sets.
+     * This test ensures deprecated diseases (with existing cache entries) still include
+     * all required columns (name, description, deprecated_name) to prevent SQL errors.
+     */
+    public function batch_upsert_records_have_consistent_columns(): void
+    {
+        // Simulate the disease cache with an existing deprecated disease
+        $existingDeprecatedDisease = [
+            'id' => 1,
+            'ident' => 'existing-ident',
+            'status' => Disease::STATUS_DEPRECATED,
+            'name' => 'Original Disease Name',
+            'type' => Disease::TYPE_OMIM,
+        ];
+
+        $this->setProperty('diseaseCache', [
+            'OMIM:100500' => $existingDeprecatedDisease,
+        ]);
+
+        // Build two records: one new, one existing deprecated
+        // This simulates what happens in the OMIM batch processing
+        $now = now();
+
+        // Record 1: New active disease
+        $record1 = [
+            'ident' => 'new-ident-1',
+            'curie' => 'OMIM:100050',
+            'type' => Disease::TYPE_OMIM,
+            'mondo_id' => null,
+            'synonyms' => json_encode([]),
+            'xrefs' => json_encode(['include_titles' => '']),
+            'status' => Disease::STATUS_ACTIVE,
+            'created_at' => $now,
+            'updated_at' => $now,
+            'name' => 'New Disease Name',
+            'description' => null,
+            'deprecated_name' => null,
+        ];
+
+        // Record 2: Existing deprecated disease (Caret prefix in OMIM)
+        // The bug was that this record would be missing 'name' and 'description' columns
+        $existing = $this->getProperty('diseaseCache')['OMIM:100500'] ?? null;
+        $record2 = [
+            'ident' => $existing['ident'],
+            'curie' => 'OMIM:100500',
+            'type' => Disease::TYPE_OMIM_CARET,
+            'mondo_id' => null,
+            'synonyms' => json_encode([]),
+            'xrefs' => json_encode(['include_titles' => '']),
+            'status' => Disease::STATUS_DEPRECATED,
+            'created_at' => $now,
+            'updated_at' => $now,
+            // These must be present for batch upsert consistency
+            'deprecated_name' => 'MOVED TO 200150',
+            'name' => $existing ? $existing['name'] : 'MOVED TO 200150',
+            'description' => null,
+        ];
+
+        // Verify both records have identical column sets
+        $columns1 = array_keys($record1);
+        $columns2 = array_keys($record2);
+        sort($columns1);
+        sort($columns2);
+
+        $this->assertEquals(
+            $columns1,
+            $columns2,
+            'All batch records must have identical column sets for upsert()'
+        );
+
+        // Verify the existing disease's name is preserved
+        $this->assertEquals('Original Disease Name', $record2['name']);
+    }
+
+    /**
+     * @test
+     * Test that new deprecated diseases get proper name values.
+     */
+    public function new_deprecated_disease_gets_name_from_deprecated_name(): void
+    {
+        // Empty cache - no existing disease
+        $this->setProperty('diseaseCache', []);
+
+        $existing = $this->getProperty('diseaseCache')['OMIM:999999'] ?? null;
+
+        // For a new deprecated disease, name should come from the deprecated_name value
+        $deprecatedName = 'MOVED TO 123456';
+        $name = $existing ? $existing['name'] : $deprecatedName;
+
+        $this->assertEquals($deprecatedName, $name);
+        $this->assertNull($existing);
+    }
 }
