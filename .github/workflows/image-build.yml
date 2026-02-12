@@ -1,4 +1,4 @@
-name: Deploy to Staging
+name: Build Container Image
 
 on:
   release:
@@ -16,9 +16,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      image: ${{ steps.version.outputs.image }}
-      image_tag: ${{ steps.version.outputs.image_tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -82,61 +79,3 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=registry,ref=${{ steps.version.outputs.image }}:buildcache
           cache-to: type=registry,ref=${{ steps.version.outputs.image }}:buildcache,mode=max
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    # environment: staging
-    permissions:
-      contents: read
-      packages: read
-
-    steps:
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.GENCC_SUB_GITHUB_ACTION_DEPLOY_KEY }}
-
-      - name: Add host key
-        run: ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Deploy to staging
-        env:
-          STAGING_HOST: ${{ secrets.STAGING_HOST }}
-          STAGING_USER: ${{ secrets.STAGING_USER }}
-          IMAGE: ${{ needs.build-and-push.outputs.image }}
-          VERSION: ${{ needs.build-and-push.outputs.image_tag }}
-        run: |
-          ssh ${STAGING_USER}@${STAGING_HOST} << EOF
-            set -e
-
-            # Pull new image (ghcr.io is public, no auth needed)
-            podman pull ${IMAGE}:${VERSION}
-
-            # Stop and remove old container (force remove, ignore errors if not running)
-            podman rm -f gencc-sub 2>/dev/null || true
-
-            # Run new container
-            # - .env volume: mount .env from host (must exist at /var/www/gencc-sub/.env)
-            # - DB_HOST override: use 10.0.2.2 to connect to MySQL on host via slirp4netns
-            # - Logs volume: persist logs outside container for debugging
-            # - Network: allow_host_loopback enables connection to MySQL on host
-            # NOTE: Requires 'loginctl enable-linger' on server for rootless podman persistence
-            podman run -d \
-              --name gencc-sub \
-              --restart=always \
-              --network=slirp4netns:allow_host_loopback=true \
-              -p 127.0.0.1:8080:80 \
-              -e DB_HOST=10.0.2.2 \
-              -v /var/www/gencc-sub/.env:/var/www/html/.env:ro \
-              ${IMAGE}:${VERSION}
-
-            # Wait for container to be ready
-            sleep 5
-
-            # Run initialization commands
-            podman exec gencc-sub php artisan migrate --force
-
-            # Verify container is running
-            podman ps | grep gencc-sub
-          EOF
