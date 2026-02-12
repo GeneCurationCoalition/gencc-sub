@@ -676,13 +676,6 @@ class SubmissionController extends Controller
         // update the submission activity log
         $submission->addEvent(Auth::user()->id, $request->input('type') . " changed to " . $request->input('curie'));
 
-        // update the workflow
-        $submission_data = $submission->submission_data;
-        $workflow = $submission_data->workflow;
-        $workflow->last_update = Carbon::now();
-        $submission_data->workflow = $workflow;
-        $submission->submission_data = $submission_data;
-
         // track who last edited the submission
         $submission->last_edited_by = Auth::user()->id;
 

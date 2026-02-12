@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use JsonMachine\Items;
+use JsonMachine\JsonDecoder\ExtJsonDecoder;
 
 use App\Models\Gene;
 use App\Console\Traits\CachesFileHeaders;
@@ -70,7 +71,9 @@ class UpdateGenes extends Command
         $fileIdentifier = "hgnc_complete_set";
 
         // Check if file needs updating (also checks if genes table is empty)
-        if (!$this->shouldUpdateFileAndTruncate($fileIdentifier, $url, 'genes')) {
+        // IMPORTANT: Use shouldUpdateFile (not shouldUpdateFileAndTruncate) to preserve
+        // gene IDs and maintain FK integrity with submissions.gene_id
+        if (!$this->shouldUpdateFile($fileIdentifier, $url, 'genes')) {
             $this->info('...HUGO update skipped (file unchanged)');
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'hugo', 'Skipped - file unchanged');
             return 0;
@@ -85,57 +88,93 @@ class UpdateGenes extends Command
             return 0;
         }
 
-        $this->info('...processing HUGO genes using streaming parser');
+        $this->info('...processing HUGO genes using batch upsert');
+        AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'hugo', 0, 100, 'Loading existing gene identifiers...');
+
+        // Pre-load existing hgnc_id → ident mappings for FK-safe upserts
+        // This allows us to preserve existing idents while generating new ones for new genes
+        $existingIdents = Gene::whereNotNull('hgnc_id')
+            ->pluck('ident', 'hgnc_id')
+            ->toArray();
+        $this->info("......loaded " . count($existingIdents) . " existing gene identifiers");
+
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'hugo', 0, 100, 'Processing HUGO genes...');
 
-        // Use JsonMachine to stream through /response/docs without loading entire file
+        // Batch processing settings
+        $batchSize = 500;
+        $batch = [];
         $geneCount = 0;
+        $now = now();
+
         try {
             $genes = Items::fromFile($cachePath, [
                 'pointer' => '/response/docs',
+                'decoder' => new ExtJsonDecoder(true), // true = return assoc arrays
             ]);
 
-            foreach ($genes as $recordArray) {
-                // JsonMachine returns arrays, convert to object for compatibility
-                $record = json_decode(json_encode($recordArray));
+            foreach ($genes as $record) {
+                // ExtJsonDecoder(true) returns associative arrays
+                $hgncId = $record['hgnc_id'];
 
-                $d = [
+                // Use existing ident if gene exists, otherwise generate new UUID
+                $ident = $existingIdents[$hgncId] ?? \Illuminate\Support\Str::uuid()->toString();
+
+                $batch[] = [
+                    'ident' => $ident,
+                    'hgnc_id' => $hgncId,
                     'type' => Gene::TYPE_GENE,
-                    'symbol' => $record->symbol,
-                    'name' => $record->name,
-                    'xrefs' => [
-                                'vega_id' => $record->vega_id ?? null, 'omim_id' => $record->omim_id[0] ?? null,
-                                'pubmed_id' => $record->pubmed_id[0] ?? null, 'uniprot_ids' => $record->uniprot_ids[0] ?? null,
-                                'mgd_id' => $record->mgd_id[0] ?? null, 'ccds_id' => $record->ccds_id[0] ?? null,
-                                'entrez_id' => $record->entrez_id ?? null, 'ucsc_id' => $record->ucsc_id ?? null,
-                                'ensembl_gene_id' => $record->ensembl_gene_id ?? null, 'agr' => $record->agr ?? null,
-                                'hugo_uuid' => $record->uuid ?? null, 'rgd_id' => $record->rgd_id[0] ?? null,
-                                'lsdb' => $record->lsdb ?? null, 'orphanet_id' => $record->orphanet ?? null,
-                                'gencc_id' => $record->gencc ?? null
-                                ],
-                    'location' => $record->location ?? '',
-                    'locus_type' => $record->locus_type,
-                    'locus_group' => $record->locus_group,
-                    'gene_group_id' => $record->gene_group_id[0] ?? null,
-                    'gene_group' => $record->gene_group[0] ?? null,
-                    'alias_symbols' => $record->alias_symbol ?? null,
-                    'previous_symbols' => $record->prev_symbol ?? null,
-                    'alias_names' => $record->alias_name ?? null,
-                    'previous_names' => $record->prev_name ?? null,
-                    'date_symbol_changed' => $record->date_symbol_changed ?? null,
-                    'date_name_changed' => $record->date_name_changed ?? null,
-                    'status' => Gene::STATUS_ACTIVE
+                    'symbol' => $record['symbol'],
+                    'name' => $record['name'],
+                    'xrefs' => json_encode([
+                        'vega_id' => $record['vega_id'] ?? null,
+                        'omim_id' => $record['omim_id'][0] ?? null,
+                        'pubmed_id' => $record['pubmed_id'][0] ?? null,
+                        'uniprot_ids' => $record['uniprot_ids'][0] ?? null,
+                        'mgd_id' => $record['mgd_id'][0] ?? null,
+                        'ccds_id' => $record['ccds_id'][0] ?? null,
+                        'entrez_id' => $record['entrez_id'] ?? null,
+                        'ucsc_id' => $record['ucsc_id'] ?? null,
+                        'ensembl_gene_id' => $record['ensembl_gene_id'] ?? null,
+                        'agr' => $record['agr'] ?? null,
+                        'hugo_uuid' => $record['uuid'] ?? null,
+                        'rgd_id' => $record['rgd_id'][0] ?? null,
+                        'lsdb' => $record['lsdb'] ?? null,
+                        'orphanet_id' => $record['orphanet'] ?? null,
+                        'gencc_id' => $record['gencc'] ?? null,
+                    ]),
+                    'location' => $record['location'] ?? '',
+                    'locus_type' => $record['locus_type'],
+                    'locus_group' => $record['locus_group'],
+                    'gene_group_id' => $record['gene_group_id'][0] ?? null,
+                    'gene_group' => $record['gene_group'][0] ?? null,
+                    'alias_symbols' => isset($record['alias_symbol']) ? json_encode($record['alias_symbol']) : null,
+                    'previous_symbols' => isset($record['prev_symbol']) ? json_encode($record['prev_symbol']) : null,
+                    'alias_names' => isset($record['alias_name']) ? json_encode($record['alias_name']) : null,
+                    'previous_names' => isset($record['prev_name']) ? json_encode($record['prev_name']) : null,
+                    'date_symbol_changed' => $record['date_symbol_changed'] ?? null,
+                    'date_name_changed' => $record['date_name_changed'] ?? null,
+                    'status' => Gene::STATUS_ACTIVE,
+                    'created_at' => $now,
+                    'updated_at' => $now,
                 ];
 
-                Gene::updateOrCreate(['hgnc_id' => $record->hgnc_id], $d);
                 $geneCount++;
 
-                // Update progress every 1000 genes (estimate ~44000 total genes)
-                if ($geneCount % 1000 === 0) {
-                    $percent = min(99, intval($geneCount / 440));
+                // Upsert in batches
+                if (count($batch) >= $batchSize) {
+                    $this->upsertGeneBatch($batch);
+                    $batch = [];
+
+                    // Update progress every batch (~500 genes)
                     AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'hugo', $geneCount, 44000);
                 }
             }
+
+            // Upsert remaining batch
+            if (count($batch) > 0) {
+                $this->upsertGeneBatch($batch);
+            }
+
         } catch (\Exception $e) {
             $this->error('......FAILED to parse HUGO data: ' . $e->getMessage());
             return 0;
@@ -151,6 +190,23 @@ class UpdateGenes extends Command
 
         $this->info("...HUGO update complete ({$geneCount} genes processed)");
         AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'hugo', "{$geneCount} genes processed");
+    }
+
+    /**
+     * Upsert a batch of genes using MySQL's ON DUPLICATE KEY UPDATE.
+     * This is ~100x faster than individual updateOrCreate calls.
+     */
+    protected function upsertGeneBatch(array $batch): void
+    {
+        // Columns to update on conflict (everything except id, ident, hgnc_id, created_at)
+        $updateColumns = [
+            'type', 'symbol', 'name', 'xrefs', 'location', 'locus_type', 'locus_group',
+            'gene_group_id', 'gene_group', 'alias_symbols', 'previous_symbols',
+            'alias_names', 'previous_names', 'date_symbol_changed', 'date_name_changed',
+            'status', 'updated_at',
+        ];
+
+        Gene::upsert($batch, ['hgnc_id'], $updateColumns);
     }
 
 

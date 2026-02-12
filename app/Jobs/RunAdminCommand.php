@@ -19,8 +19,9 @@ class RunAdminCommand implements ShouldQueue
 
     /**
      * The number of seconds the job can run before timing out.
+     * Must be >= queue worker's --timeout (3600s) to avoid premature kills.
      */
-    public $timeout = 1800; // 30 minutes
+    public $timeout = 3600; // 1 hour
 
     /**
      * The number of times the job may be attempted.

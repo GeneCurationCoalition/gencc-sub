@@ -9,7 +9,8 @@
 
 # Get the directory of this script (so it works when called from other scripts)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-BACKUP_FILE="$SCRIPT_DIR/data/backups/gencc_sub_baseline_20260205.sql.gz"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+BACKUP_FILE="$PROJECT_ROOT/data/backups/gencc_sub_baseline_20260205.sql.gz"
 
 # Parse arguments
 NO_CONFIRM=false
@@ -31,7 +32,7 @@ if [ ! -f "$BACKUP_FILE" ]; then
 fi
 
 # Get database configuration from .env
-ENV_FILE="$SCRIPT_DIR/.env"
+ENV_FILE="$PROJECT_ROOT/.env"
 if [ ! -f "$ENV_FILE" ]; then
     echo "Error: .env file not found: $ENV_FILE"
     exit 1

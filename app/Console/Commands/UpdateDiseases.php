@@ -9,6 +9,8 @@ use App\Models\Submission;
 use App\Console\Traits\CachesFileHeaders;
 use App\Services\AdminProgressTracker;
 use JsonMachine\Items;
+use JsonMachine\JsonDecoder\ExtJsonDecoder;
+use Illuminate\Support\Str;
 
 class UpdateDiseases extends Command
 {
@@ -53,6 +55,16 @@ class UpdateDiseases extends Command
     protected $mondoXrefOrphanet = [];  // ['Orphanet:123' => ['MONDO:456']]
 
     /**
+     * Pre-loaded disease cache for FK-safe upserts: curie => ['id' => int, 'ident' => string, 'status' => int, 'name' => string]
+     */
+    protected $diseaseCache = [];
+
+    /**
+     * MONDO curie to database ID mapping (for setting mondo_id on OMIM/Orphanet)
+     */
+    protected $mondoCurieToId = [];
+
+    /**
      * Execute the console command.
      */
     public function handle()
@@ -68,6 +80,9 @@ class UpdateDiseases extends Command
         ]);
 
         try {
+            // Pre-load all existing disease data into memory for FK-safe upserts
+            $this->preloadDiseaseCache();
+
             // MONDO must go first - it determines the canonical disease set and mappings
             // Each method returns true if updates were made, false if skipped
             $mondoUpdated = $this->mondo();
@@ -115,6 +130,35 @@ class UpdateDiseases extends Command
 
 
     /**
+     * Pre-load all existing disease data into memory for FK-safe upserts.
+     * This avoids querying for each disease individually.
+     */
+    protected function preloadDiseaseCache()
+    {
+        $this->info('...pre-loading disease cache for FK-safe updates');
+
+        $diseases = Disease::select('id', 'ident', 'curie', 'status', 'name', 'type')
+            ->get();
+
+        foreach ($diseases as $disease) {
+            $this->diseaseCache[$disease->curie] = [
+                'id' => $disease->id,
+                'ident' => $disease->ident,
+                'status' => $disease->status,
+                'name' => $disease->name,
+                'type' => $disease->type,
+            ];
+
+            // Build MONDO curie→id mapping for OMIM/Orphanet phases
+            if ($disease->type === Disease::TYPE_MONDO) {
+                $this->mondoCurieToId[$disease->curie] = $disease->id;
+            }
+        }
+
+        $this->info("......loaded " . count($this->diseaseCache) . " existing diseases");
+    }
+
+    /**
      * Update disease information from MONDO
      *
      * This extracts:
@@ -152,98 +196,112 @@ class UpdateDiseases extends Command
             return false;
         }
 
-        $this->info('...processing MONDO diseases using streaming parser');
+        $this->info('...processing MONDO diseases using batch upsert');
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Processing MONDO diseases...');
 
         $deprecatedCount = 0;
         $processedCount = 0;
-        $lastProgressUpdate = 0;
+        $batchSize = 500;
+        $batch = [];
+        $now = now();
+        $newCuries = []; // Track new curies to refresh mondoCurieToId after upserts
 
-        // Use streaming JSON parser to avoid loading entire file into memory
-        // The MONDO file structure is: { "graphs": [{ "nodes": [...] }] }
-        // We stream through graphs/0/nodes
         try {
             $nodes = Items::fromFile($cachePath, [
                 'pointer' => '/graphs/0/nodes',
+                'decoder' => new ExtJsonDecoder(true), // true = return assoc arrays
             ]);
 
-            // Estimate total nodes (MONDO typically has ~25K diseases)
             $totalNodes = 30000; // Approximate for progress tracking
 
-            // Loop through the nodes (streaming - one at a time)
-            foreach ($nodes as $nodeArray)
-        {
-            // Convert array to object for compatibility with existing code
-            $node = json_decode(json_encode($nodeArray));
+            foreach ($nodes as $node) {
+                // ExtJsonDecoder(true) returns associative arrays
+                $nodeId = $node['id'] ?? '';
+                $term = str_replace('_', ':', basename($nodeId));
 
-            // MONDO uses underscore instead of colon
-            $term = str_replace('_', ':', basename($node->id));
-
-            if (strpos($term, 'MONDO') !== 0)
-                continue;
-
-            // Track this MONDO ID as seen
-            $this->seenMondoIds[] = $term;
-            $processedCount++;
-
-            // Update progress every 1000 items or 5%
-            if ($processedCount - $lastProgressUpdate >= 1000 || ($processedCount / $totalNodes * 100) - ($lastProgressUpdate / $totalNodes * 100) >= 5) {
-                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', $processedCount, $totalNodes);
-                $lastProgressUpdate = $processedCount;
-            }
-
-            // Check if deprecated
-            $is_deprecated = $node->meta->deprecated ?? false;
-            if ($is_deprecated) {
-                $deprecatedCount++;
-            }
-
-            // Extract exact_match and xref mappings
-            $this->extractMondoMappings($term, $node->meta ?? null);
-
-            // Get existing disease record if it exists
-            $existingDisease = Disease::where('curie', $term)->first();
-
-            // Prepare disease data
-            $d = [
-                'type' => Disease::TYPE_MONDO,
-                'mondo_id' => null,  // MONDO diseases don't have mondo_id
-                'curie' => $term,
-                'xrefs' => $this->x_mondo_xrefs($node->meta ?? null),
-            ];
-
-            // Handle name based on deprecation status
-            if ($is_deprecated) {
-                // For deprecated diseases, always set deprecated_name to the exact incoming name (with "obsolete " prefix)
-                $d['deprecated_name'] = $node->lbl ?? "";
-
-                // For new deprecated diseases, set initial name (without "obsolete " prefix)
-                if (!$existingDisease) {
-                    $d['name'] = $this->x_mondo_label($node->lbl ?? null);
+                if (strpos($term, 'MONDO') !== 0) {
+                    continue;
                 }
-                // Don't update name, description, or synonyms for existing deprecated diseases (preserve historical data)
-            } else {
-                // For active diseases, update name, description, and synonyms normally
-                $d['name'] = $node->lbl ?? "";
-                $d['description'] = $node->meta->definition->val ?? '';
-                $d['synonyms'] = $this->x_mondo_synonym($node->meta->synonyms ?? []);
+
+                $this->seenMondoIds[] = $term;
+                $processedCount++;
+
+                $meta = $node['meta'] ?? [];
+                $is_deprecated = $meta['deprecated'] ?? false;
+                if ($is_deprecated) {
+                    $deprecatedCount++;
+                }
+
+                // Extract exact_match and xref mappings (pass as array)
+                $this->extractMondoMappingsArray($term, $meta);
+
+                // Check if disease exists in cache
+                $existing = $this->diseaseCache[$term] ?? null;
+                $ident = $existing['ident'] ?? Str::uuid()->toString();
+
+                if (!$existing) {
+                    $newCuries[] = $term;
+                }
+
+                // Build record for upsert
+                $record = [
+                    'ident' => $ident,
+                    'curie' => $term,
+                    'type' => Disease::TYPE_MONDO,
+                    'mondo_id' => null,
+                    'xrefs' => json_encode($this->x_mondo_xrefs_array($meta)),
+                    'status' => $is_deprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+
+                // Handle name based on deprecation and existence
+                $label = $node['lbl'] ?? '';
+                if ($is_deprecated) {
+                    $record['deprecated_name'] = $label;
+                    if (!$existing) {
+                        $record['name'] = $this->x_mondo_label($label);
+                        $record['description'] = null;
+                        $record['synonyms'] = null;
+                    }
+                    // For existing deprecated diseases, don't include name/description/synonyms in record
+                    // They will not be updated (upsert only updates specified columns)
+                } else {
+                    $record['name'] = $label;
+                    $record['description'] = $meta['definition']['val'] ?? '';
+                    $record['synonyms'] = json_encode($this->x_mondo_synonym_array($meta['synonyms'] ?? []));
+                    $record['deprecated_name'] = null;
+                }
+
+                $batch[] = $record;
+
+                if (count($batch) >= $batchSize) {
+                    $this->upsertMondoBatch($batch);
+                    $batch = [];
+                    AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', $processedCount, $totalNodes);
+                }
             }
 
-            $d['status'] = ($is_deprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE);
+            // Upsert remaining batch
+            if (count($batch) > 0) {
+                $this->upsertMondoBatch($batch);
+            }
 
-            $disease = Disease::updateOrCreate(['curie' => $term], $d);
-        }
+            // Refresh mondoCurieToId mapping for new diseases
+            if (count($newCuries) > 0) {
+                $this->refreshMondoCurieToId($newCuries);
+            }
 
-        // Update cached headers after successful processing
-        $this->updateCachedHeaders($fileIdentifier, $url);
+            // Update cached headers after successful processing
+            $this->updateCachedHeaders($fileIdentifier, $url);
 
-        $mondoCount = count($this->seenMondoIds);
-        $this->info('...MONDO update complete (' . $mondoCount . ' diseases processed)');
-        if ($deprecatedCount > 0) {
-            $this->info('...found ' . $deprecatedCount . ' deprecated MONDO diseases (deprecated: true)');
-        }
-        $this->info('...found ' . count($this->mondoExactMatchOmim) . ' OMIM exact_match relationships');
-        $this->info('...found ' . count($this->mondoExactMatchOrphanet) . ' Orphanet exact_match relationships');
+            $mondoCount = count($this->seenMondoIds);
+            $this->info('...MONDO update complete (' . $mondoCount . ' diseases processed)');
+            if ($deprecatedCount > 0) {
+                $this->info('...found ' . $deprecatedCount . ' deprecated MONDO diseases (deprecated: true)');
+            }
+            $this->info('...found ' . count($this->mondoExactMatchOmim) . ' OMIM exact_match relationships');
+            $this->info('...found ' . count($this->mondoExactMatchOrphanet) . ' Orphanet exact_match relationships');
 
         } catch (\Exception $e) {
             $this->error('......FAILED to parse MONDO JSON: ' . $e->getMessage());
@@ -257,6 +315,179 @@ class UpdateDiseases extends Command
         );
 
         return true;
+    }
+
+    /**
+     * Upsert a batch of MONDO diseases
+     */
+    protected function upsertMondoBatch(array $batch): void
+    {
+        // Columns to update on conflict
+        $updateColumns = [
+            'type', 'mondo_id', 'xrefs', 'status', 'updated_at',
+            'name', 'description', 'synonyms', 'deprecated_name',
+        ];
+
+        Disease::upsert($batch, ['curie'], $updateColumns);
+    }
+
+    /**
+     * Refresh mondoCurieToId mapping for newly inserted diseases
+     */
+    protected function refreshMondoCurieToId(array $curies): void
+    {
+        $newDiseases = Disease::whereIn('curie', $curies)
+            ->select('id', 'curie')
+            ->get();
+
+        foreach ($newDiseases as $disease) {
+            $this->mondoCurieToId[$disease->curie] = $disease->id;
+        }
+    }
+
+    /**
+     * Extract MONDO mappings from array-format metadata
+     */
+    protected function extractMondoMappingsArray($mondoCurie, $meta)
+    {
+        if (empty($meta)) {
+            return;
+        }
+
+        // Extract exact_match from basicPropertyValues
+        foreach (($meta['basicPropertyValues'] ?? []) as $property) {
+            if (($property['pred'] ?? '') === 'http://www.w3.org/2004/02/skos/core#exactMatch') {
+                $val = $property['val'] ?? '';
+
+                // Check for OMIM exact_match
+                if (strpos($val, '/omim.org/entry/') !== false) {
+                    $omimId = basename($val);
+                    $omimCurie = 'OMIM:' . $omimId;
+
+                    if (isset($this->mondoExactMatchOmim[$omimCurie]) &&
+                        $this->mondoExactMatchOmim[$omimCurie] !== $mondoCurie) {
+                        throw new \Exception(
+                            "OMIM {$omimCurie} has multiple MONDO exact_match: " .
+                            "{$this->mondoExactMatchOmim[$omimCurie]} and {$mondoCurie}"
+                        );
+                    }
+                    $this->mondoExactMatchOmim[$omimCurie] = $mondoCurie;
+                }
+
+                // Check for Orphanet exact_match
+                if (strpos($val, 'orpha.net') !== false || strpos($val, 'Orphanet') !== false) {
+                    if (preg_match('/Orphanet[:\/_](\d+)/', $val, $matches)) {
+                        $orphanetCurie = 'Orphanet:' . $matches[1];
+
+                        if (isset($this->mondoExactMatchOrphanet[$orphanetCurie]) &&
+                            $this->mondoExactMatchOrphanet[$orphanetCurie] !== $mondoCurie) {
+                            throw new \Exception(
+                                "Orphanet {$orphanetCurie} has multiple MONDO exact_match: " .
+                                "{$this->mondoExactMatchOrphanet[$orphanetCurie]} and {$mondoCurie}"
+                            );
+                        }
+                        $this->mondoExactMatchOrphanet[$orphanetCurie] = $mondoCurie;
+                    }
+                }
+            }
+        }
+
+        // Extract xrefs
+        foreach (($meta['xrefs'] ?? []) as $property) {
+            $val = explode(':', $property['val'] ?? '');
+            if (count($val) < 2) continue;
+
+            switch ($val[0]) {
+                case 'OMIM':
+                    $omimCurie = 'OMIM:' . $val[1];
+                    if (!isset($this->mondoExactMatchOmim[$omimCurie])) {
+                        $this->mondoXrefOmim[$omimCurie][] = $mondoCurie;
+                    }
+                    break;
+                case 'Orphanet':
+                    $orphanetCurie = 'Orphanet:' . $val[1];
+                    if (!isset($this->mondoExactMatchOrphanet[$orphanetCurie])) {
+                        $this->mondoXrefOrphanet[$orphanetCurie][] = $mondoCurie;
+                    }
+                    break;
+            }
+        }
+    }
+
+    /**
+     * Parse MONDO xrefs from array format
+     */
+    protected function x_mondo_xrefs_array($meta)
+    {
+        $cleansed = [
+            'omim_id' => [], 'omim_label' => null,
+            'orpha_id' => null, 'orpha_label' => null, 'ogms' => null,
+            'do_id' => null, 'medgen_id' => null, 'mesh' => null,
+            'gard_id' => null, 'umls_id' => null, 'ncit' => null
+        ];
+
+        if (empty($meta)) {
+            return $cleansed;
+        }
+
+        // Get OMIM from basicPropertyValues
+        foreach (($meta['basicPropertyValues'] ?? []) as $property) {
+            $val = $property['val'] ?? '';
+            if (($n = strpos($val, '/omim.org/entry/')) > 0) {
+                $cleansed['omim_id'][] = substr($val, $n + 16);
+            }
+        }
+
+        // Get the rest from xrefs
+        foreach (($meta['xrefs'] ?? []) as $property) {
+            $val = explode(':', $property['val'] ?? '');
+            if (count($val) < 2) continue;
+
+            switch ($val[0]) {
+                case 'DOID':
+                    $cleansed['do_id'] = $val[1];
+                    break;
+                case 'OMIM':
+                    $cleansed['omim_id'][] = $val[1];
+                    break;
+                case 'Orphanet':
+                    $cleansed['orpha_id'] = $val[1];
+                    break;
+                case 'GARD':
+                    $cleansed['gard_id'] = $val[1];
+                    break;
+                case 'UMLS':
+                    $cleansed['umls_id'] = $val[1];
+                    break;
+                case 'MESH':
+                    $cleansed['mesh'] = $val[1];
+                    break;
+                case 'NCIT':
+                    $cleansed['ncit'] = $val[1];
+                    break;
+                case 'OGMS':
+                    $cleansed['ogms'] = $val[1];
+                    break;
+            }
+        }
+
+        $cleansed['omim_id'] = array_values(array_unique($cleansed['omim_id']));
+
+        return $cleansed;
+    }
+
+    /**
+     * Transform MONDO synonyms from array format
+     */
+    protected function x_mondo_synonym_array($synonyms)
+    {
+        $cleansed = [];
+        foreach ($synonyms as $synonym) {
+            if (($synonym['pred'] ?? '') === "hasExactSynonym") {
+                $cleansed[] = $synonym['val'] ?? '';
+            }
+        }
+        return $cleansed;
     }
 
 
@@ -399,8 +630,7 @@ class UpdateDiseases extends Command
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', 0, 100, 'Checking OMIM source...');
 
         $key = env('OMIM_API_KEY');
-        if (!$key)
-        {
+        if (!$key) {
             $this->error('...ERROR, no OMIM key. Set OMIM_API_KEY in .env');
             return false;
         }
@@ -414,16 +644,15 @@ class UpdateDiseases extends Command
             $this->info('...OMIM update skipped (file unchanged)');
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'omim', 'Skipped - file unchanged');
 
-            // Still populate seenOmimIds for reconciliation
-            $this->seenOmimIds = Disease::whereIn('type', [
-                Disease::TYPE_OMIM,
-                Disease::TYPE_OMIM_PLUS,
-                Disease::TYPE_OMIM_NUMBER,
-                Disease::TYPE_OMIM_CARET,
-                Disease::TYPE_OMIM_PERCENT
-            ])
-            ->pluck('curie')
-            ->toArray();
+            // Still populate seenOmimIds for reconciliation from cache
+            foreach ($this->diseaseCache as $curie => $data) {
+                if (in_array($data['type'], [
+                    Disease::TYPE_OMIM, Disease::TYPE_OMIM_PLUS, Disease::TYPE_OMIM_NUMBER,
+                    Disease::TYPE_OMIM_CARET, Disease::TYPE_OMIM_PERCENT
+                ])) {
+                    $this->seenOmimIds[] = $curie;
+                }
+            }
 
             return false;
         }
@@ -440,34 +669,37 @@ class UpdateDiseases extends Command
             }
         }
 
-        $this->info('...processing OMIM diseases');
+        $this->info('...processing OMIM diseases using batch upsert');
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', 0, 100, 'Processing OMIM diseases...');
 
         $deprecatedCount = 0;
+        $processedCount = 0;
+        $batchSize = 500;
+        $batch = [];
+        $now = now();
 
         // Skip copyright line
         $line = strtok($data, "\n");
 
         // Parse the rest
-        while (($line = strtok("\n")) !== false)
-        {
+        while (($line = strtok("\n")) !== false) {
             $value = explode("\t", $line);
 
             // Ignore comments
-            if (strpos($value[0], '#') === 0)
+            if (strpos($value[0], '#') === 0) {
                 continue;
+            }
 
             // Set type based on OMIM prefix
             $isDeprecated = false;
-            switch ($value[0])
-            {
+            switch ($value[0]) {
                 case 'Plus':
                     $type = Disease::TYPE_OMIM_PLUS;
                     break;
                 case "Number Sign":
                     $type = Disease::TYPE_OMIM_NUMBER;
                     break;
-                case "Caret":  // MOVED, MERGED, or REMOVED
+                case "Caret":
                     $type = Disease::TYPE_OMIM_CARET;
                     $isDeprecated = true;
                     $deprecatedCount++;
@@ -475,7 +707,7 @@ class UpdateDiseases extends Command
                 case "Percent":
                     $type = Disease::TYPE_OMIM_PERCENT;
                     break;
-                case "Asterisk":  // Gene - skip
+                case "Asterisk":
                     continue 2;
                 case "NULL":
                 default:
@@ -487,44 +719,52 @@ class UpdateDiseases extends Command
             $curie = 'OMIM:' . $omimId;
             $newName = $value[2];
 
-            // Track as seen
             $this->seenOmimIds[] = $curie;
+            $processedCount++;
 
-            // Determine mondo_id using exact_match priority, then xrefs
+            // Use cached lookup instead of database query
+            $existing = $this->diseaseCache[$curie] ?? null;
+            $ident = $existing['ident'] ?? Str::uuid()->toString();
             $mondoId = $this->determineMondoIdForOmim($curie);
 
-            // Get existing disease
-            $existingDisease = Disease::where('curie', $curie)->first();
-
-            // Prepare data
-            $d = [
+            // Build record for upsert
+            $record = [
+                'ident' => $ident,
+                'curie' => $curie,
                 'type' => $type,
                 'mondo_id' => $mondoId,
-                'curie' => $curie,
-                'synonyms' => (empty($value[3]) ? [] : [$value[3]]),
-                'xrefs' => ['include_titles' => $value[4] ?? null],
+                'synonyms' => json_encode(empty($value[3]) ? [] : [$value[3]]),
+                'xrefs' => json_encode(['include_titles' => $value[4] ?? null]),
+                'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
+                'created_at' => $now,
+                'updated_at' => $now,
             ];
 
-            // Handle name based on deprecation status
+            // Handle name based on deprecation and existence
             if ($isDeprecated) {
-                // For deprecated diseases, always set deprecated_name to the exact incoming name
-                $d['deprecated_name'] = $newName;
-
-                // For new deprecated diseases, set initial name (same as deprecated_name for OMIM)
-                if (!$existingDisease) {
-                    $d['name'] = $newName;
-                    $d['description'] = null;
+                $record['deprecated_name'] = $newName;
+                if (!$existing) {
+                    $record['name'] = $newName;
+                    $record['description'] = null;
                 }
-                // Don't update name for existing deprecated diseases (preserve historical data)
             } else {
-                // For active diseases, update name normally
-                $d['name'] = $newName;
-                $d['description'] = null;
+                $record['name'] = $newName;
+                $record['description'] = null;
+                $record['deprecated_name'] = null;
             }
 
-            $d['status'] = ($isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE);
+            $batch[] = $record;
 
-            $disease = Disease::updateOrCreate(['curie' => $curie], $d);
+            if (count($batch) >= $batchSize) {
+                $this->upsertOmimBatch($batch);
+                $batch = [];
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'omim', $processedCount, 15000);
+            }
+        }
+
+        // Upsert remaining batch
+        if (count($batch) > 0) {
+            $this->upsertOmimBatch($batch);
         }
 
         // Update cached headers
@@ -545,26 +785,38 @@ class UpdateDiseases extends Command
         return true;
     }
 
+    /**
+     * Upsert a batch of OMIM diseases
+     */
+    protected function upsertOmimBatch(array $batch): void
+    {
+        $updateColumns = [
+            'type', 'mondo_id', 'synonyms', 'xrefs', 'status', 'updated_at',
+            'name', 'description', 'deprecated_name',
+        ];
+
+        Disease::upsert($batch, ['curie'], $updateColumns);
+    }
+
 
     /**
      * Determine the MONDO ID for an OMIM disease using priority:
      * 1. exact_match
      * 2. First xref found
+     * Uses cached mondoCurieToId mapping instead of database queries.
      */
     protected function determineMondoIdForOmim($omimCurie)
     {
         // Priority 1: exact_match
         if (isset($this->mondoExactMatchOmim[$omimCurie])) {
             $mondoCurie = $this->mondoExactMatchOmim[$omimCurie];
-            $mondoDisease = Disease::where('curie', $mondoCurie)->first();
-            return $mondoDisease ? $mondoDisease->id : null;
+            return $this->mondoCurieToId[$mondoCurie] ?? null;
         }
 
         // Priority 2: First xref
         if (isset($this->mondoXrefOmim[$omimCurie]) && count($this->mondoXrefOmim[$omimCurie]) > 0) {
-            $mondoCurie = $this->mondoXrefOmim[$omimCurie][0];  // Use first one
-            $mondoDisease = Disease::where('curie', $mondoCurie)->first();
-            return $mondoDisease ? $mondoDisease->id : null;
+            $mondoCurie = $this->mondoXrefOmim[$omimCurie][0];
+            return $this->mondoCurieToId[$mondoCurie] ?? null;
         }
 
         return null;
@@ -588,11 +840,12 @@ class UpdateDiseases extends Command
             $this->info('...Orphanet update skipped (file unchanged)');
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'orphanet', 'Skipped - file unchanged');
 
-            // Still need to track seen IDs from existing Orphanet diseases
-            $this->seenOrphanetIds = Disease::where('type', Disease::TYPE_ORPHANET)
-                ->where('status', Disease::STATUS_ACTIVE)
-                ->pluck('curie')
-                ->toArray();
+            // Still need to track seen IDs from existing Orphanet diseases (use cache)
+            foreach ($this->diseaseCache as $curie => $data) {
+                if ($data['type'] === Disease::TYPE_ORPHANET && $data['status'] === Disease::STATUS_ACTIVE) {
+                    $this->seenOrphanetIds[] = $curie;
+                }
+            }
 
             return false;
         }
@@ -617,10 +870,15 @@ class UpdateDiseases extends Command
             return false;
         }
 
-        $this->info('...processing Orphanet diseases');
+        $this->info('...processing Orphanet diseases using batch upsert');
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', 0, 100, 'Processing Orphanet diseases...');
 
         $deprecatedCount = 0;
+        $processedCount = 0;
+        $batchSize = 500;
+        $batch = [];
+        $now = now();
+        $totalNodes = 12000; // Approximate for progress tracking
 
         foreach ($xml->DisorderList->Disorder as $node)
         {
@@ -630,6 +888,7 @@ class UpdateDiseases extends Command
 
             // Track as seen
             $this->seenOrphanetIds[] = $curie;
+            $processedCount++;
 
             // Check if this is an inactive/obsolete disease
             // DisorderFlag id="495" with Value="8192" indicates inactive
@@ -650,31 +909,35 @@ class UpdateDiseases extends Command
             // Determine mondo_id
             $mondoId = $this->determineMondoIdForOrphanet($curie);
 
-            // Get existing disease
-            $existingDisease = Disease::where('curie', $curie)->first();
+            // Use cached lookup instead of database query
+            $existing = $this->diseaseCache[$curie] ?? null;
+            $ident = $existing['ident'] ?? Str::uuid()->toString();
 
-            // Prepare data
-            $d = [
+            // Build record for upsert
+            $record = [
+                'ident' => $ident,
+                'curie' => $curie,
                 'type' => Disease::TYPE_ORPHANET,
                 'mondo_id' => $mondoId,
-                'curie' => $curie,
-                'synonyms' => $this->x_orphanet_synonyms_xml($node->SynonymList ?? null),
-                'xrefs' => $this->x_orphanet_xrefs_xml($node->ExternalReferenceList ?? null),
+                'synonyms' => json_encode($this->x_orphanet_synonyms_xml($node->SynonymList ?? null)),
+                'xrefs' => json_encode($this->x_orphanet_xrefs_xml($node->ExternalReferenceList ?? null)),
+                'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
+                'created_at' => $now,
+                'updated_at' => $now,
             ];
 
             // Handle names based on deprecation status
             if ($isDeprecated) {
-                // For deprecated diseases, always set deprecated_name to the exact incoming name (with OBSOLETE: prefix)
-                $d['deprecated_name'] = $newName;
-
-                // For new deprecated diseases, set initial name (remove OBSOLETE: prefix)
-                if (!$existingDisease) {
-                    $d['name'] = $this->x_orphanet_label($newName);
+                $record['deprecated_name'] = $newName;
+                if (!$existing) {
+                    $record['name'] = $this->x_orphanet_label($newName);
+                    $record['description'] = null;
                 }
-                // Don't update name or description for existing deprecated diseases (preserve historical data)
+                // For existing deprecated diseases, don't include name/description in record
             } else {
-                // For active diseases, update name and description normally (remove OBSOLETE: prefix if present)
-                $d['name'] = $this->x_orphanet_label($newName);
+                $record['name'] = $this->x_orphanet_label($newName);
+                $record['deprecated_name'] = null;
+
                 // Get description from SummaryInformationList
                 $description = '';
                 if (isset($node->SummaryInformationList->SummaryInformation)) {
@@ -689,12 +952,21 @@ class UpdateDiseases extends Command
                         }
                     }
                 }
-                $d['description'] = $description ?: null;
+                $record['description'] = $description ?: null;
             }
 
-            $d['status'] = ($isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE);
+            $batch[] = $record;
 
-            $disease = Disease::updateOrCreate(['curie' => $curie], $d);
+            if (count($batch) >= $batchSize) {
+                $this->upsertOrphanetBatch($batch);
+                $batch = [];
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', $processedCount, $totalNodes);
+            }
+        }
+
+        // Upsert remaining batch
+        if (count($batch) > 0) {
+            $this->upsertOrphanetBatch($batch);
         }
 
         // Update cached headers after successful processing
@@ -715,24 +987,36 @@ class UpdateDiseases extends Command
         return true;
     }
 
+    /**
+     * Upsert a batch of Orphanet diseases
+     */
+    protected function upsertOrphanetBatch(array $batch): void
+    {
+        $updateColumns = [
+            'type', 'mondo_id', 'synonyms', 'xrefs', 'status', 'updated_at',
+            'name', 'description', 'deprecated_name',
+        ];
+
+        Disease::upsert($batch, ['curie'], $updateColumns);
+    }
+
 
     /**
-     * Determine the MONDO ID for an Orphanet disease
+     * Determine the MONDO ID for an Orphanet disease.
+     * Uses cached mondoCurieToId mapping instead of database queries.
      */
     protected function determineMondoIdForOrphanet($orphanetCurie)
     {
         // Priority 1: exact_match
         if (isset($this->mondoExactMatchOrphanet[$orphanetCurie])) {
             $mondoCurie = $this->mondoExactMatchOrphanet[$orphanetCurie];
-            $mondoDisease = Disease::where('curie', $mondoCurie)->first();
-            return $mondoDisease ? $mondoDisease->id : null;
+            return $this->mondoCurieToId[$mondoCurie] ?? null;
         }
 
         // Priority 2: First xref
         if (isset($this->mondoXrefOrphanet[$orphanetCurie]) && count($this->mondoXrefOrphanet[$orphanetCurie]) > 0) {
             $mondoCurie = $this->mondoXrefOrphanet[$orphanetCurie][0];
-            $mondoDisease = Disease::where('curie', $mondoCurie)->first();
-            return $mondoDisease ? $mondoDisease->id : null;
+            return $this->mondoCurieToId[$mondoCurie] ?? null;
         }
 
         return null;
@@ -777,8 +1061,6 @@ class UpdateDiseases extends Command
                 $orphanetDisease = $orphanetDiseases->first();
                 $omimDisease->update(['mondo_id' => $orphanetDisease->mondo_id]);
                 $assignedCount++;
-
-                $this->info("......assigned mondo_id to {$omimDisease->curie} via Orphanet:{$orphanetDisease->curie}");
             }
         }
 
@@ -837,8 +1119,6 @@ class UpdateDiseases extends Command
                 // Use the OMIM disease's mondo_id
                 $orphanetDisease->update(['mondo_id' => $omimDisease->mondo_id]);
                 $assignedCount++;
-
-                $this->info("......assigned mondo_id to {$orphanetDisease->curie} via {$omimCurie}");
             }
         }
 
@@ -854,13 +1134,20 @@ class UpdateDiseases extends Command
     {
         $this->info('...reconciling unseen diseases');
 
+        $deprecatedCount = 0;
+        $withRefsCount = 0;
+
         // Find MONDO diseases not seen
         $unseenMondo = Disease::where('type', Disease::TYPE_MONDO)
             ->whereNotIn('curie', $this->seenMondoIds)
             ->get();
 
         foreach ($unseenMondo as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
         // Find OMIM diseases not seen
@@ -875,7 +1162,11 @@ class UpdateDiseases extends Command
             ->get();
 
         foreach ($unseenOmim as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
         // Find Orphanet diseases not seen
@@ -884,29 +1175,35 @@ class UpdateDiseases extends Command
             ->get();
 
         foreach ($unseenOrphanet as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
-        $totalUnseen = $unseenMondo->count() + $unseenOmim->count() + $unseenOrphanet->count();
-        $this->info("...reconciliation complete ({$totalUnseen} diseases marked as removed/deprecated)");
+        $totalChecked = $unseenMondo->count() + $unseenOmim->count() + $unseenOrphanet->count();
+        $this->info("...reconciliation complete: checked {$totalChecked}, deprecated {$deprecatedCount} ({$withRefsCount} with submission refs)");
     }
 
 
     /**
      * Mark a disease as removed/deprecated
      * Preserve mondo_id, set deprecated_name with REMOVED- prefix
+     *
+     * @return array ['deprecated' => bool, 'has_refs' => bool]
      */
-    protected function markAsRemovedOrDeprecated(Disease $disease)
+    protected function markAsRemovedOrDeprecated(Disease $disease): array
     {
+        // Only update if status is currently ACTIVE
+        if ($disease->status !== Disease::STATUS_ACTIVE) {
+            return ['deprecated' => false, 'has_refs' => false];
+        }
+
         // Check for submission references
         $hasReferences = Submission::where('disease_id', $disease->id)
             ->orWhere('original_disease_id', $disease->id)
             ->exists();
-
-        // Only update if status is currently ACTIVE
-        if ($disease->status !== Disease::STATUS_ACTIVE) {
-            return;
-        }
 
         // Preserve current name, set deprecated_name with REMOVED- prefix
         $updates = [
@@ -917,11 +1214,7 @@ class UpdateDiseases extends Command
 
         $disease->update($updates);
 
-        if ($hasReferences) {
-            $this->warn("......DEPRECATED (has refs): {$disease->curie}");
-        } else {
-            $this->info("......DEPRECATED (no refs): {$disease->curie}");
-        }
+        return ['deprecated' => true, 'has_refs' => $hasReferences];
     }
 
 

@@ -40,14 +40,6 @@
 			"name": "{{ $submission->mechanism->name ?? null }}"
 			"comment": "{{ $submission->submission_data->mechanism->comment ?? '' }}"
 		}
-		"workflow": {
-			@foreach ($submission->submission_data->workflow as $key => $value)
-			@if(!$loop->first)
-			,
-			@endif
-			"{{ $key }}": "{{ $value }}"
-			@endforeach
-		},
 		"report": {
 			"display_date": "{{ $submission->report_date }}",
 			"ext_url": "{{ $submission->report_url }}"
