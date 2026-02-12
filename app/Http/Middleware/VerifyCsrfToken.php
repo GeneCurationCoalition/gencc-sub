@@ -12,7 +12,8 @@ class VerifyCsrfToken extends Middleware
      * @var array<int, string>
      */
     protected $except = [
-        // Admin API endpoints called via axios from the dashboard
-        'api/admin/*',
+        // No exceptions - all state-changing requests require CSRF protection.
+        // Admin routes use Sanctum's EnsureFrontendRequestsAreStateful which
+        // automatically handles CSRF for stateful (browser) requests.
     ];
 }
