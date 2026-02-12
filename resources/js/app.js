@@ -25,6 +25,9 @@ router.on('invalid', (event) => {
         window.location.reload();
     }
 });
+
+// Note: We use cookie-based CSRF (withXSRFToken in bootstrap.js) which auto-updates,
+// so no manual token sync is needed after Inertia navigation.
 import ConfirmationService from 'primevue/confirmationservice';
 import PrimeVue from "primevue/config";
 import DataTable from 'primevue/datatable';
