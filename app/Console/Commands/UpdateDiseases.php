@@ -1061,8 +1061,6 @@ class UpdateDiseases extends Command
                 $orphanetDisease = $orphanetDiseases->first();
                 $omimDisease->update(['mondo_id' => $orphanetDisease->mondo_id]);
                 $assignedCount++;
-
-                $this->info("......assigned mondo_id to {$omimDisease->curie} via Orphanet:{$orphanetDisease->curie}");
             }
         }
 
@@ -1121,8 +1119,6 @@ class UpdateDiseases extends Command
                 // Use the OMIM disease's mondo_id
                 $orphanetDisease->update(['mondo_id' => $omimDisease->mondo_id]);
                 $assignedCount++;
-
-                $this->info("......assigned mondo_id to {$orphanetDisease->curie} via {$omimCurie}");
             }
         }
 
@@ -1138,13 +1134,20 @@ class UpdateDiseases extends Command
     {
         $this->info('...reconciling unseen diseases');
 
+        $deprecatedCount = 0;
+        $withRefsCount = 0;
+
         // Find MONDO diseases not seen
         $unseenMondo = Disease::where('type', Disease::TYPE_MONDO)
             ->whereNotIn('curie', $this->seenMondoIds)
             ->get();
 
         foreach ($unseenMondo as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
         // Find OMIM diseases not seen
@@ -1159,7 +1162,11 @@ class UpdateDiseases extends Command
             ->get();
 
         foreach ($unseenOmim as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
         // Find Orphanet diseases not seen
@@ -1168,29 +1175,35 @@ class UpdateDiseases extends Command
             ->get();
 
         foreach ($unseenOrphanet as $disease) {
-            $this->markAsRemovedOrDeprecated($disease);
+            $result = $this->markAsRemovedOrDeprecated($disease);
+            if ($result['deprecated']) {
+                $deprecatedCount++;
+                if ($result['has_refs']) $withRefsCount++;
+            }
         }
 
-        $totalUnseen = $unseenMondo->count() + $unseenOmim->count() + $unseenOrphanet->count();
-        $this->info("...reconciliation complete ({$totalUnseen} diseases marked as removed/deprecated)");
+        $totalChecked = $unseenMondo->count() + $unseenOmim->count() + $unseenOrphanet->count();
+        $this->info("...reconciliation complete: checked {$totalChecked}, deprecated {$deprecatedCount} ({$withRefsCount} with submission refs)");
     }
 
 
     /**
      * Mark a disease as removed/deprecated
      * Preserve mondo_id, set deprecated_name with REMOVED- prefix
+     *
+     * @return array ['deprecated' => bool, 'has_refs' => bool]
      */
-    protected function markAsRemovedOrDeprecated(Disease $disease)
+    protected function markAsRemovedOrDeprecated(Disease $disease): array
     {
+        // Only update if status is currently ACTIVE
+        if ($disease->status !== Disease::STATUS_ACTIVE) {
+            return ['deprecated' => false, 'has_refs' => false];
+        }
+
         // Check for submission references
         $hasReferences = Submission::where('disease_id', $disease->id)
             ->orWhere('original_disease_id', $disease->id)
             ->exists();
-
-        // Only update if status is currently ACTIVE
-        if ($disease->status !== Disease::STATUS_ACTIVE) {
-            return;
-        }
 
         // Preserve current name, set deprecated_name with REMOVED- prefix
         $updates = [
@@ -1201,11 +1214,7 @@ class UpdateDiseases extends Command
 
         $disease->update($updates);
 
-        if ($hasReferences) {
-            $this->warn("......DEPRECATED (has refs): {$disease->curie}");
-        } else {
-            $this->info("......DEPRECATED (no refs): {$disease->curie}");
-        }
+        return ['deprecated' => true, 'has_refs' => $hasReferences];
     }
 
 
