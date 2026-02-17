@@ -4,10 +4,17 @@ This folder contains utility scripts for the GenCC Submission Portal.
 
 ## Contents
 
-```
+```text
 scripts/
 ├── run_clingen_pipeline.py      # ClinGen data sync pipeline (v2.0)
 ├── start-dev-servers.sh         # Development server startup script
+├── version.sh                   # Generate version string from git
+├── process-logo.sh              # Process submitter logo images
+├── backup/                      # Database backup and restore scripts
+│   ├── backup-db.sh             # Production backup to GCS
+│   ├── restore-db.sh            # Local development restore
+│   ├── restore-db-from-gcs.sh   # Production restore from GCS
+│   └── setup-backup-cron.sh     # Setup nightly backup cron job
 ├── clingen/                     # ClinGen pipeline Python package
 │   ├── __init__.py
 │   ├── config.py               # Centralized configuration
@@ -34,8 +41,11 @@ Development server startup script that manages PM2 or Docker-based development e
 # Start locally with PM2 (default)
 ./scripts/start-dev-servers.sh
 
-# Start with Docker/Podman
+# Start with Docker/Podman (dev mode - volume mounted)
 ./scripts/start-dev-servers.sh docker
+
+# Start production-like container for testing before deployment
+./scripts/start-dev-servers.sh prod-test
 
 # Stop all servers
 ./scripts/start-dev-servers.sh stop
@@ -51,12 +61,112 @@ Development server startup script that manages PM2 or Docker-based development e
 ./scripts/start-dev-servers.sh local --restore
 ```
 
+### Modes
+
+| Mode        | Port | Description                                |
+| ----------- | ---- | ------------------------------------------ |
+| `local`     | 8001 | PM2-managed local processes                |
+| `docker`    | 8001 | Dev container with volume-mounted source   |
+| `prod-test` | 8080 | Production-like container (code baked in)  |
+
 ### Features
 
 - Automatically detects podman-compose or docker-compose
 - Checks and runs pending database migrations
 - Clears application caches before starting
 - Optional database restore from baseline backup
+- **prod-test mode**: Tests production container behavior locally to catch permission issues before deployment
+
+---
+
+## Database Backup Scripts
+
+Scripts for backing up and restoring the MySQL database, located in `scripts/backup/`.
+
+### restore-db.sh (Local Development)
+
+Restores the database from a baseline backup for local development.
+
+```bash
+# Interactive mode (prompts for confirmation)
+./scripts/backup/restore-db.sh
+
+# Non-interactive mode (for automated scripts)
+./scripts/backup/restore-db.sh --no-confirm
+```
+
+**Features:**
+
+- Reads database credentials from `.env` file
+- Restores from `data/backups/gencc_sub_baseline_*.sql.gz`
+- Runs pending migrations after restore
+- Copies submitter logos to storage
+
+### backup-db.sh (Production)
+
+Backs up the MySQL database and uploads to Google Cloud Storage.
+
+```bash
+# Standard backup (uses environment defaults)
+./scripts/backup/backup-db.sh
+
+# Override bucket name
+./scripts/backup/backup-db.sh --bucket my-bucket
+
+# Dry run (test without uploading)
+./scripts/backup/backup-db.sh --dry-run
+```
+
+**Environment variables** (set in `/etc/gencc/backup.env`):
+
+| Variable           | Description                        | Default           |
+| ------------------ | ---------------------------------- | ----------------- |
+| `BACKUP_BUCKET`    | GCS bucket name                    | (required)        |
+| `BACKUP_PREFIX`    | GCS path prefix                    | database-backups  |
+| `BACKUP_RETENTION` | Days to keep local backups         | 7                 |
+| `DB_HOST`          | Database host                      | 127.0.0.1         |
+| `DB_DATABASE`      | Database name                      | gencc_sub         |
+
+### restore-db-from-gcs.sh (Production)
+
+Restores the database from a backup in Google Cloud Storage.
+
+```bash
+# List available backups
+./scripts/backup/restore-db-from-gcs.sh --list
+
+# Restore most recent backup
+./scripts/backup/restore-db-from-gcs.sh --latest
+
+# Restore specific backup
+./scripts/backup/restore-db-from-gcs.sh --file gencc_sub-20260215-020000.sql.gz
+
+# Restore from local file
+./scripts/backup/restore-db-from-gcs.sh --local /path/to/backup.sql.gz
+```
+
+### setup-backup-cron.sh (Production Setup)
+
+One-time setup script for nightly database backups on the production VM.
+
+```bash
+sudo ./scripts/backup/setup-backup-cron.sh --bucket gencc-backups
+```
+
+**What it does:**
+
+1. Creates `/etc/gencc/backup.env` with configuration
+2. Installs backup script to `/opt/gencc/scripts/`
+3. Sets up cron job for nightly backups at 2:00 AM UTC
+4. Creates log rotation configuration
+5. Verifies gsutil is configured correctly
+
+**Prerequisites:**
+
+- Root or sudo access
+- gsutil installed and configured
+- MySQL client installed
+- Service account with Storage Object Creator role
 
 ---
 

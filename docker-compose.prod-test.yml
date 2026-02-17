@@ -1,0 +1,57 @@
+# Production-like local testing for GenCC Submission Portal
+# Tests container behavior as it would run in production (no volume mounts)
+#
+# Usage:
+#   podman-compose -f docker-compose.prod-test.yml build
+#   podman-compose -f docker-compose.prod-test.yml up -d
+#   podman-compose -f docker-compose.prod-test.yml exec app bash
+#   podman-compose -f docker-compose.prod-test.yml down
+#
+# This helps catch permission issues, missing directories, etc. before deployment.
+# The app code is baked into the image (root-owned) just like production.
+# Only storage/, bootstrap/cache/, and data/ are www-data writable.
+#
+# Prerequisites:
+#   - Local MySQL running with gencc_sub database prepared
+#   - Run scripts/backup/restore-db.sh locally first to set up the database
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - APP_VERSION=${APP_VERSION:-prod-test}
+        - VITE_APP_NAME=GenCC Submission Portal (Prod Test)
+    container_name: gencc-prod-test
+    # Minimal volume mounts - only .env file (like production deployment)
+    # App code is baked into the image (root-owned)
+    volumes:
+      - ./.env:/var/www/html/.env:ro
+    ports:
+      - "8080:80"   # Production uses port 80 internally, expose as 8080 locally
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_URL=http://127.0.0.1:8080
+      # Sanctum stateful domains for CSRF/session handling
+      - SANCTUM_STATEFUL_DOMAINS=localhost,localhost:8080,127.0.0.1,127.0.0.1:8080
+      # Session domain (empty = use request host)
+      - SESSION_DOMAIN=
+      # Use host machine's MySQL via Podman's built-in host resolution
+      - DB_CONNECTION=mysql
+      - DB_HOST=host.containers.internal
+      - DB_PORT=3306
+      - DB_DATABASE=gencc_sub
+      - DB_USERNAME=root
+      - DB_PASSWORD=password
+      # Disable SSL for local MySQL connection (avoid self-signed cert issues)
+      - MYSQL_ATTR_SSL_CA=
+      - QUEUE_CONNECTION=database
+      - CACHE_DRIVER=file
+      - SESSION_DRIVER=file
+      # Point to gencc-search on host machine (if running)
+      - RELEASE_URL=http://host.containers.internal:8000/api/release
+      - SUBMIT_URL=http://127.0.0.1:8080/api/submit
+      # App key - generate one or use existing
+      - APP_KEY=${APP_KEY:-base64:your-base64-encoded-key-here}

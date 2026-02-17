@@ -8,7 +8,7 @@
 #
 # Prerequisites:
 #   - Local MySQL running with gencc_sub database prepared
-#   - Run restore-db.sh locally first to set up the database
+#   - Run scripts/backup/restore-db.sh locally first to set up the database
 
 services:
   app:

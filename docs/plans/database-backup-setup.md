@@ -163,12 +163,12 @@ gcloud compute ssh YOUR_VM_NAME --zone=YOUR_ZONE
 cd /path/to/gencc-sub
 
 # Make scripts executable
-chmod +x scripts/backup-db.sh
-chmod +x scripts/restore-db-from-gcs.sh
-chmod +x scripts/setup-backup-cron.sh
+chmod +x scripts/backup/backup-db.sh
+chmod +x scripts/backup/restore-db-from-gcs.sh
+chmod +x scripts/backup/setup-backup-cron.sh
 
 # Run the setup script
-sudo ./scripts/setup-backup-cron.sh \
+sudo ./scripts/backup/setup-backup-cron.sh \
     --bucket gencc-backups \
     --db-password 'YOUR_DATABASE_PASSWORD' \
     --db-host 127.0.0.1 \
