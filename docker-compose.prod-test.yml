@@ -35,7 +35,8 @@ services:
     volumes:
       - ./.env:/var/www/html/.env:ro
       # Mount gcloud credentials for GCS access (optional - set up with: gcloud auth application-default login)
-      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      # Mounted to /var/www/.config/gcloud so www-data (PHP-FPM user) can read them
+      - ${HOME}/.config/gcloud:/var/www/.config/gcloud:ro
     ports:
       - "8080:80"   # Production uses port 80 internally, expose as 8080 locally
     environment:
@@ -64,4 +65,5 @@ services:
       # App key - generate one or use existing
       - APP_KEY=${APP_KEY:-base64:your-base64-encoded-key-here}
       # GCS credentials (reads project/bucket from .env, uses mounted gcloud ADC)
-      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      # Entrypoint copies credentials to this www-data accessible location
+      - GOOGLE_APPLICATION_CREDENTIALS=/var/www/html/storage/.gcloud-credentials.json

@@ -23,5 +23,17 @@ fi
 mkdir -p /var/www/html/storage/app/public
 chown -R www-data:www-data /var/www/html/storage/app/public
 
+# Copy GCS credentials to www-data accessible location if mounted
+# The credentials may be mounted from the host with root-only permissions
+GCS_SOURCE="/var/www/.config/gcloud/application_default_credentials.json"
+GCS_DEST="/var/www/html/storage/.gcloud-credentials.json"
+if [ -f "$GCS_SOURCE" ]; then
+  echo "Copying GCS credentials for www-data access..."
+  cp "$GCS_SOURCE" "$GCS_DEST"
+  chown www-data:www-data "$GCS_DEST"
+  chmod 600 "$GCS_DEST"
+  export GOOGLE_APPLICATION_CREDENTIALS="$GCS_DEST"
+fi
+
 # Execute the main command (pm2-runtime)
 exec "$@"

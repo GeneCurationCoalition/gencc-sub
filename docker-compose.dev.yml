@@ -31,7 +31,8 @@ services:
       - vendor:/var/www/html/vendor
       - node_modules:/var/www/html/node_modules
       # Mount gcloud credentials for GCS access (optional - set up with: gcloud auth application-default login)
-      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      # Mounted to /var/www/.config/gcloud so www-data (PHP-FPM user) can read them
+      - ${HOME}/.config/gcloud:/var/www/.config/gcloud:ro
     ports:
       - "8001:8001"   # Laravel dev server
       - "5173:5173"   # Vite HMR
@@ -60,7 +61,8 @@ services:
       - RELEASE_URL=http://host.containers.internal:8000/api/release
       - SUBMIT_URL=http://host.containers.internal:8001/api/submit
       # GCS credentials (reads project/bucket from .env, uses mounted gcloud ADC)
-      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      # Startup command copies credentials to this www-data accessible location
+      - GOOGLE_APPLICATION_CREDENTIALS=/var/www/html/storage/.gcloud-credentials.json
     # Install dependencies on startup, then run dev servers
     command: >
       bash -c "
@@ -69,6 +71,12 @@ services:
         php artisan key:generate --force --no-interaction 2>/dev/null || true &&
         rm -f public/storage &&
         php artisan storage:link &&
+        if [ -f /var/www/.config/gcloud/application_default_credentials.json ]; then
+          cp /var/www/.config/gcloud/application_default_credentials.json /var/www/html/storage/.gcloud-credentials.json &&
+          chown www-data:www-data /var/www/html/storage/.gcloud-credentials.json &&
+          chmod 600 /var/www/html/storage/.gcloud-credentials.json &&
+          echo 'GCS credentials copied for www-data access';
+        fi &&
         pm2-runtime ecosystem.dev.config.cjs
       "
 
