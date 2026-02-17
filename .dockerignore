@@ -11,6 +11,7 @@ storage/framework/sessions/*
 storage/framework/views/*
 bootstrap/cache/*
 public/build
+public/storage
 *.log
 .idea
 .vscode
