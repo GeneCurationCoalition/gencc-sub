@@ -1464,7 +1464,8 @@ class GenccRelease extends Command
             $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
             $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
             $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-            $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+            // Notes come from submission_data (current/editable) rather than original_submission_data
+            $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
             $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
             $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
 
@@ -1588,7 +1589,8 @@ class GenccRelease extends Command
             $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
             $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
             $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-            $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+            // Notes come from submission_data (current/editable) rather than original_submission_data
+            $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
             $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
             $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
 
@@ -1699,7 +1701,8 @@ class GenccRelease extends Command
                 $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
                 $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
                 $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-                $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+                // Notes come from submission_data (current/editable) rather than original_submission_data
+                $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
                 $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
                 $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
 
