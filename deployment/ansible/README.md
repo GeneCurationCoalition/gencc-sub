@@ -6,16 +6,22 @@ It is intentionally written so it can be run safely after Terraform provisions t
 
 ## Layout
 - `playbooks/site.yml` — main entrypoint
-- `inventories/gencc.ini.example` — example inventory (Terraform also outputs one)
-- `inventories/group_vars/` — non-secret defaults + a vault template
+- `inventories/inventory.ini.example` — example inventory (Terraform also outputs one)
+- `inventories/staging.ini` — staging host inventory
+- `inventories/production.ini` — production host inventory (placeholder)
+- `inventories/group_vars/all/` — shared defaults
+- `inventories/group_vars/staging/` — staging vars + vault
+- `inventories/group_vars/production/` — production vars + vault
 - `roles/` — baseline, MySQL, quadlet units, timers
 
 ## Running (operator runbook)
-1. Create an inventory file (or paste the Terraform output).
-2. Create `inventories/group_vars/all/vault.yml` from the template and encrypt it:
-   - `ansible-vault encrypt inventories/group_vars/all/vault.yml`
+1. Create or update the inventory file for your environment (or paste the Terraform output).
+2. Create a vault file from the template and encrypt it:
+   - `cp inventories/group_vars/all/vault.yml.example inventories/group_vars/staging/vault.yml`
+   - `ansible-vault encrypt inventories/group_vars/staging/vault.yml`
 3. Run:
-   - `ansible-playbook -i inventories/gencc.ini playbooks/site.yml --ask-vault-pass`
+   - `ansible-playbook -i inventories/staging.ini playbooks/site.yml --ask-vault-pass`
+   - `ansible-playbook -i inventories/production.ini playbooks/site.yml --ask-vault-pass`
 
 ## Running from GitHub Actions
 Repository workflow:
@@ -26,7 +32,7 @@ This workflow:
 - Creates an ephemeral OS Login SSH key
 - Connects to the VM via IAP tunnel
 - Runs this same playbook with image/db mode overrides
-- Opens a PR updating pinned image tags in `inventories/group_vars/all/vars.yml`
+- Opens a PR updating pinned image tags in `inventories/group_vars/staging/vars.yml`
 
 Required GitHub secret:
 - `ANSIBLE_VAULT_PASSWORD`
@@ -46,7 +52,7 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 ## Notes
 - Uses **rootless Podman** for the app containers via a dedicated `gencc` user and `loginctl enable-linger`.
 - Uses **host MySQL** and allows container connections via `slirp4netns` (`DB_HOST=10.0.2.2`).
-- Terminates TLS on the VM using **nginx + certbot** (Let’s Encrypt). Wildcard issuance (`*.clingen.app`) uses DNS-01 via **GCP Cloud DNS**.
+- Terminates TLS on the VM using **nginx + certbot** (Let's Encrypt HTTP-01 webroot challenges).
 - SSH access is expected via **IAP tunneling** + **OS Login**; ensure your operator account has `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin`.
 - Installs systemd units for periodic tasks as **systemd timers** (preferred over crontab).
 - The ansible vault passphrase is stored in a GCP secret named `gencc-ansible-vault-passphrase`.

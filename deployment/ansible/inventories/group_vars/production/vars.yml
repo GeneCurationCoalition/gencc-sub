@@ -1,0 +1,19 @@
+---
+# Production environment overrides.
+
+# Container images
+# gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:latest
+# gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:latest
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0-beta6
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0-beta6
+
+# Public routing / TLS
+gencc_submit_hostname: pre-portal.thegencc.org
+gencc_search_hostname: pre.thegencc.org
+gencc_search_hostname_redirects:
+  - pre-search.thegencc.org
+gencc_letsencrypt_cert_name: gencc-prod
+gencc_letsencrypt_domains:
+  - "{{ gencc_submit_hostname }}"
+  - "{{ gencc_search_hostname }}"
+  - pre-search.thegencc.org

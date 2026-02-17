@@ -19,30 +19,16 @@ variable "name_prefix" {
   default     = "gencc"
 }
 
-variable "submit_hostname" {
-  type        = string
-  description = "Hostname for gencc-sub (e.g. gencc-sub-stage.clingen.app)."
-
-  validation {
-    condition     = !endswith(var.submit_hostname, ".")
-    error_message = "submit_hostname must not include a trailing dot."
-  }
-}
-
-variable "search_hostname" {
-  type        = string
-  description = "Hostname for gencc-search (e.g. gencc-search-stage.clingen.app)."
-
-  validation {
-    condition     = !endswith(var.search_hostname, ".")
-    error_message = "search_hostname must not include a trailing dot."
-  }
-}
-
 variable "machine_type" {
   type        = string
   description = "Compute instance machine type."
   default     = "e2-standard-2"
+}
+
+variable "boot_disk_type" {
+  type        = string
+  description = "Boot disk type (e.g. pd-balanced, hyperdisk-balanced)."
+  default     = "pd-balanced"
 }
 
 variable "boot_disk_gb" {
@@ -79,23 +65,6 @@ variable "subnet_cidr" {
   type        = string
   description = "CIDR for the subnet."
   default     = "10.30.0.0/24"
-}
-
-variable "enable_dns_records" {
-  type        = bool
-  description = "If true, create A records for submit/search hostnames."
-  default     = false
-}
-
-variable "dns_managed_zone_name" {
-  type        = string
-  description = "Existing Cloud DNS managed zone name (used for optional A records and to grant the VM service account DNS permissions for certbot DNS-01 automation)."
-  default     = null
-
-  validation {
-    condition     = var.enable_dns_records == false || var.dns_managed_zone_name != null
-    error_message = "dns_managed_zone_name must be set when enable_dns_records=true."
-  }
 }
 
 # -----------------------------------------------------------------------------

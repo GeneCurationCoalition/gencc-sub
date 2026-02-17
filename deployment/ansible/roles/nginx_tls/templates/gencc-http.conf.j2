@@ -3,6 +3,10 @@ server {
   listen 80;
   server_name {{ gencc_submit_hostname }};
 
+  location /.well-known/acme-challenge/ {
+    root /var/www/acme-challenge;
+  }
+
   location / {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -14,7 +18,11 @@ server {
 
 server {
   listen 80;
-  server_name {{ gencc_search_hostname }};
+  server_name {{ gencc_search_hostname }}{% for r in gencc_search_hostname_redirects %} {{ r }}{% endfor %};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/acme-challenge;
+  }
 
   location / {
     proxy_set_header Host $host;
@@ -24,4 +32,3 @@ server {
     proxy_pass http://127.0.0.1:{{ gencc_search_port }};
   }
 }
-

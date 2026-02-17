@@ -1,0 +1,35 @@
+---
+# Copy this template into the appropriate environment directory and encrypt:
+#
+#   cp vault.yml.example ../staging/vault.yml
+#   ansible-vault encrypt ../staging/vault.yml
+#
+#   cp vault.yml.example ../production/vault.yml
+#   ansible-vault encrypt ../production/vault.yml
+
+# MySQL passwords
+gencc_mysql_sub_password: REPLACE_ME
+gencc_mysql_search_password: REPLACE_ME
+
+# App .env files (stored as file content to avoid committing secrets)
+gencc_sub_env: |
+  APP_NAME="GenCC Portal Beta"
+  APP_ENV=local
+  ...
+
+gencc_search_env: |
+  APP_NAME="GenCC Search Beta"
+  APP_ENV=local
+  ...
+
+
+# Backup job env (loaded by `scripts/backup-db.sh`)
+gencc_backup_env: |
+  BACKUP_BUCKET=REPLACE_ME
+  BACKUP_PREFIX=database-backups
+  BACKUP_RETENTION=14
+  DB_HOST=127.0.0.1
+  DB_PORT=3306
+  DB_DATABASE=gencc_sub
+  DB_USERNAME=root
+  DB_PASSWORD=REPLACE_ME

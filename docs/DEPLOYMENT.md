@@ -132,13 +132,10 @@ SANCTUM_STATEFUL_DOMAINS=sub.thegencc.org,thegencc.org
 
 Production and staging deployments use containers. The `.env` file is mounted into the container at runtime.
 
-### Deploy Workflow
+### Build & Deploy Workflows
 
-The GitHub Actions workflow (`deploy-stage.yml`) handles:
-
-1. Building the Docker image with `APP_VERSION` from git tags
-2. Pushing to GitHub Container Registry
-3. Deploying to the target server
+- **`image-build.yml`** — Builds the Docker image with `APP_VERSION` from git tags and pushes to GitHub Container Registry. Triggered on release or manually via `workflow_dispatch`.
+- **`deploy-via-ansible.yml`** — Deploys to the target server using Ansible over IAP SSH. Triggered manually with image tag inputs.
 
 ### Container Environment
 

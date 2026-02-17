@@ -1,0 +1,19 @@
+---
+# Staging environment overrides.
+
+# Container images
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0-beta6
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0-beta6
+
+# Public routing / TLS
+gencc_domain: clingen.app
+gencc_submit_hostname: "gencc-sub-stage.{{ gencc_domain }}"
+gencc_search_hostname: "gencc-search-stage.{{ gencc_domain }}"
+gencc_letsencrypt_cert_name: gencc-stage
+gencc_letsencrypt_domains:
+  - "{{ gencc_submit_hostname }}"
+  - "{{ gencc_search_hostname }}"
+
+# Database bootstrap overrides (used by the staging restore workflow)
+gencc_db_restore_force: true
+gencc_db_restore_source: "https://raw.githubusercontent.com/GeneCurationCoalition/gencc-sub/refs/heads/main/data/backups/gencc_sub_baseline_20260103.sql.gz"

@@ -22,9 +22,10 @@ resource "google_compute_address" "vm_external_ip" {
 }
 
 resource "google_compute_instance" "vm" {
-  name         = "${var.name_prefix}-vm"
-  machine_type = var.machine_type
-  zone         = var.zone
+  name                      = "${var.name_prefix}-vm"
+  machine_type              = var.machine_type
+  zone                      = var.zone
+  allow_stopping_for_update = true
 
   tags = ["${var.name_prefix}-vm"]
 
@@ -32,7 +33,7 @@ resource "google_compute_instance" "vm" {
     initialize_params {
       image = data.google_compute_image.ubuntu.self_link
       size  = var.boot_disk_gb
-      type  = "pd-balanced"
+      type  = var.boot_disk_type
     }
   }
 

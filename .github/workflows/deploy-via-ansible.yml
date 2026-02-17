@@ -202,7 +202,7 @@ jobs:
           set -euo pipefail
           cd deployment/ansible
           ansible-playbook \
-            -i inventories/gencc.ini \
+            -i inventories/staging.ini \
             playbooks/site.yml \
             --vault-password-file "${RUNNER_TEMP}/.vault-pass" \
             -e @"${RUNNER_TEMP}/extra-vars.json"
@@ -211,7 +211,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VARS_FILE="deployment/ansible/inventories/group_vars/all/vars.yml"
+          VARS_FILE="deployment/ansible/inventories/group_vars/staging/vars.yml"
 
           sed -Ei.bak "s|^gencc_sub_image:.*|gencc_sub_image: ${{ steps.validate.outputs.sub_image }}|" "${VARS_FILE}"
           sed -Ei.bak "s|^gencc_search_image:.*|gencc_search_image: ${{ steps.validate.outputs.search_image }}|" "${VARS_FILE}"
@@ -223,7 +223,7 @@ jobs:
           commit-message: "chore(deploy): record deployed image tags"
           title: "chore(deploy): record deployed image tags"
           body: |
-            Updates deployed image tags in `deployment/ansible/inventories/group_vars/all/vars.yml`.
+            Updates deployed image tags in `deployment/ansible/inventories/group_vars/staging/vars.yml`.
 
             - gencc-sub: `${{ steps.validate.outputs.sub_image }}`
             - gencc-search: `${{ steps.validate.outputs.search_image }}`
@@ -231,4 +231,4 @@ jobs:
           branch: "chore/deploy-image-pins-${{ github.run_id }}"
           delete-branch: true
           add-paths: |
-            deployment/ansible/inventories/group_vars/all/vars.yml
+            deployment/ansible/inventories/group_vars/staging/vars.yml
