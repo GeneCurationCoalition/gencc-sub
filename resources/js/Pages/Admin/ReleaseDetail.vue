@@ -36,12 +36,15 @@
     const hasCumulativeStats = computed(() => props.release.cumulative_stats && Object.keys(props.release.cumulative_stats).length > 0)
 
     // Format cumulative stats - separate simple values from nested objects
+    // Rename 'total_live' to 'total_released' for display
     const simpleCumulativeStats = computed(() => {
         if (!props.release.cumulative_stats) return {}
         const simple = {}
         for (const [key, value] of Object.entries(props.release.cumulative_stats)) {
             if (typeof value !== 'object' || value === null) {
-                simple[key] = value
+                // Rename 'total_live' to 'total_released' for display
+                const displayKey = key === 'total_live' ? 'total_released' : key
+                simple[displayKey] = value
             }
         }
         return simple
@@ -59,7 +62,7 @@
         if (!props.release.cumulative_stats?.by_submitter) return []
         return Object.entries(props.release.cumulative_stats.by_submitter).map(([name, stats]) => ({
             name,
-            live: stats.live || 0,
+            released: stats.live || 0,
             published: stats.published || 0,
             unpublished: stats.unpublished || 0,
         }))
@@ -283,8 +286,8 @@
                                     <div class="text-xs text-green-600 truncate font-medium mb-1" :title="item.name">{{ item.name }}</div>
                                     <div class="flex gap-3 text-sm">
                                         <span class="text-green-700">
-                                            <span class="font-semibold">{{ item.live.toLocaleString() }}</span>
-                                            <span class="text-xs text-green-600"> live</span>
+                                            <span class="font-semibold">{{ item.released.toLocaleString() }}</span>
+                                            <span class="text-xs text-green-600"> released</span>
                                         </span>
                                         <span class="text-blue-700">
                                             <span class="font-semibold">{{ item.published.toLocaleString() }}</span>
