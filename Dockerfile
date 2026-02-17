@@ -93,10 +93,11 @@ RUN composer install --no-dev --optimize-autoloader --no-interaction
 
 # Set permissions for runtime directories (only these need www-data write access)
 # - storage/: Laravel logs, cache, sessions, views, uploads
+# - storage/releases/: GenCC release notes files (local fallback when GCS not configured)
 # - bootstrap/cache/: Laravel compiled services and routes
 # - data/: cache files for UpdateGenes, UpdateDiseases, CachesFileHeaders
 # - data/clingen/comparison/: Python ClinGen sync pipeline outputs
-RUN mkdir -p data/clingen/comparison storage/app/temp storage/app/public/exports \
+RUN mkdir -p data/clingen/comparison storage/app/temp storage/app/public/exports storage/releases \
     && chown -R www-data:www-data storage bootstrap/cache data \
     && chmod -R 775 storage bootstrap/cache data
 

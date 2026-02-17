@@ -59,8 +59,9 @@ COPY docker/php-custom-dev.ini $PHP_INI_DIR/conf.d/custom.ini
 # - data/clingen/comparison/: Python ClinGen sync pipeline outputs
 # - storage/app/temp/: DocumentController temp files for Excel processing
 # - storage/app/public/exports/: GenccRelease export files
+# - storage/releases/: GenCC release notes files (local fallback when GCS not configured)
 RUN mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache \
-    data/clingen/comparison storage/app/temp storage/app/public/exports \
+    data/clingen/comparison storage/app/temp storage/app/public/exports storage/releases \
     && chown -R www-data:www-data storage bootstrap/cache data \
     && chmod -R 775 storage bootstrap/cache data
 
