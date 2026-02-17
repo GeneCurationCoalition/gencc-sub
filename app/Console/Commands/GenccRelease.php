@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Carbon\Carbon;
+use Google\Cloud\Storage\StorageClient;
 
 use App\Models\Job;
 use App\Models\Action;
@@ -32,7 +33,7 @@ class GenccRelease extends Command
      *
      * @var string
      */
-    protected $description = 'Release pending submissions';
+    protected $description = 'Release pending submissions (process|repair|bootstrap)';
 
     /**
      * Release statistics for tracking
@@ -51,6 +52,86 @@ class GenccRelease extends Command
      */
     protected ?string $releaseNotesFile = null;
     protected ?string $submissionsCsvFile = null;
+
+    /**
+     * Track the release slug (predicted or explicit for bootstrap).
+     */
+    protected ?string $releaseSlug = null;
+
+    /**
+     * GCS bucket instance (lazy-loaded).
+     */
+    protected $gcsBucket = null;
+
+    /**
+     * Get the GCS bucket for storing release files.
+     * Returns null if GCS is not configured.
+     */
+    protected function getGcsBucket()
+    {
+        if ($this->gcsBucket === null) {
+            $bucketName = config('filesystems.disks.gcs.bucket');
+            if (empty($bucketName)) {
+                return null;
+            }
+
+            try {
+                $storage = new StorageClient([
+                    'projectId' => config('filesystems.disks.gcs.project_id'),
+                ]);
+                $this->gcsBucket = $storage->bucket($bucketName);
+            } catch (\Exception $e) {
+                $this->warn("GCS not available: {$e->getMessage()}. Files will be stored locally.");
+                return null;
+            }
+        }
+
+        return $this->gcsBucket;
+    }
+
+    /**
+     * Upload content to GCS and return the object name.
+     * Falls back to local storage if GCS is not configured.
+     *
+     * @param string $content File content
+     * @param string $objectName GCS object name (path within bucket)
+     * @param string $contentType MIME type
+     * @param string|null $localFallbackPath Local path for fallback storage
+     * @return string The object name or local filename
+     */
+    protected function uploadToGcs(string $content, string $objectName, string $contentType, ?string $localFallbackPath = null): string
+    {
+        $bucket = $this->getGcsBucket();
+        $prefix = config('filesystems.disks.gcs.path_prefix', 'releases');
+        $fullObjectName = $prefix ? "{$prefix}/{$objectName}" : $objectName;
+
+        if ($bucket) {
+            try {
+                $bucket->upload($content, [
+                    'name' => $fullObjectName,
+                    'metadata' => [
+                        'contentType' => $contentType,
+                    ],
+                ]);
+                $this->info("  Uploaded to GCS: {$fullObjectName}");
+                return $objectName;
+            } catch (\Exception $e) {
+                $this->warn("  GCS upload failed: {$e->getMessage()}. Falling back to local storage.");
+            }
+        }
+
+        // Fallback to local storage
+        if ($localFallbackPath) {
+            $dir = dirname($localFallbackPath);
+            if (!File::isDirectory($dir)) {
+                File::makeDirectory($dir, 0755, true);
+            }
+            File::put($localFallbackPath, $content);
+            $this->info("  Stored locally: {$localFallbackPath}");
+        }
+
+        return $objectName;
+    }
 
     /**
      * Execute the console command.
@@ -86,10 +167,338 @@ class GenccRelease extends Command
                 $this->repairRelease();
                 break;
 
+            case 'bootstrap':
+                return $this->bootstrapRelease();
+
             default:
                 $this->error("Invalid argument: {$arg}");
                 return 1;
         }
+    }
+
+    /**
+     * Bootstrap an initial release record after database restore.
+     *
+     * This creates a GCC-00000 release record representing all currently live
+     * submissions without processing any jobs. Use this after:
+     * - Restoring a database from backup
+     * - Initial deployment with existing data
+     *
+     * This command generates the CSV and release notes for all live submissions
+     * and uploads them to GCS (with local fallback).
+     *
+     * @return int
+     */
+    protected function bootstrapRelease(): int
+    {
+        $startTime = Carbon::now();
+
+        $this->info("=== GenCC Release Bootstrap ===");
+        $this->info("");
+
+        // Check if any releases already exist (bootstrap should be the first)
+        $existingBootstrap = Release::first();
+        if ($existingBootstrap) {
+            $this->error("A release already exists ({$existingBootstrap->slug}, created {$existingBootstrap->released_at}).");
+            $this->error("Bootstrap should only be run once after database restore when no releases exist.");
+            return 1;
+        }
+
+        // Check current state
+        $liveSubmissions = Submission::where('is_live', true)->count();
+        $releasedJobs = Job::where('status', Job::STATUS_RELEASED)->count();
+        $latestRelease = Release::orderBy('id', 'desc')->first();
+
+        $this->info("Current State:");
+        $this->info("  Live submissions: {$liveSubmissions}");
+        $this->info("  Released jobs: {$releasedJobs}");
+        $this->info("  Existing releases: " . ($latestRelease ? $latestRelease->slug : "None"));
+        $this->info("");
+
+        if ($liveSubmissions === 0) {
+            $this->error("No live submissions found. Nothing to bootstrap.");
+            return 1;
+        }
+
+        // Confirm before proceeding
+        if (!$this->option('no-interaction')) {
+            $this->warn("This will create an initial release record (GCC-00000) representing");
+            $this->warn("all {$liveSubmissions} currently live submissions.");
+            $this->info("");
+            if (!$this->confirm("Proceed with bootstrap?", true)) {
+                $this->info("Bootstrap cancelled.");
+                return 0;
+            }
+        }
+
+        $this->info("Starting bootstrap...");
+        $this->info("");
+
+        // Gather statistics from live submissions (no new/republish/unpublish - just totals)
+        $this->info("1. Gathering submission statistics...");
+        $this->gatherBootstrapStatistics();
+
+        // Generate release notes
+        $this->info("2. Generating release notes...");
+        $this->generateBootstrapReleaseNotes();
+
+        // Generate submissions CSV
+        $this->info("3. Generating submissions CSV...");
+        $this->generateSubmissionsCsv();
+
+        // Update submitter counts
+        $this->info("4. Updating submitter counts...");
+        $this->updateSubmitterCounts();
+
+        // Create the bootstrap release record with slug GCC-00000
+        $this->info("5. Creating bootstrap release record...");
+        $this->createBootstrapReleaseRecord($startTime);
+
+        $this->info("");
+        $this->info("=== Bootstrap Complete ===");
+
+        $duration = $startTime->diffInSeconds(Carbon::now());
+        $this->info("Duration: {$duration} seconds");
+        $this->info("Live submissions captured: {$liveSubmissions}");
+
+        \Log::info("GenCC Release: Bootstrap complete", [
+            'live_submissions' => $liveSubmissions,
+            'duration' => $duration,
+        ]);
+
+        return 0;
+    }
+
+    /**
+     * Gather statistics for bootstrap (all live submissions, no changes).
+     */
+    protected function gatherBootstrapStatistics(): void
+    {
+        // For bootstrap, we don't have new/republish/unpublish counts
+        // All live submissions are considered as the baseline
+        $this->releaseStats = [
+            'new' => 0,
+            'republish' => 0,
+            'unpublish' => 0,
+            'by_submitter' => [],
+            'jobs_processed' => [],
+            'actions_processed' => [],
+        ];
+
+        // Count live submissions by submitter for reference
+        $liveSubmissions = Submission::where('is_live', true)
+            ->with('submitter')
+            ->get();
+
+        foreach ($liveSubmissions as $submission) {
+            $submitterName = $submission->submitter->name ?? 'Unknown';
+            if (!isset($this->releaseStats['by_submitter'][$submitterName])) {
+                $this->releaseStats['by_submitter'][$submitterName] = [
+                    'new' => 0,
+                    'republish' => 0,
+                    'unpublish' => 0,
+                    'live' => 0,
+                ];
+            }
+            $this->releaseStats['by_submitter'][$submitterName]['live']++;
+        }
+
+        $this->info("  Found " . $liveSubmissions->count() . " released submissions from " .
+            count($this->releaseStats['by_submitter']) . " submitters");
+
+        // Gather all released jobs (STATUS_RELEASED) for the bootstrap record
+        $releasedJobs = Job::where('status', Job::STATUS_RELEASED)
+            ->with(['submitter', 'submissions' => function ($query) {
+                $query->where('is_live', true);
+            }])
+            ->orderBy('released_at')
+            ->get();
+
+        foreach ($releasedJobs as $job) {
+            $this->releaseStats['jobs_processed'][] = [
+                'job_id' => $job->id,
+                'slug' => $job->slug,
+                'submitter_name' => $job->submitter->name ?? 'Unknown',
+                'submission_count' => $job->submissions->count(),
+                'released_at' => $job->released_at?->toIso8601String(),
+            ];
+        }
+
+        $this->info("  Found " . count($this->releaseStats['jobs_processed']) . " released jobs");
+    }
+
+    /**
+     * Generate release notes specifically for bootstrap (no changes, just state).
+     */
+    protected function generateBootstrapReleaseNotes(): void
+    {
+        $releaseDate = Carbon::now();
+        // Predict slug using the model's sequential numbering (should be GCC-00000 for bootstrap)
+        $nextNumber = Release::getNextSlugNumber();
+        $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
+        $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '_bootstrap.txt';
+
+        // Ensure the releases directory exists
+        $releasesDir = storage_path('releases');
+        if (!File::isDirectory($releasesDir)) {
+            File::makeDirectory($releasesDir, 0755, true);
+        }
+
+        // Gather cumulative statistics
+        $cumulativeStats = $this->gatherCumulativeStatistics();
+
+        // Build plain text content
+        $separator = str_repeat('=', 72);
+        $thinSeparator = str_repeat('-', 72);
+
+        $content = "{$separator}\n";
+        $content .= "                GenCC BOOTSTRAP RELEASE NOTES - {$this->releaseSlug}\n";
+        $content .= "{$separator}\n\n";
+        $content .= "Release: {$this->releaseSlug}\n";
+        $content .= "Date: {$releaseDate->format('F j, Y g:i A T')}\n";
+        $content .= "Type: Initial Bootstrap (Database Restore)\n";
+        $content .= "\n";
+
+        // Summary section
+        $content .= "{$thinSeparator}\n";
+        $content .= "SUMMARY\n";
+        $content .= "{$thinSeparator}\n\n";
+        $content .= "This is a bootstrap release created after database restore.\n";
+        $content .= "It captures the current state of all released submissions.\n";
+        $content .= "No new changes were processed in this release.\n";
+        $content .= "\n";
+
+        // Jobs included section
+        if (!empty($this->releaseStats['jobs_processed'])) {
+            $content .= "{$thinSeparator}\n";
+            $content .= "JOBS INCLUDED (" . count($this->releaseStats['jobs_processed']) . " total)\n";
+            $content .= "{$thinSeparator}\n\n";
+            $content .= sprintf("  %-12s %-40s %12s\n", "Job ID", "Submitter", "Submissions");
+            $content .= "  " . str_repeat('-', 66) . "\n";
+
+            foreach ($this->releaseStats['jobs_processed'] as $job) {
+                $submitterName = mb_strlen($job['submitter_name']) > 38
+                    ? mb_substr($job['submitter_name'], 0, 35) . '...'
+                    : $job['submitter_name'];
+                $content .= sprintf("  %-12s %-40s %12s\n",
+                    $job['slug'],
+                    $submitterName,
+                    number_format($job['submission_count'])
+                );
+            }
+            $content .= "\n";
+        }
+
+        // Current State section
+        $content .= "{$separator}\n";
+        $content .= "                    CURRENT STATE (ALL SUBMISSIONS)\n";
+        $content .= "{$separator}\n\n";
+
+        // Overall totals
+        $content .= "OVERALL TOTALS:\n\n";
+        $content .= sprintf("  %-40s %10s\n", "Total Released Submissions", number_format($cumulativeStats['total_live']));
+        $content .= sprintf("  %-40s %10s\n", "Total Published (including archived)", number_format($cumulativeStats['total_published']));
+        $content .= sprintf("  %-40s %10s\n", "Total Unpublished", number_format($cumulativeStats['total_unpublished']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Gene-Disease Pairs", number_format($cumulativeStats['unique_gene_disease']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Genes", number_format($cumulativeStats['unique_genes']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Diseases", number_format($cumulativeStats['unique_diseases']));
+        $content .= "\n";
+
+        // Classification breakdown
+        if (!empty($cumulativeStats['by_classification'])) {
+            $content .= "BY CLASSIFICATION:\n\n";
+            foreach ($cumulativeStats['by_classification'] as $classification => $count) {
+                $content .= sprintf("  %-40s %10s\n", $classification, number_format($count));
+            }
+            $content .= "\n";
+        }
+
+        // All submissions by submitter
+        if (!empty($cumulativeStats['by_submitter'])) {
+            $content .= "ALL SUBMISSIONS BY SUBMITTER:\n\n";
+            $content .= sprintf("  %-40s %8s %10s %12s\n", "Submitter", "Released", "Published", "Unpublished");
+            $content .= "  " . str_repeat('-', 72) . "\n";
+
+            foreach ($cumulativeStats['by_submitter'] as $submitter => $stats) {
+                $displayName = mb_strlen($submitter) > 38 ? mb_substr($submitter, 0, 35) . '...' : $submitter;
+                $content .= sprintf("  %-40s %8s %10s %12s\n",
+                    $displayName,
+                    number_format($stats['live']),
+                    number_format($stats['published']),
+                    number_format($stats['unpublished'])
+                );
+            }
+            $content .= "\n";
+        }
+
+        // Footer
+        $content .= "{$separator}\n";
+        $content .= "Generated automatically by GenCC Release Bootstrap\n";
+        $content .= "{$separator}\n";
+
+        // Upload to GCS (with local fallback)
+        $localFallbackPath = $releasesDir . '/' . $filename;
+        $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
+
+        $this->releaseNotesFile = $filename;
+        $this->info("  Release notes generated: {$filename}");
+
+        \Log::info("GenCC Release: Bootstrap release notes generated", [
+            'filename' => $filename,
+            'total_live' => $cumulativeStats['total_live'],
+        ]);
+    }
+
+    /**
+     * Create the bootstrap release record with slug GCC-00000.
+     */
+    protected function createBootstrapReleaseRecord(Carbon $startTime): void
+    {
+        $endTime = Carbon::now();
+        $duration = $startTime->diffInSeconds($endTime);
+
+        // Gather cumulative stats
+        $cumulativeStats = $this->gatherCumulativeStatistics();
+        $liveCount = $cumulativeStats['total_live'];
+
+        // Build by_submitter from releaseStats (shows live counts per submitter)
+        $bySubmitter = [];
+        foreach ($this->releaseStats['by_submitter'] as $name => $stats) {
+            $bySubmitter[$name] = [
+                'new' => 0,
+                'republish' => 0,
+                'unpublish' => 0,
+                'live' => $stats['live'] ?? 0,
+            ];
+        }
+
+        $release = Release::create([
+            // slug auto-generated as GCC-00000 (first release, count-based)
+            'released_at' => $startTime,
+            'release_notes_file' => $this->releaseNotesFile,
+            'submissions_csv_file' => $this->submissionsCsvFile,
+            'user_id' => $this->option('user_id') ? (int)$this->option('user_id') : null,
+            'new_count' => 0,
+            'republish_count' => 0,
+            'unpublish_count' => 0,
+            'failed_count' => 0,
+            'total_count' => $liveCount,
+            'jobs_processed' => $this->releaseStats['jobs_processed'],
+            'errors' => ['note' => 'Bootstrap release created at ' . Carbon::now()->toIso8601String()],
+            'by_submitter' => $bySubmitter,
+            'cumulative_stats' => $cumulativeStats,
+            'duration_seconds' => $duration,
+        ]);
+
+        $this->info("  Bootstrap release record created: {$release->slug}");
+        $this->info("  Jobs included: " . count($this->releaseStats['jobs_processed']));
+
+        \Log::info("GenCC Release: Bootstrap release record created", [
+            'slug' => $release->slug,
+            'total_live' => $liveCount,
+            'jobs_count' => count($this->releaseStats['jobs_processed']),
+            'duration' => $duration,
+        ]);
     }
 
     /**
@@ -135,10 +544,14 @@ class GenccRelease extends Command
         $this->info("Checking existing outputs:");
         $this->info("  CSV file ({$csvFilename}): " . ($csvExists ? "EXISTS" : "MISSING"));
 
-        // Check release notes
+        // Check release notes (check both .txt and legacy .md)
         $releasesDir = storage_path('releases');
-        $notesPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.md';
-        $notesFiles = glob($releasesDir . '/' . $notesPattern);
+        $notesTxtPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.txt';
+        $notesMdPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.md';
+        $notesFiles = array_merge(
+            glob($releasesDir . '/' . $notesTxtPattern),
+            glob($releasesDir . '/' . $notesMdPattern)
+        );
         $notesExist = !empty($notesFiles);
         $this->info("  Release notes: " . ($notesExist ? "EXISTS (" . count($notesFiles) . " files)" : "MISSING"));
         $this->info("");
@@ -279,7 +692,7 @@ class GenccRelease extends Command
      */
     protected function getPendingJobs()
     {
-        return Job::where('status', Job::STATUS_SUBMITTED)
+        $jobs = Job::where('status', Job::STATUS_SUBMITTED)
                    ->with([
                        'submissions',
                        'submissions.gene',
@@ -295,6 +708,15 @@ class GenccRelease extends Command
                              ->where('status', Action::STATUS_PENDING);
                    })
                    ->get();
+
+        // Diagnostic: Log the jobs being selected for release
+        $jobSlugs = $jobs->pluck('slug')->toArray();
+        \Log::info("GenCC Release: getPendingJobs() found " . count($jobSlugs) . " jobs with status='" . Job::STATUS_SUBMITTED . "'", [
+            'job_slugs' => $jobSlugs,
+            'statuses' => $jobs->pluck('status', 'slug')->toArray(),
+        ]);
+
+        return $jobs;
     }
 
 
@@ -349,6 +771,25 @@ class GenccRelease extends Command
                     'trace' => $e->getTraceAsString()
                 ]);
             }
+        }
+
+        // Diagnostic: Verify all jobs have been transitioned
+        $jobIds = $jobs->pluck('id')->toArray();
+        $freshJobs = Job::whereIn('id', $jobIds)->get();
+        $statusSummary = [];
+        foreach ($freshJobs as $fj) {
+            $statusSummary[$fj->slug] = $fj->status;
+        }
+        \Log::info("GenCC Release: process_jobs() complete. Final job statuses:", $statusSummary);
+        $this->info("Job status summary after release: " . json_encode($statusSummary));
+
+        // Check if any jobs are still in 'submitted' status (they shouldn't be!)
+        $stillSubmitted = $freshJobs->where('status', Job::STATUS_SUBMITTED)->pluck('slug')->toArray();
+        if (!empty($stillSubmitted)) {
+            \Log::error("GenCC Release: Jobs still have 'submitted' status after processing!", [
+                'jobs' => $stillSubmitted,
+            ]);
+            $this->error("WARNING: The following jobs are still 'submitted' after processing: " . implode(', ', $stillSubmitted));
         }
 
         return 0;
@@ -443,9 +884,24 @@ class GenccRelease extends Command
             }
 
             // Mark the job as processed
+            $originalStatus = $job->status;
             if ($job->status) {
                 JobStateMachine::complete($job);
                 $job->save();
+
+                // Diagnostic: Verify the status was persisted
+                $freshJob = Job::find($job->id);
+                if ($freshJob->status !== Job::STATUS_RELEASED) {
+                    \Log::error("GenCC Release: Job {$job->slug} status NOT persisted!", [
+                        'expected' => Job::STATUS_RELEASED,
+                        'original_status' => $originalStatus,
+                        'model_status_after_save' => $job->status,
+                        'db_status' => $freshJob->status,
+                    ]);
+                    $this->error("WARNING: Job {$job->slug} status did not persist to {Job::STATUS_RELEASED}");
+                } else {
+                    \Log::info("GenCC Release: Job {$job->slug} transitioned from '{$originalStatus}' to '{$freshJob->status}'");
+                }
             } else {
                 $job->update(['status' => Job::STATUS_PROCESSED]);
             }
@@ -540,12 +996,17 @@ class GenccRelease extends Command
     }
 
     /**
-     * Generate a release notes markdown file.
+     * Generate a release notes plain text file.
      */
     protected function generateReleaseNotes()
     {
         $releaseDate = Carbon::now();
-        $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.md';
+
+        // Predict the release slug using the model's sequential numbering
+        $nextNumber = Release::getNextSlugNumber();
+        $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
+
+        $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
         // Ensure the releases directory exists
         $releasesDir = storage_path('releases');
@@ -559,36 +1020,56 @@ class GenccRelease extends Command
         // Gather cumulative statistics for all released submissions
         $cumulativeStats = $this->gatherCumulativeStatistics();
 
-        // Build the markdown content
-        $content = "# GenCC Release Notes\n\n";
-        $content .= "**Release Date:** {$releaseDate->format('F j, Y g:i A T')}\n\n";
+        // Build plain text content
+        $separator = str_repeat('=', 72);
+        $thinSeparator = str_repeat('-', 72);
+
+        $content = "{$separator}\n";
+        $content .= "                    GenCC RELEASE NOTES - {$this->releaseSlug}\n";
+        $content .= "{$separator}\n\n";
+        $content .= "Release: {$this->releaseSlug}\n";
+        $content .= "Date: {$releaseDate->format('F j, Y g:i A T')}\n";
+        $content .= "\n";
 
         // Summary section
-        $content .= "## Summary\n\n";
-        $content .= "| Metric | Count |\n";
-        $content .= "|--------|-------|\n";
-        $content .= "| New Submissions | {$this->releaseStats['new']} |\n";
-        $content .= "| Updated Submissions | {$this->releaseStats['republish']} |\n";
-        $content .= "| Unpublished Submissions | {$this->releaseStats['unpublish']} |\n";
-        $content .= "| **Total Changes** | **{$totalChanges}** |\n\n";
+        $content .= "{$thinSeparator}\n";
+        $content .= "SUMMARY\n";
+        $content .= "{$thinSeparator}\n\n";
+        $content .= sprintf("  %-30s %10s\n", "New Submissions", number_format($this->releaseStats['new']));
+        $content .= sprintf("  %-30s %10s\n", "Updated Submissions", number_format($this->releaseStats['republish']));
+        $content .= sprintf("  %-30s %10s\n", "Unpublished Submissions", number_format($this->releaseStats['unpublish']));
+        $content .= "  " . str_repeat('-', 42) . "\n";
+        $content .= sprintf("  %-30s %10s\n", "TOTAL CHANGES", number_format($totalChanges));
+        $content .= "\n";
 
         // Jobs processed section
         if (!empty($this->releaseStats['jobs_processed'])) {
-            $content .= "## Jobs Processed\n\n";
-            $content .= "| Job | Submitter | Submissions |\n";
-            $content .= "|-----|-----------|-------------|\n";
+            $content .= "{$thinSeparator}\n";
+            $content .= "JOBS PROCESSED\n";
+            $content .= "{$thinSeparator}\n\n";
+            $content .= sprintf("  %-12s %-40s %12s\n", "Job ID", "Submitter", "Submissions");
+            $content .= "  " . str_repeat('-', 66) . "\n";
 
             foreach ($this->releaseStats['jobs_processed'] as $job) {
-                $content .= "| {$job['slug']} | {$job['submitter_name']} | {$job['submission_count']} |\n";
+                $submitterName = mb_strlen($job['submitter_name']) > 38
+                    ? mb_substr($job['submitter_name'], 0, 35) . '...'
+                    : $job['submitter_name'];
+                $content .= sprintf("  %-12s %-40s %12s\n",
+                    $job['slug'],
+                    $submitterName,
+                    number_format($job['submission_count'])
+                );
             }
             $content .= "\n";
         }
 
         // Breakdown by submitter section
         if (!empty($this->releaseStats['by_submitter'])) {
-            $content .= "## Breakdown by Submitter\n\n";
-            $content .= "| Submitter | New | Updated | Unpublished | Total |\n";
-            $content .= "|-----------|-----|---------|-------------|-------|\n";
+            $content .= "{$thinSeparator}\n";
+            $content .= "BREAKDOWN BY SUBMITTER\n";
+            $content .= "{$thinSeparator}\n\n";
+            $content .= sprintf("  %-36s %8s %8s %10s %8s\n", "Submitter", "New", "Updated", "Unpublish", "Total");
+            $content .= "  " . str_repeat('-', 72) . "\n";
 
             // Sort by total submissions descending
             $submitters = $this->releaseStats['by_submitter'];
@@ -600,74 +1081,97 @@ class GenccRelease extends Command
 
             foreach ($submitters as $name => $stats) {
                 $total = $stats['new'] + $stats['republish'] + $stats['unpublish'];
-                $content .= "| {$name} | {$stats['new']} | {$stats['republish']} | {$stats['unpublish']} | {$total} |\n";
+                $displayName = mb_strlen($name) > 34 ? mb_substr($name, 0, 31) . '...' : $name;
+                $content .= sprintf("  %-36s %8s %8s %10s %8s\n",
+                    $displayName,
+                    number_format($stats['new']),
+                    number_format($stats['republish']),
+                    number_format($stats['unpublish']),
+                    number_format($total)
+                );
             }
             $content .= "\n";
         }
 
         // Unpublished submissions detail section
         if (!empty($this->releaseStats['actions_processed'])) {
-            $content .= "## Unpublished Submissions\n\n";
-            $content .= "| Submission ID | Gene | Disease | Submitter |\n";
-            $content .= "|---------------|------|---------|----------|\n";
+            $unpublishActions = array_filter($this->releaseStats['actions_processed'], fn($a) => $a['type'] === 'unpublish');
+            if (!empty($unpublishActions)) {
+                $content .= "{$thinSeparator}\n";
+                $content .= "UNPUBLISHED SUBMISSIONS\n";
+                $content .= "{$thinSeparator}\n\n";
+                $content .= sprintf("  %-14s %-12s %-25s %s\n", "Submission ID", "Gene", "Disease", "Submitter");
+                $content .= "  " . str_repeat('-', 68) . "\n";
 
-            foreach ($this->releaseStats['actions_processed'] as $action) {
-                if ($action['type'] === 'unpublish') {
-                    $content .= "| {$action['submission_sid']} | {$action['gene']} | {$action['disease']} | {$action['submitter']} |\n";
+                foreach ($unpublishActions as $action) {
+                    $disease = mb_strlen($action['disease']) > 23 ? mb_substr($action['disease'], 0, 20) . '...' : $action['disease'];
+                    $submitter = mb_strlen($action['submitter']) > 18 ? mb_substr($action['submitter'], 0, 15) . '...' : $action['submitter'];
+                    $content .= sprintf("  %-14s %-12s %-25s %s\n",
+                        $action['submission_sid'],
+                        $action['gene'],
+                        $disease,
+                        $submitter
+                    );
                 }
+                $content .= "\n";
             }
-            $content .= "\n";
         }
 
         // Current State section - full accounting of all released submissions
-        $content .= "## Current State (All Released Submissions)\n\n";
+        $content .= "{$separator}\n";
+        $content .= "                    CURRENT STATE (ALL SUBMISSIONS)\n";
+        $content .= "{$separator}\n\n";
 
         // Overall totals
-        $content .= "### Overall Totals\n\n";
-        $content .= "| Metric | Count |\n";
-        $content .= "|--------|-------|\n";
-        $content .= "| Total Live Submissions | {$cumulativeStats['total_live']} |\n";
-        $content .= "| Total Published (including archived) | {$cumulativeStats['total_published']} |\n";
-        $content .= "| Total Unpublished | {$cumulativeStats['total_unpublished']} |\n";
-        $content .= "| Unique Gene-Disease Pairs | {$cumulativeStats['unique_gene_disease']} |\n";
-        $content .= "| Unique Genes | {$cumulativeStats['unique_genes']} |\n";
-        $content .= "| Unique Diseases | {$cumulativeStats['unique_diseases']} |\n\n";
+        $content .= "OVERALL TOTALS:\n\n";
+        $content .= sprintf("  %-40s %10s\n", "Total Released Submissions", number_format($cumulativeStats['total_live']));
+        $content .= sprintf("  %-40s %10s\n", "Total Published (including archived)", number_format($cumulativeStats['total_published']));
+        $content .= sprintf("  %-40s %10s\n", "Total Unpublished", number_format($cumulativeStats['total_unpublished']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Gene-Disease Pairs", number_format($cumulativeStats['unique_gene_disease']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Genes", number_format($cumulativeStats['unique_genes']));
+        $content .= sprintf("  %-40s %10s\n", "Unique Diseases", number_format($cumulativeStats['unique_diseases']));
+        $content .= "\n";
 
         // Classification breakdown
         if (!empty($cumulativeStats['by_classification'])) {
-            $content .= "### By Classification\n\n";
-            $content .= "| Classification | Count |\n";
-            $content .= "|----------------|-------|\n";
-
+            $content .= "BY CLASSIFICATION:\n\n";
             foreach ($cumulativeStats['by_classification'] as $classification => $count) {
-                $content .= "| {$classification} | {$count} |\n";
+                $content .= sprintf("  %-40s %10s\n", $classification, number_format($count));
             }
             $content .= "\n";
         }
 
         // All submissions by submitter
         if (!empty($cumulativeStats['by_submitter'])) {
-            $content .= "### All Submissions by Submitter\n\n";
-            $content .= "| Submitter | Live | Published | Unpublished |\n";
-            $content .= "|-----------|------|-----------|-------------|\n";
+            $content .= "ALL SUBMISSIONS BY SUBMITTER:\n\n";
+            $content .= sprintf("  %-40s %8s %10s %12s\n", "Submitter", "Released", "Published", "Unpublished");
+            $content .= "  " . str_repeat('-', 72) . "\n";
 
             foreach ($cumulativeStats['by_submitter'] as $submitter => $stats) {
-                $content .= "| {$submitter} | {$stats['live']} | {$stats['published']} | {$stats['unpublished']} |\n";
+                $displayName = mb_strlen($submitter) > 38 ? mb_substr($submitter, 0, 35) . '...' : $submitter;
+                $content .= sprintf("  %-40s %8s %10s %12s\n",
+                    $displayName,
+                    number_format($stats['live']),
+                    number_format($stats['published']),
+                    number_format($stats['unpublished'])
+                );
             }
             $content .= "\n";
         }
 
         // Footer
-        $content .= "---\n";
-        $content .= "*Generated automatically by GenCC Release Process*\n";
+        $content .= "{$separator}\n";
+        $content .= "Generated automatically by GenCC Release Process\n";
+        $content .= "{$separator}\n";
 
-        // Write the file
-        $filepath = $releasesDir . '/' . $filename;
-        File::put($filepath, $content);
+        // Upload to GCS (with local fallback)
+        $localFallbackPath = $releasesDir . '/' . $filename;
+        $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
         $this->releaseNotesFile = $filename;
-        $this->info("Release notes generated: {$filepath}");
-        \Log::info("GenCC Release: Release notes generated at {$filepath}", [
+        $this->info("Release notes generated: {$filename}");
+        \Log::info("GenCC Release: Release notes generated", [
+            'filename' => $filename,
             'new' => $this->releaseStats['new'],
             'republish' => $this->releaseStats['republish'],
             'unpublish' => $this->releaseStats['unpublish'],
@@ -834,7 +1338,7 @@ class GenccRelease extends Command
 
         // Generate timestamped filename and a "latest" symlink
         $releaseDate = Carbon::now();
-        $timestampedFilename = 'gencc-submissions-' . $releaseDate->format('Y-m-d') . '.csv';
+        $timestampedFilename = 'gencc-submissions-' . $releaseDate->format('Y-m-d_His') . '.csv';
         $latestFilename = 'gencc-submissions.csv';
 
         // Get all live, published submissions with relationships
@@ -973,17 +1477,17 @@ class GenccRelease extends Command
             $csvContent .= $this->arrayToCsvLine($row);
         }
 
-        // Write the timestamped file
+        // Upload timestamped file to GCS (with local fallback)
         $timestampedPath = $exportsDir . '/' . $timestampedFilename;
-        File::put($timestampedPath, $csvContent);
+        $this->uploadToGcs($csvContent, "csv/{$timestampedFilename}", 'text/csv', $timestampedPath);
 
-        // Create/update the "latest" file (copy, not symlink for better compatibility)
+        // Also upload "latest" version for easy access
         $latestPath = $exportsDir . '/' . $latestFilename;
-        File::copy($timestampedPath, $latestPath);
+        $this->uploadToGcs($csvContent, "csv/{$latestFilename}", 'text/csv', $latestPath);
 
         $this->submissionsCsvFile = $timestampedFilename;
-        $this->info("Submissions CSV generated: {$timestampedPath}");
-        $this->info("Latest CSV available at: {$latestPath}");
+        $this->info("Submissions CSV generated: {$timestampedFilename}");
+        $this->info("Latest CSV available as: {$latestFilename}");
 
         \Log::info("GenCC Release: Submissions CSV generated", [
             'timestamped_file' => $timestampedFilename,

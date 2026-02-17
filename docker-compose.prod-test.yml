@@ -14,6 +14,12 @@
 # Prerequisites:
 #   - Local MySQL running with gencc_sub database prepared
 #   - Run scripts/backup/restore-db.sh locally first to set up the database
+#
+# GCS Support (optional):
+#   To enable Google Cloud Storage for release files:
+#   1. Run `gcloud auth application-default login` on your host machine
+#   2. Add GCS env vars to your .env file (see .env.example)
+#   The gcloud credentials are automatically mounted into the container
 
 services:
   app:
@@ -28,6 +34,8 @@ services:
     # App code is baked into the image (root-owned)
     volumes:
       - ./.env:/var/www/html/.env:ro
+      # Mount gcloud credentials for GCS access (optional - set up with: gcloud auth application-default login)
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     ports:
       - "8080:80"   # Production uses port 80 internally, expose as 8080 locally
     environment:
@@ -55,3 +63,5 @@ services:
       - SUBMIT_URL=http://127.0.0.1:8080/api/submit
       # App key - generate one or use existing
       - APP_KEY=${APP_KEY:-base64:your-base64-encoded-key-here}
+      # GCS credentials (reads project/bucket from .env, uses mounted gcloud ADC)
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
