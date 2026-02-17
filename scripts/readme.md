@@ -14,7 +14,7 @@ scripts/
 │   ├── backup-db.sh             # Production backup to GCS
 │   ├── restore-db.sh            # Local development restore
 │   ├── restore-db-from-gcs.sh   # Production restore from GCS
-│   └── setup-backup-cron.sh     # Setup nightly backup cron job
+│   └── setup-backup-timer.sh    # Setup nightly backup systemd timer
 ├── clingen/                     # ClinGen pipeline Python package
 │   ├── __init__.py
 │   ├── config.py               # Centralized configuration
@@ -145,28 +145,42 @@ Restores the database from a backup in Google Cloud Storage.
 ./scripts/backup/restore-db-from-gcs.sh --local /path/to/backup.sql.gz
 ```
 
-### setup-backup-cron.sh (Production Setup)
+### setup-backup-timer.sh (Production Setup)
 
 One-time setup script for nightly database backups on the production VM.
 
 ```bash
-sudo ./scripts/backup/setup-backup-cron.sh --bucket gencc-backups
+sudo ./scripts/backup/setup-backup-timer.sh --bucket gencc-backups
 ```
 
 **What it does:**
 
 1. Creates `/etc/gencc/backup.env` with configuration
-2. Installs backup script to `/opt/gencc/scripts/`
-3. Sets up cron job for nightly backups at 2:00 AM UTC
+2. Installs backup script to `/opt/gencc/bin/`
+3. Sets up systemd service and timer for nightly backups at 2:00 AM UTC
 4. Creates log rotation configuration
-5. Verifies gsutil is configured correctly
+5. Verifies gcloud storage is configured correctly
 
 **Prerequisites:**
 
 - Root or sudo access
-- gsutil installed and configured
+- gcloud CLI installed and configured
 - MySQL client installed
 - Service account with Storage Object Creator role
+
+**Useful commands after setup:**
+
+```bash
+# Run backup manually
+systemctl start gencc-backup-db.service
+
+# Check timer status
+systemctl status gencc-backup-db.timer
+systemctl list-timers gencc-backup-db.timer
+
+# View backup log
+journalctl -u gencc-backup-db.service
+```
 
 ---
 

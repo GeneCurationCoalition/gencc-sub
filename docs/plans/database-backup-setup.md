@@ -165,10 +165,10 @@ cd /path/to/gencc-sub
 # Make scripts executable
 chmod +x scripts/backup/backup-db.sh
 chmod +x scripts/backup/restore-db-from-gcs.sh
-chmod +x scripts/backup/setup-backup-cron.sh
+chmod +x scripts/backup/setup-backup-timer.sh
 
 # Run the setup script
-sudo ./scripts/backup/setup-backup-cron.sh \
+sudo ./scripts/backup/setup-backup-timer.sh \
     --bucket gencc-backups \
     --db-password 'YOUR_DATABASE_PASSWORD' \
     --db-host 127.0.0.1 \
@@ -182,24 +182,28 @@ sudo ./scripts/backup/setup-backup-cron.sh \
 ### Test Backup Manually
 
 ```bash
-# Run a manual backup
-sudo /opt/gencc/scripts/backup-db.sh
+# Run a manual backup using systemd
+sudo systemctl start gencc-backup-db.service
 
 # Check the log
 tail -20 /var/log/gencc/backup.log
+journalctl -u gencc-backup-db.service
 
 # Verify in GCS
-gsutil ls -l gs://gencc-backups/database-backups/
+gcloud storage ls -l gs://gencc-backups/database-backups/
 ```
 
-### Verify Cron Job
+### Verify Systemd Timer
 
 ```bash
-# Check cron job is installed
-cat /etc/cron.d/gencc-backup
+# Check timer status
+systemctl status gencc-backup-db.timer
 
-# Check cron service is running
-systemctl status cron
+# List active timers
+systemctl list-timers gencc-backup-db.timer
+
+# Check service unit
+systemctl cat gencc-backup-db.service
 ```
 
 ### Test Restore (on non-production)
@@ -343,10 +347,10 @@ gunzip -c /tmp/gencc_sub_20260115-020000.sql.gz | mysql -u root -p gencc_sub
 - [ ] Versioning enabled on bucket
 - [ ] Lifecycle policy configured (30-day retention)
 - [ ] Service account created with appropriate roles
-- [ ] VM has gsutil configured and authenticated
-- [ ] Backup scripts installed to `/opt/gencc/scripts/`
+- [ ] VM has gcloud CLI configured and authenticated
+- [ ] Backup scripts installed to `/opt/gencc/bin/`
 - [ ] Configuration file created at `/etc/gencc/backup.env`
-- [ ] Cron job installed at `/etc/cron.d/gencc-backup`
+- [ ] Systemd timer enabled at `gencc-backup-db.timer`
 - [ ] Log rotation configured
 - [ ] Manual test backup completed successfully
 - [ ] Restore procedure tested on non-production database
