@@ -8,7 +8,10 @@ use Illuminate\Support\Facades\File;
 use Carbon\Carbon;
 use Google\Cloud\Storage\StorageClient;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Csv as CsvWriter;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
+use PhpOffice\PhpSpreadsheet\Writer\Xls as XlsWriter;
 
 use App\Models\Job;
 use App\Models\Action;
@@ -349,7 +352,7 @@ class GenccRelease extends Command
         // Predict slug using the model's sequential numbering (should be GCC-00000 for bootstrap)
         $nextNumber = Release::getNextSlugNumber();
         $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
-        $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '_bootstrap.txt';
+        $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
         // Ensure the releases directory exists
         $releasesDir = storage_path('releases');
@@ -363,13 +366,14 @@ class GenccRelease extends Command
         // Build plain text content
         $separator = str_repeat('=', 72);
         $thinSeparator = str_repeat('-', 72);
+        $appVersion = config('app.version', 'dev');
 
         $content = "{$separator}\n";
-        $content .= "                GenCC BOOTSTRAP RELEASE NOTES - {$this->releaseSlug}\n";
+        $content .= "            GenCC {$appVersion} RELEASE NOTES - {$this->releaseSlug}\n";
         $content .= "{$separator}\n\n";
         $content .= "Release: {$this->releaseSlug}\n";
         $content .= "Date: {$releaseDate->format('F j, Y g:i A T')}\n";
-        $content .= "Type: Initial Bootstrap (Database Restore)\n";
+        $content .= "Type: Initial Release (Database Restore)\n";
         $content .= "\n";
 
         // Summary section
@@ -381,7 +385,7 @@ class GenccRelease extends Command
         $content .= "No new changes were processed in this release.\n";
         $content .= "\n";
 
-        // Jobs included section
+        // Jobs included section (sorted by submission count descending)
         if (!empty($this->releaseStats['jobs_processed'])) {
             $content .= "{$thinSeparator}\n";
             $content .= "JOBS INCLUDED (" . count($this->releaseStats['jobs_processed']) . " total)\n";
@@ -389,7 +393,11 @@ class GenccRelease extends Command
             $content .= sprintf("  %-12s %-40s %12s\n", "Job ID", "Submitter", "Submissions");
             $content .= "  " . str_repeat('-', 66) . "\n";
 
-            foreach ($this->releaseStats['jobs_processed'] as $job) {
+            // Sort by submission count descending
+            $sortedJobs = $this->releaseStats['jobs_processed'];
+            usort($sortedJobs, fn($a, $b) => $b['submission_count'] <=> $a['submission_count']);
+
+            foreach ($sortedJobs as $job) {
                 $submitterName = mb_strlen($job['submitter_name']) > 38
                     ? mb_substr($job['submitter_name'], 0, 35) . '...'
                     : $job['submitter_name'];
@@ -453,8 +461,13 @@ class GenccRelease extends Command
         $localFallbackPath = $releasesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
+        // Also create/overwrite Release_Notes.txt as a copy of the latest
+        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
+
         $this->releaseNotesFile = $filename;
         $this->info("  Release notes generated: {$filename}");
+        $this->info("  Latest notes available as: Release_Notes.txt");
 
         \Log::info("GenCC Release: Bootstrap release notes generated", [
             'filename' => $filename,
@@ -1036,9 +1049,10 @@ class GenccRelease extends Command
         // Build plain text content
         $separator = str_repeat('=', 72);
         $thinSeparator = str_repeat('-', 72);
+        $appVersion = config('app.version', 'dev');
 
         $content = "{$separator}\n";
-        $content .= "                    GenCC RELEASE NOTES - {$this->releaseSlug}\n";
+        $content .= "            GenCC {$appVersion} RELEASE NOTES - {$this->releaseSlug}\n";
         $content .= "{$separator}\n\n";
         $content .= "Release: {$this->releaseSlug}\n";
         $content .= "Date: {$releaseDate->format('F j, Y g:i A T')}\n";
@@ -1055,7 +1069,7 @@ class GenccRelease extends Command
         $content .= sprintf("  %-30s %10s\n", "TOTAL CHANGES", number_format($totalChanges));
         $content .= "\n";
 
-        // Jobs processed section
+        // Jobs processed section (sorted by submission count descending)
         if (!empty($this->releaseStats['jobs_processed'])) {
             $content .= "{$thinSeparator}\n";
             $content .= "JOBS PROCESSED\n";
@@ -1063,7 +1077,11 @@ class GenccRelease extends Command
             $content .= sprintf("  %-12s %-40s %12s\n", "Job ID", "Submitter", "Submissions");
             $content .= "  " . str_repeat('-', 66) . "\n";
 
-            foreach ($this->releaseStats['jobs_processed'] as $job) {
+            // Sort by submission count descending
+            $sortedJobs = $this->releaseStats['jobs_processed'];
+            usort($sortedJobs, fn($a, $b) => $b['submission_count'] <=> $a['submission_count']);
+
+            foreach ($sortedJobs as $job) {
                 $submitterName = mb_strlen($job['submitter_name']) > 38
                     ? mb_substr($job['submitter_name'], 0, 35) . '...'
                     : $job['submitter_name'];
@@ -1181,8 +1199,13 @@ class GenccRelease extends Command
         $localFallbackPath = $releasesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
+        // Also create/overwrite Release_Notes.txt as a copy of the latest
+        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
+
         $this->releaseNotesFile = $filename;
         $this->info("Release notes generated: {$filename}");
+        $this->info("Latest notes available as: Release_Notes.txt");
         \Log::info("GenCC Release: Release notes generated", [
             'filename' => $filename,
             'new' => $this->releaseStats['new'],
@@ -1498,6 +1521,9 @@ class GenccRelease extends Command
         $latestPath = $exportsDir . '/' . $latestFilename;
         $this->uploadToGcs($csvContent, "csv/{$latestFilename}", 'text/csv', $latestPath);
 
+        // Generate additional formats (xlsx, xls, tsv)
+        $this->generateAdditionalFormats($exportsDir, $timestampedFilename, $headers, $submissions);
+
         $this->submissionsCsvFile = $timestampedFilename;
         $this->info("Submissions CSV generated: {$timestampedFilename}");
         $this->info("Latest CSV available as: {$latestFilename}");
@@ -1507,6 +1533,249 @@ class GenccRelease extends Command
             'latest_file' => $latestFilename,
             'submission_count' => $submissions->count(),
         ]);
+    }
+
+    /**
+     * Generate xlsx, xls, and tsv versions of the submissions export.
+     */
+    protected function generateAdditionalFormats(string $exportsDir, string $csvFilename, array $headers, $submissions): void
+    {
+        $this->info("  Generating additional formats...");
+
+        // Create a spreadsheet with the data
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Submissions');
+
+        // Add headers in row 1
+        $col = 1;
+        foreach ($headers as $header) {
+            $sheet->setCellValue([$col, 1], $header);
+            $col++;
+        }
+
+        // Helper function to extract nested values
+        $getNestedValue = function($data, $keys, $default = '') use (&$getNestedValue) {
+            if ($data === null) return $default;
+            foreach ($keys as $key) {
+                if (is_object($data)) {
+                    $data = $data->$key ?? null;
+                } elseif (is_array($data)) {
+                    $data = $data[$key] ?? null;
+                } else {
+                    return $default;
+                }
+                if ($data === null) return $default;
+            }
+            return $data;
+        };
+
+        // Add data rows starting at row 2
+        $row = 2;
+        foreach ($submissions as $submission) {
+            $originalData = $submission->original_submission_data;
+
+            // Extract submitted_as fields
+            $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
+            $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
+            $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
+            $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
+            $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
+            $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
+            $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
+            $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
+            $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
+            $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
+            $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
+            $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
+            $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+            $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
+            $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
+
+            $pmids = $submission->normalized_pmids
+                ? str_replace(',', ', ', $submission->normalized_pmids)
+                : '';
+            $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
+
+            $rowData = [
+                $submission->sid,
+                $submission->version_number ?? 1,
+                $submission->gene->hgnc_id ?? '',
+                $submission->gene->symbol ?? '',
+                $submission->disease->curie ?? '',
+                $submission->disease->name ?? '',
+                $submission->originalDisease->curie ?? '',
+                $submission->originalDisease->name ?? '',
+                $submission->classification->curie ?? '',
+                $submission->classification->name ?? '',
+                $submission->inheritance->curie ?? '',
+                $submission->inheritance->name ?? '',
+                $submission->submitter->curie ?? '',
+                $submission->submitter->name ?? '',
+                $submittedAsHgncId,
+                $submittedAsHgncSymbol,
+                $submittedAsDiseaseId,
+                $submittedAsDiseaseName,
+                $submittedAsMoiId,
+                $submittedAsMoiName,
+                $submittedAsSubmitterId,
+                $submittedAsSubmitterName,
+                $submittedAsClassificationId,
+                $submittedAsClassificationName,
+                $submittedAsDate,
+                $submittedAsReportUrl,
+                $submittedAsNotes,
+                $pmids,
+                $submittedAsCriteriaUrl,
+                $submittedAsSubmissionId,
+                $submittedRunDate,
+            ];
+
+            $col = 1;
+            foreach ($rowData as $value) {
+                $sheet->setCellValue([$col, $row], $value ?? '');
+                $col++;
+            }
+            $row++;
+        }
+
+        // Generate base filename without extension
+        $baseFilename = preg_replace('/\.csv$/', '', $csvFilename);
+        $latestBase = 'gencc-submissions';
+
+        // Write XLSX (timestamped and latest)
+        try {
+            $xlsxWriter = new XlsxWriter($spreadsheet);
+
+            $xlsxTimestamped = $exportsDir . '/' . $baseFilename . '.xlsx';
+            $xlsxWriter->save($xlsxTimestamped);
+            $this->uploadToGcs(File::get($xlsxTimestamped), "csv/{$baseFilename}.xlsx",
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxTimestamped);
+
+            $xlsxLatest = $exportsDir . '/' . $latestBase . '.xlsx';
+            File::copy($xlsxTimestamped, $xlsxLatest);
+            $this->uploadToGcs(File::get($xlsxLatest), "csv/{$latestBase}.xlsx",
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
+
+            $this->info("    XLSX: {$baseFilename}.xlsx");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate XLSX: {$e->getMessage()}");
+        }
+
+        // Write XLS (timestamped and latest)
+        try {
+            $xlsWriter = new XlsWriter($spreadsheet);
+
+            $xlsTimestamped = $exportsDir . '/' . $baseFilename . '.xls';
+            $xlsWriter->save($xlsTimestamped);
+            $this->uploadToGcs(File::get($xlsTimestamped), "csv/{$baseFilename}.xls",
+                'application/vnd.ms-excel', $xlsTimestamped);
+
+            $xlsLatest = $exportsDir . '/' . $latestBase . '.xls';
+            File::copy($xlsTimestamped, $xlsLatest);
+            $this->uploadToGcs(File::get($xlsLatest), "csv/{$latestBase}.xls",
+                'application/vnd.ms-excel', $xlsLatest);
+
+            $this->info("    XLS: {$baseFilename}.xls");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate XLS: {$e->getMessage()}");
+        }
+
+        // Write TSV (timestamped and latest)
+        try {
+            $tsvContent = $this->arrayToTsvLine($headers);
+            foreach ($submissions as $submission) {
+                $originalData = $submission->original_submission_data;
+
+                $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
+                $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
+                $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
+                $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
+                $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
+                $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
+                $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
+                $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
+                $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
+                $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
+                $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
+                $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
+                $submittedAsNotes = $getNestedValue($originalData, ['notes', 'display']);
+                $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
+                $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
+
+                $pmids = $submission->normalized_pmids
+                    ? str_replace(',', ', ', $submission->normalized_pmids)
+                    : '';
+                $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
+
+                $rowData = [
+                    $submission->sid,
+                    $submission->version_number ?? 1,
+                    $submission->gene->hgnc_id ?? '',
+                    $submission->gene->symbol ?? '',
+                    $submission->disease->curie ?? '',
+                    $submission->disease->name ?? '',
+                    $submission->originalDisease->curie ?? '',
+                    $submission->originalDisease->name ?? '',
+                    $submission->classification->curie ?? '',
+                    $submission->classification->name ?? '',
+                    $submission->inheritance->curie ?? '',
+                    $submission->inheritance->name ?? '',
+                    $submission->submitter->curie ?? '',
+                    $submission->submitter->name ?? '',
+                    $submittedAsHgncId,
+                    $submittedAsHgncSymbol,
+                    $submittedAsDiseaseId,
+                    $submittedAsDiseaseName,
+                    $submittedAsMoiId,
+                    $submittedAsMoiName,
+                    $submittedAsSubmitterId,
+                    $submittedAsSubmitterName,
+                    $submittedAsClassificationId,
+                    $submittedAsClassificationName,
+                    $submittedAsDate,
+                    $submittedAsReportUrl,
+                    $submittedAsNotes,
+                    $pmids,
+                    $submittedAsCriteriaUrl,
+                    $submittedAsSubmissionId,
+                    $submittedRunDate,
+                ];
+                $tsvContent .= $this->arrayToTsvLine($rowData);
+            }
+
+            $tsvTimestamped = $exportsDir . '/' . $baseFilename . '.tsv';
+            File::put($tsvTimestamped, $tsvContent);
+            $this->uploadToGcs($tsvContent, "csv/{$baseFilename}.tsv", 'text/tab-separated-values', $tsvTimestamped);
+
+            $tsvLatest = $exportsDir . '/' . $latestBase . '.tsv';
+            File::put($tsvLatest, $tsvContent);
+            $this->uploadToGcs($tsvContent, "csv/{$latestBase}.tsv", 'text/tab-separated-values', $tsvLatest);
+
+            $this->info("    TSV: {$baseFilename}.tsv");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate TSV: {$e->getMessage()}");
+        }
+
+        $this->info("  Additional formats complete");
+    }
+
+    /**
+     * Convert an array to a TSV line.
+     */
+    protected function arrayToTsvLine(array $fields): string
+    {
+        $escaped = array_map(function ($field) {
+            if ($field === null) {
+                return '';
+            }
+            $field = (string) $field;
+            // Escape tabs and newlines within fields
+            $field = str_replace(["\t", "\n", "\r"], [' ', ' ', ' '], $field);
+            return $field;
+        }, $fields);
+
+        return implode("\t", $escaped) . "\n";
     }
 
     /**
