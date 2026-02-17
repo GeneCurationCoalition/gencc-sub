@@ -287,41 +287,52 @@ class GenccRelease extends Command
             'actions_processed' => [],
         ];
 
-        // Count live submissions by submitter for reference
-        $liveSubmissions = Submission::where('is_live', true)
-            ->with('submitter')
-            ->get();
+        // Count live submissions by submitter using aggregation (memory efficient)
+        $submitterCounts = Submission::where('is_live', true)
+            ->join('submitters', 'submissions.submitter_id', '=', 'submitters.id')
+            ->select('submitters.name', DB::raw('count(*) as count'))
+            ->groupBy('submitters.name')
+            ->pluck('count', 'name');
 
-        foreach ($liveSubmissions as $submission) {
-            $submitterName = $submission->submitter->name ?? 'Unknown';
-            if (!isset($this->releaseStats['by_submitter'][$submitterName])) {
-                $this->releaseStats['by_submitter'][$submitterName] = [
-                    'new' => 0,
-                    'republish' => 0,
-                    'unpublish' => 0,
-                    'live' => 0,
-                ];
-            }
-            $this->releaseStats['by_submitter'][$submitterName]['live']++;
+        $totalLive = 0;
+        foreach ($submitterCounts as $name => $count) {
+            $this->releaseStats['by_submitter'][$name] = [
+                'new' => 0,
+                'republish' => 0,
+                'unpublish' => 0,
+                'live' => $count,
+            ];
+            $totalLive += $count;
         }
 
-        $this->info("  Found " . $liveSubmissions->count() . " released submissions from " .
+        $this->info("  Found {$totalLive} released submissions from " .
             count($this->releaseStats['by_submitter']) . " submitters");
 
-        // Gather all released jobs (STATUS_RELEASED) for the bootstrap record
-        $releasedJobs = Job::where('status', Job::STATUS_RELEASED)
-            ->with(['submitter', 'submissions' => function ($query) {
-                $query->where('is_live', true);
-            }])
-            ->orderBy('released_at')
+        // Gather released jobs with submission counts using aggregation
+        // Use a subquery for submission counts to avoid memory issues
+        $releasedJobs = Job::where('jobs.status', Job::STATUS_RELEASED)
+            ->join('submitters', 'jobs.submitter_id', '=', 'submitters.id')
+            ->leftJoin('submissions', function ($join) {
+                $join->on('submissions.job_id', '=', 'jobs.id')
+                     ->where('submissions.is_live', true);
+            })
+            ->select(
+                'jobs.id',
+                'jobs.slug',
+                'jobs.released_at',
+                'submitters.name as submitter_name',
+                DB::raw('count(submissions.id) as submission_count')
+            )
+            ->groupBy('jobs.id', 'jobs.slug', 'jobs.released_at', 'submitters.name')
+            ->orderBy('jobs.released_at')
             ->get();
 
         foreach ($releasedJobs as $job) {
             $this->releaseStats['jobs_processed'][] = [
                 'job_id' => $job->id,
                 'slug' => $job->slug,
-                'submitter_name' => $job->submitter->name ?? 'Unknown',
-                'submission_count' => $job->submissions->count(),
+                'submitter_name' => $job->submitter_name ?? 'Unknown',
+                'submission_count' => $job->submission_count,
                 'released_at' => $job->released_at?->toIso8601String(),
             ];
         }
