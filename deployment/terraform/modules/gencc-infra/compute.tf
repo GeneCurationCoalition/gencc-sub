@@ -54,6 +54,10 @@ resource "google_compute_instance" "vm" {
     enable-oslogin         = "TRUE"
     block-project-ssh-keys = "TRUE"
   }
+
+  lifecycle {
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
+  }
 }
 
 resource "google_storage_bucket" "gencc_data" {
@@ -67,26 +71,5 @@ resource "google_storage_bucket" "gencc_data" {
 resource "google_storage_bucket_iam_member" "gencc_data_vm_object_admin" {
   bucket = google_storage_bucket.gencc_data.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.vm.email}"
-}
-
-resource "google_storage_bucket_iam_member" "backup_writer" {
-  count  = var.backup_bucket_name != null ? 1 : 0
-  bucket = var.backup_bucket_name
-  role   = "roles/storage.objectCreator"
-  member = "serviceAccount:${google_service_account.vm.email}"
-}
-
-resource "google_storage_bucket_iam_member" "backup_reader" {
-  count  = var.backup_bucket_name != null ? 1 : 0
-  bucket = var.backup_bucket_name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.vm.email}"
-}
-
-resource "google_storage_bucket_iam_member" "private_reader" {
-  count  = var.private_config_bucket_name != null ? 1 : 0
-  bucket = var.private_config_bucket_name
-  role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.vm.email}"
 }

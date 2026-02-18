@@ -283,31 +283,28 @@ The application deploys to GCP using a two-phase approach: **Terraform** for inf
 
 ```
 deployment/
-├── terraform/           # GCP infrastructure (VPC, VM, firewall)
-├── ansible/             # VM configuration and app deployment
-│   ├── playbooks/       # Main entrypoint (site.yml)
-│   ├── inventories/     # Per-environment inventories + group_vars
-│   └── roles/           # Ordered role execution
-└── supervisor/          # Legacy supervisor configs
+├── terraform/                    # GCP infrastructure (VPC, VM, firewall)
+│   ├── modules/gencc-infra/      # Shared infrastructure module
+│   ├── staging/                  # Staging root (clingen-dev)
+│   └── production/               # Production root (clingen-dx)
+├── ansible/                      # VM configuration and app deployment
+│   ├── playbooks/                # Main entrypoint (site.yml)
+│   ├── inventories/              # Per-environment inventories + group_vars
+│   └── roles/                    # Ordered role execution
+└── supervisor/                   # Legacy supervisor configs
 ```
 
 ### Phase 1: Terraform (Infrastructure)
 
-Provisions GCP resources via `deployment/terraform/`:
+Provisions GCP resources via `deployment/terraform/`. Each environment is a self-contained Terraform root module under its own directory (`staging/` or `production/`) that calls a shared module in `modules/gencc-infra/`.
 
 - **Network**: Dedicated VPC + subnet with configurable CIDR
 - **Compute**: Ubuntu VM with static external IP
 - **Firewall**: HTTP/HTTPS ingress (80/443), IAP SSH (22 from 35.235.240.0/20)
 
-**Key Terraform Variables** (per-environment `.tfvars`):
-| Variable | Description |
-|----------|-------------|
-| `project_id` | GCP project ID |
-| `region`, `zone` | GCP location (e.g., `us-east1`, `us-east1-b`) |
-
-**Usage**:
+**Usage** — `cd` into the environment directory, no extra flags needed:
 ```bash
-cd deployment/terraform
+cd deployment/terraform/staging    # or production/
 terraform init && terraform plan && terraform apply
 ```
 

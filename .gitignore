@@ -63,6 +63,13 @@ wrapper.env.txt
 /gencc-sub-github-action-deploy-key
 /ai/
 
-# Database backups
+# Database backups and dumps
 /data/backups/
+/data/db-dumps/
 data/hgnc_complete_set.json
+
+# Terraform
+deployment/terraform/**/.terraform/
+deployment/terraform/**/.terraform.lock.hcl
+deployment/terraform/**/*.tfstate
+deployment/terraform/**/*.tfstate.backup

@@ -1,93 +1,120 @@
-# Terraform (GCP) — GenCC VM (nginx + certbot TLS termination)
+# Terraform (GCP) — GenCC Infrastructure
 
-This directory contains **declarative Terraform** to provision the infrastructure described in `ai/2026-02-05T001502Z-synthesized-gencc-deploy-plan.GEMINI.md`.
+Declarative Terraform for GenCC GCP infrastructure, organized as a shared module with per-environment root configurations.
 
-This repo change is **safe to commit**: it does not contain secrets and does not perform any deployments by itself.
+## Directory Structure
 
-## What it creates (high level)
+```
+deployment/terraform/
+├── modules/gencc-infra/          # Shared infrastructure module
+│   ├── compute.tf                # VM, service account, GCS bucket, IAM
+│   ├── github_actions_wif.tf     # Optional GitHub OIDC (count-gated)
+│   ├── network.tf                # VPC, subnet, firewalls
+│   ├── outputs.tf                # Module outputs
+│   ├── variables.tf              # Module input variables
+│   └── versions.tf               # required_providers
+├── staging/                      # Staging environment (clingen-dev)
+│   ├── main.tf                   # Provider config + module call
+│   ├── variables.tf              # Variable declarations for tfvars
+│   ├── outputs.tf                # Passthrough module outputs
+│   └── terraform.tfvars          # Staging values
+├── production/                   # Production environment (clingen-dx)
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── terraform.tfvars
+└── README.md
+```
+
+## What it creates (per environment)
+
 - A dedicated VPC + subnet
-- A single Ubuntu VM with a **static external IP**
+- A single Ubuntu VM with a static external IP
 - Ingress firewall for `80/tcp` and `443/tcp` (nginx terminates TLS on the VM)
-- Firewall rules:
-  - IAP SSH (`22/tcp`) from `35.235.240.0/20`
-- A managed GCS data bucket (default: `gencc-dev`, location `us-east1`)
-- IAM: grants the VM service account `roles/storage.objectAdmin` on the managed data bucket
-- Optional GitHub Actions OIDC Workload Identity Federation resources for CI deploys
+- IAP SSH (`22/tcp`) from `35.235.240.0/20`
+- A managed GCS data bucket with VM service account `roles/storage.objectAdmin`
+- Optional GitHub Actions OIDC Workload Identity Federation (staging only)
 
 ## Environments
 
-Each environment has its own `.tfvars` file and separate Terraform state:
+| Environment | Directory      | GCP Project  | VM Name        |
+|-------------|----------------|--------------|----------------|
+| Staging     | `staging/`     | clingen-dev  | gencc-vm       |
+| Production  | `production/`  | clingen-dx   | gencc-prod-vm  |
 
-| Environment | tfvars file | GCP project | VM name |
-|-------------|-------------|-------------|---------|
-| Staging | `staging.tfvars` | `clingen-dev` | `gencc-vm` |
-| Production | `production.tfvars` | `clingen-dx` | `gencc-prod-vm` |
+## Usage
 
-## Usage (operator runbook)
-1. Select the appropriate `.tfvars` file for your environment.
-2. Run:
-   ```bash
-   terraform init
-   terraform plan  -var-file=staging.tfvars      # or production.tfvars
-   terraform apply -var-file=staging.tfvars      # or production.tfvars
-   ```
+Each environment is a self-contained Terraform root module. `cd` into the environment directory and run commands directly — no `-var-file` or `-state` flags needed.
 
-### OS Login
-This VM is configured with OS Login enabled (`enable-oslogin=TRUE`) and project SSH keys blocked (`block-project-ssh-keys=TRUE`). Before running Ansible, determine your OS Login username:
+### Staging
 
-- `gcloud compute os-login describe-profile --project <PROJECT> --format='value(posixAccounts[0].username)'`
+```bash
+cd deployment/terraform/staging
+terraform init
+terraform plan
+terraform apply
+```
 
-Use this username as `ansible_user` in your inventory (or `User` in SSH config).
+### Production
 
-Your account will also need `roles/compute.osAdminLogin` (for sudo) and `roles/iap.tunnelResourceAccessor` (for IAP SSH).
+```bash
+cd deployment/terraform/production
+terraform init
+terraform plan
+terraform apply
+```
 
-### TLS termination
+### Viewing outputs
+
+```bash
+cd deployment/terraform/staging   # or production/
+terraform output
+terraform output vm_external_ip
+```
+
+## OS Login
+
+VMs are configured with OS Login enabled and project SSH keys blocked. Determine your OS Login username:
+
+```bash
+gcloud compute os-login describe-profile \
+  --project <PROJECT> \
+  --format='value(posixAccounts[0].username)'
+```
+
+Your account needs `roles/compute.osAdminLogin` and `roles/iap.tunnelResourceAccessor`.
+
+## TLS termination
+
 TLS termination is handled on the VM (nginx + certbot HTTP-01 webroot challenges) via Ansible in `deployment/ansible/`.
 
-### Managed GenCC data bucket
-Terraform creates a managed GCS bucket for GenCC data artifacts:
+## Managed GenCC data bucket
 
-- `gencc_data_bucket_name` (default `gencc-dev`)
-- `gencc_data_bucket_location` (default `us-east1`)
+Terraform creates a managed GCS bucket for GenCC data artifacts (backups, restores, etc.):
 
-The VM service account receives object-level read/write/delete permissions (`roles/storage.objectAdmin`) on this bucket. This allows Ansible `restore_and_migrate` runs to read dumps from `gs://` URLs using VM identity.
+- `gencc_data_bucket_name` (staging: `gencc-dev`, production: `gencc-prod`)
+- `gencc_data_bucket_location` (default: `us-east1`)
 
-Because GCS bucket names are globally unique, update `gencc_data_bucket_name` in the `.tfvars` file if `gencc-dev` is unavailable.
+The VM service account receives `roles/storage.objectAdmin` on this bucket.
 
-### Optional: GitHub Actions Workload Identity Federation
-To allow GitHub Actions to deploy through IAP + OS Login without static GCP keys:
+## GitHub Actions WIF
 
-1. Enable in the `.tfvars` file:
-   - `enable_github_actions_wif = true`
-2. Set repository identity:
-   - `github_repository = "GeneCurationCoalition/gencc-sub"`
-3. Set trusted workflow + branch:
-   - `github_deploy_workflow_file = "deploy-via-ansible.yml"`
-   - `github_deploy_branch = "main"`
-4. Apply Terraform.
+Staging has `enable_github_actions_wif = true` which creates:
 
-Terraform will create:
 - A dedicated deploy service account (`<name_prefix>-deploy`)
 - A Workload Identity Pool + OIDC provider for `token.actions.githubusercontent.com`
-- WIF trust condition that allows only:
-  - repository: `github_repository`
-  - workflow_ref: `${github_repository}/.github/workflows/${github_deploy_workflow_file}@refs/heads/${github_deploy_branch}`
-- IAM bindings:
-  - `roles/iam.workloadIdentityUser` (GitHub principal set -> deploy SA)
-  - `roles/iap.tunnelResourceAccessor` on the configured VM only (deploy SA)
-  - `roles/compute.osAdminLogin` on the configured VM only (deploy SA)
-  - `roles/compute.viewer` at project scope (deploy SA, retained for operational lookup/read)
-  - `roles/iam.serviceAccountUser` on VM service account (deploy SA)
+- IAM bindings for IAP tunnel access, OS Login, and compute viewer
 
-Use these outputs in GitHub Actions auth setup:
+See staging outputs for values needed in GitHub Actions:
+
 - `github_deploy_service_account`
 - `github_workload_identity_provider`
 
 ## Outputs
-- `vm_internal_ip` — internal IP used by Ansible inventory
-- `vm_external_ip` — external IP (use for DNS A records at your registrar)
-- `gencc_data_bucket_name` — managed data bucket name used for GenCC artifacts
-- `ansible_inventory` — inventory snippet using IAP tunneling
-- `ansible_ssh_config` — SSH config snippet using IAP tunneling
-- `github_deploy_service_account` — deploy SA email for CI auth (when WIF enabled)
-- `github_workload_identity_provider` — WIF provider resource name for `google-github-actions/auth` (when WIF enabled)
+
+| Output                              | Description                                        |
+|-------------------------------------|----------------------------------------------------|
+| `vm_external_ip`                    | External IP for DNS A records                      |
+| `vm_service_account`                | VM service account email                           |
+| `github_deploy_service_account`     | Deploy SA email (null if WIF disabled)             |
+| `github_workload_identity_provider` | WIF provider resource name (null if WIF disabled)  |

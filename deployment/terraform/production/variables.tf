@@ -49,18 +49,6 @@ variable "gencc_data_bucket_location" {
   default     = "us-east1"
 }
 
-variable "backup_bucket_name" {
-  type        = string
-  description = "Optional: existing GCS bucket name for DB backups. If set, Terraform grants the VM service account write access."
-  default     = null
-}
-
-variable "private_config_bucket_name" {
-  type        = string
-  description = "Optional: existing GCS bucket name for private YAML configs. If set, Terraform grants the VM service account read access."
-  default     = null
-}
-
 variable "subnet_cidr" {
   type        = string
   description = "CIDR for the subnet."
