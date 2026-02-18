@@ -1,5 +1,7 @@
 ---
-# Non-secret defaults. Secrets belong in `vault.yml` in this same directory.
+# Shared defaults for all environments.
+# Environment-specific overrides live in inventories/<env>/group_vars/all/vars.yml.
+# Secrets belong in the per-environment vault.yml files.
 
 gencc_deploy_user: gencc
 
@@ -26,21 +28,13 @@ gencc_mysql_search_user: gencc_search_reader
 # Container-to-host MySQL host for rootless slirp4netns
 gencc_container_db_host: 10.0.2.2
 
-# Public routing / TLS
-gencc_domain: clingen.app
-gencc_submit_hostname: "gencc-sub-stage.{{ gencc_domain }}"
-gencc_search_hostname: "gencc-search-stage.{{ gencc_domain }}"
-
+# TLS
 gencc_enable_letsencrypt: true
 gencc_letsencrypt_email: gencc-tech@broadinstitute.org
-# Store this cert under a stable name so nginx can reference it regardless of domains.
-gencc_letsencrypt_cert_name: gencc-stage
-gencc_letsencrypt_domains:
-  - "{{ gencc_submit_hostname }}"
-  - "{{ gencc_search_hostname }}"
 
-# GCP Cloud DNS managed zone name (used by certbot DNS-01 hook scripts)
-gencc_gcp_dns_zone_name: clingen-app
+# Hostname redirects (301 → canonical). Override per-environment as needed.
+gencc_submit_hostname_redirects: []
+gencc_search_hostname_redirects: []
 
 # -----------------------------------------------------------------------------
 # Database bootstrap
@@ -50,8 +44,7 @@ gencc_gcp_dns_zone_name: clingen-app
 # - restore_and_migrate: DROP + restore DB from a .sql.gz dump, then run migrations.
 gencc_db_bootstrap_mode: migrate_only
 
-# When restore_and_migrate is selected, you must set BOTH:
-# - gencc_db_restore_force: true (explicit destructive opt-in)
-# - gencc_db_restore_source: https://... or gs://... URL to a .sql.gz dump
-gencc_db_restore_force: true
-gencc_db_restore_source: "https://raw.githubusercontent.com/GeneCurationCoalition/gencc-sub/refs/heads/main/data/backups/gencc_sub_baseline_20260103.sql.gz"
+# Example restoring from a mysql dump:
+# gencc_db_restore_source: "gs://gencc-dev/application-private/backups/gencc_sub_baseline_20260205.sql.gz"
+# gencc_db_bootstrap_mode: restore_and_migrate
+# gencc_db_restore_force: true

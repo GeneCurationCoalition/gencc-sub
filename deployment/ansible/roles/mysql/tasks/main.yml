@@ -14,27 +14,31 @@
       - gencc_mysql_search_password | length > 0
     fail_msg: "Set MySQL passwords in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
 
-- name: Configure MySQL bind address (allows rootless podman slirp connectivity)
+- name: Configure MySQL bind address (allows rootless podman connectivity)
   ansible.builtin.lineinfile:
     path: /etc/mysql/mysql.conf.d/mysqld.cnf
     regexp: '^bind-address\s*='
     line: "bind-address = {{ gencc_mysql_bind_address }}"
   notify: restart mysql
 
-- name: Create database and users (localhost + slirp subnet)
+- name: Create database and users (localhost + loopback + slirp subnet)
   ansible.builtin.shell: |
     set -euo pipefail
     mysql -uroot <<'SQL'
     CREATE DATABASE IF NOT EXISTS {{ gencc_mysql_database }} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     CREATE USER IF NOT EXISTS '{{ gencc_mysql_sub_user }}'@'localhost' IDENTIFIED BY '{{ gencc_mysql_sub_password }}';
+    CREATE USER IF NOT EXISTS '{{ gencc_mysql_sub_user }}'@'127.0.0.1' IDENTIFIED BY '{{ gencc_mysql_sub_password }}';
     CREATE USER IF NOT EXISTS '{{ gencc_mysql_sub_user }}'@'10.0.2.%' IDENTIFIED BY '{{ gencc_mysql_sub_password }}';
     GRANT ALL PRIVILEGES ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_sub_user }}'@'localhost';
+    GRANT ALL PRIVILEGES ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_sub_user }}'@'127.0.0.1';
     GRANT ALL PRIVILEGES ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_sub_user }}'@'10.0.2.%';
 
     CREATE USER IF NOT EXISTS '{{ gencc_mysql_search_user }}'@'localhost' IDENTIFIED BY '{{ gencc_mysql_search_password }}';
+    CREATE USER IF NOT EXISTS '{{ gencc_mysql_search_user }}'@'127.0.0.1' IDENTIFIED BY '{{ gencc_mysql_search_password }}';
     CREATE USER IF NOT EXISTS '{{ gencc_mysql_search_user }}'@'10.0.2.%' IDENTIFIED BY '{{ gencc_mysql_search_password }}';
     GRANT SELECT ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_search_user }}'@'localhost';
+    GRANT SELECT ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_search_user }}'@'127.0.0.1';
     GRANT SELECT ON {{ gencc_mysql_database }}.* TO '{{ gencc_mysql_search_user }}'@'10.0.2.%';
 
     FLUSH PRIVILEGES;

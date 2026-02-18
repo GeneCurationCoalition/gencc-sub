@@ -1,0 +1,17 @@
+---
+# Staging environment overrides.
+
+# Container images
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.1
+
+# Public routing / TLS
+# gencc_domain: clingen.app
+# gencc_submit_hostname: "gencc-sub-stage.{{ gencc_domain }}"
+# gencc_search_hostname: "gencc-search-stage.{{ gencc_domain }}"
+gencc_submit_hostname: portal-stage.thegencc.org
+gencc_search_hostname: search-stage.thegencc.org
+gencc_letsencrypt_cert_name: gencc-stage
+gencc_letsencrypt_domains:
+  - "{{ gencc_submit_hostname }}"
+  - "{{ gencc_search_hostname }}"

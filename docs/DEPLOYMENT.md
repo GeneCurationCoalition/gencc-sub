@@ -191,6 +191,11 @@ GOOGLE_CLOUD_STORAGE_BUCKET=your-bucket-name
 GOOGLE_CLOUD_STORAGE_PATH_PREFIX=releases
 ```
 
+### Build & Deploy Workflows
+
+- **`image-build.yml`** — Builds the Docker image with `APP_VERSION` from git tags and pushes to GitHub Container Registry. Triggered on release or manually via `workflow_dispatch`.
+- **`deploy-via-ansible.yml`** — Deploys to the target server using Ansible over IAP SSH. Triggered manually with image tag inputs.
+
 **GCP Infrastructure (Terraform):**
 
 The `deployment/terraform/` configuration includes a managed GCS bucket with the VM service account granted `roles/storage.objectAdmin`:

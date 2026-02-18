@@ -15,6 +15,7 @@
       - podman
       - uidmap
       - slirp4netns
+      - passt
       - dbus-user-session
       - mysql-client
       - mysql-server

@@ -283,37 +283,30 @@ The application deploys to GCP using a two-phase approach: **Terraform** for inf
 
 ```
 deployment/
-├── terraform/           # GCP infrastructure (VPC, VM, firewall, DNS)
-├── ansible/             # VM configuration and app deployment
-│   ├── playbooks/       # Main entrypoint (site.yml)
-│   ├── inventories/     # Host inventory + group_vars (vars.yml, vault.yml)
-│   └── roles/           # Ordered role execution
-└── supervisor/          # Legacy supervisor configs
+├── terraform/                    # GCP infrastructure (VPC, VM, firewall)
+│   ├── modules/gencc-infra/      # Shared infrastructure module
+│   ├── staging/                  # Staging root (clingen-dev)
+│   └── production/               # Production root (clingen-dx)
+├── ansible/                      # VM configuration and app deployment
+│   ├── playbooks/                # Main entrypoint (site.yml)
+│   ├── inventories/              # Per-environment inventories + group_vars
+│   └── roles/                    # Ordered role execution
+└── supervisor/                   # Legacy supervisor configs
 ```
 
 ### Phase 1: Terraform (Infrastructure)
 
-Provisions GCP resources via `deployment/terraform/`:
+Provisions GCP resources via `deployment/terraform/`. Each environment is a self-contained Terraform root module under its own directory (`staging/` or `production/`) that calls a shared module in `modules/gencc-infra/`.
 
 - **Network**: Dedicated VPC + subnet with configurable CIDR
 - **Compute**: Ubuntu VM with static external IP
 - **Firewall**: HTTP/HTTPS ingress (80/443), IAP SSH (22 from 35.235.240.0/20)
-- **DNS** (optional): Cloud DNS A records for submit/search hostnames
-- **IAM**: VM service account granted `roles/dns.admin` for certbot DNS-01 automation
 
-**Key Terraform Variables** (`terraform.tfvars`):
-| Variable | Description |
-|----------|-------------|
-| `project_id` | GCP project ID |
-| `region`, `zone` | GCP location (e.g., `us-central1`, `us-central1-a`) |
-| `submit_hostname` | Hostname for gencc-sub (e.g., `gencc-sub-stage.clingen.app`) |
-| `search_hostname` | Hostname for gencc-search |
-| `enable_dns_records` | Create A records in Cloud DNS |
-| `dns_managed_zone_name` | Cloud DNS zone name (required for DNS-01 and optional A records) |
+**State** is stored remotely in per-project GCS buckets (`gencc-dev-tfstate`, `gencc-prod-tfstate`) with versioning and locking.
 
-**Usage**:
+**Usage** — `cd` into the environment directory, no extra flags needed:
 ```bash
-cd deployment/terraform
+cd deployment/terraform/staging    # or production/
 terraform init && terraform plan && terraform apply
 ```
 
@@ -328,31 +321,25 @@ Configures the VM and deploys containers via `deployment/ansible/`. The playbook
 | `mysql` | Host MySQL server, users, and grants |
 | `quadlet` | Podman containers as systemd Quadlet units |
 | `db_bootstrap` | Database restore and/or Laravel migrations |
-| `nginx_tls` | nginx reverse proxy + certbot TLS (Let's Encrypt DNS-01) |
+| `nginx_tls` | nginx reverse proxy + certbot TLS (Let's Encrypt HTTP-01) |
 | `timers` | Systemd timers for scheduled tasks |
 
-**Key Ansible Variables** (`inventories/group_vars/all/vars.yml`):
-| Variable | Description |
-|----------|-------------|
-| `gencc_sub_image` | Container image for gencc-sub |
-| `gencc_search_image` | Container image for gencc-search |
-| `gencc_db_bootstrap_mode` | `migrate_only` (default) or `restore_and_migrate` |
-| `gencc_db_restore_source` | URL to `.sql.gz` dump (https:// or gs://) |
-| `gencc_db_restore_force` | Explicit destructive opt-in for restore |
-| `gencc_enable_letsencrypt` | Enable Let's Encrypt TLS (default: true) |
-| `gencc_letsencrypt_domains` | Domain list for certificate |
+**Inventory structure** — variables are layered: `group_vars/all/` (shared defaults) → `group_vars/<env>/` (per-environment overrides + vault):
 
-**Secrets** (`vault.yml`, encrypted with Ansible Vault):
-- `gencc_mysql_sub_password`, `gencc_mysql_search_password` — MySQL passwords
-- `gencc_sub_env`, `gencc_search_env` — Full `.env` file contents
-- `gencc_backup_env` — Backup job configuration
+| Scope | Key Variables |
+|-------|--------------|
+| `all/vars.yml` | `gencc_db_bootstrap_mode`, `gencc_enable_letsencrypt`, ports, paths, MySQL users |
+| `staging/vars.yml` | `gencc_sub_image`, `gencc_search_image`, hostnames, cert name, DB restore settings |
+| `production/vars.yml` | hostnames, cert name, image overrides |
+| `<env>/vault.yml` | MySQL passwords, `.env` file contents, backup config |
 
 **Usage**:
 ```bash
 cd deployment/ansible
-# Create vault.yml from vault.yml.example, then encrypt
-ansible-vault encrypt inventories/group_vars/all/vault.yml
-ansible-playbook -i inventories/gencc.ini playbooks/site.yml --ask-vault-pass
+# Staging
+ansible-playbook -i inventories/staging.ini playbooks/site.yml --ask-vault-pass
+# Production
+ansible-playbook -i inventories/production.ini playbooks/site.yml --ask-vault-pass
 ```
 
 ### Architecture Notes

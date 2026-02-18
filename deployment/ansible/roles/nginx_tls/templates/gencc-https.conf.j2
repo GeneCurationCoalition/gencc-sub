@@ -1,8 +1,15 @@
-# TLS termination on-host (Let’s Encrypt). HTTP redirects to HTTPS.
+# TLS termination on-host (Let's Encrypt). HTTP redirects to HTTPS.
 server {
   listen 80;
-  server_name {{ gencc_submit_hostname }} {{ gencc_search_hostname }};
-  return 301 https://$host$request_uri;
+  server_name {{ gencc_submit_hostname }}{% for r in gencc_submit_hostname_redirects %} {{ r }}{% endfor %} {{ gencc_search_hostname }}{% for r in gencc_search_hostname_redirects %} {{ r }}{% endfor %};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/acme-challenge;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
 }
 
 server {
@@ -19,6 +26,8 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
     proxy_pass http://127.0.0.1:{{ gencc_sub_port }};
   }
 }
@@ -35,7 +44,32 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
     proxy_pass http://127.0.0.1:{{ gencc_search_port }};
   }
 }
+{% if gencc_submit_hostname_redirects %}
 
+server {
+  listen 443 ssl http2;
+  server_name {% for r in gencc_submit_hostname_redirects %}{{ r }} {% endfor %};
+
+  ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
+
+  return 301 https://{{ gencc_submit_hostname }}$request_uri;
+}
+{% endif %}
+{% if gencc_search_hostname_redirects %}
+
+server {
+  listen 443 ssl http2;
+  server_name {% for r in gencc_search_hostname_redirects %}{{ r }} {% endfor %};
+
+  ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
+
+  return 301 https://{{ gencc_search_hostname }}$request_uri;
+}
+{% endif %}
