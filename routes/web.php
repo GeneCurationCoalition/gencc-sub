@@ -10,8 +10,8 @@ use App\Http\Controllers\UserController;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\AliasController;
-use App\Http\Controllers\SubmissionDirectionsController;
 use App\Http\Controllers\AdminPageController;
+use App\Http\Controllers\HelpController;
 
 
 /*
@@ -43,14 +43,49 @@ Route::get('/-/healthz', function () {
     Route::get('/download/template', function () {
         $templatePath = public_path('documents/GenCC Submission Spreadsheet.xlsx');
 
-        // If local template exists, serve it
+        // If local template exists, serve it with proper cache validation
         if (file_exists($templatePath)) {
-            return response()->download($templatePath, 'GenCC Submission Spreadsheet.xlsx');
+            $response = response()->download($templatePath, 'GenCC Submission Spreadsheet.xlsx');
+            // Use ETag based on file content hash + modification time
+            $etag = '"' . md5_file($templatePath) . '-' . filemtime($templatePath) . '"';
+            $response->setEtag($etag);
+            $response->setLastModified(\DateTime::createFromFormat('U', filemtime($templatePath)));
+            // Always revalidate with server before using cached copy
+            $response->headers->set('Cache-Control', 'private, no-cache');
+            return $response;
         }
 
         // Fallback to external URL
         return redirect('https://search.thegencc.org/download/gene-curations-template');
     })->name('download.template');
+
+    // Download User Guide PDF (with proper cache validation)
+    Route::get('/download/user-guide', function () {
+        $path = public_path('documents/UserGuide.pdf');
+        if (file_exists($path)) {
+            $response = response()->download($path, 'GenCC User Guide.pdf');
+            $etag = '"' . md5_file($path) . '-' . filemtime($path) . '"';
+            $response->setEtag($etag);
+            $response->setLastModified(\DateTime::createFromFormat('U', filemtime($path)));
+            $response->headers->set('Cache-Control', 'private, no-cache');
+            return $response;
+        }
+        abort(404);
+    })->name('download.user-guide');
+
+    // Download API Guide PDF (with proper cache validation)
+    Route::get('/download/api-guide', function () {
+        $path = public_path('documents/APIGuide.pdf');
+        if (file_exists($path)) {
+            $response = response()->download($path, 'GenCC API Guide.pdf');
+            $etag = '"' . md5_file($path) . '-' . filemtime($path) . '"';
+            $response->setEtag($etag);
+            $response->setLastModified(\DateTime::createFromFormat('U', filemtime($path)));
+            $response->headers->set('Cache-Control', 'private, no-cache');
+            return $response;
+        }
+        abort(404);
+    })->name('download.api-guide');
 
     Route::middleware([
         'auth:sanctum',
@@ -59,11 +94,9 @@ Route::get('/-/healthz', function () {
         'password.changed',
     ])->group(function () {
 
-    Route::get('/help', function () {
-        return Inertia::render('Help');
-    })->name('help');
+    Route::get('/help', [HelpController::class, 'index'])->name('help');
 
-    Route::get('/submission-directions', [SubmissionDirectionsController::class, 'index'])->name('submission-directions');
+    Route::redirect('/submission-directions', '/help')->name('submission-directions');
 
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 

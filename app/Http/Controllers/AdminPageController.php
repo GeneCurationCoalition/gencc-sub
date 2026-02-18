@@ -320,6 +320,118 @@ class AdminPageController extends Controller
     }
 
     /**
+     * Update a portal document (User Guide, API Guide, or Spreadsheet).
+     */
+    public function updateDocument(Request $request, string $type)
+    {
+        $this->checkAdmin();
+
+        $config = [
+            'user-guide' => [
+                'rules' => ['required', 'file', 'mimes:pdf', 'max:10240'],
+                'filename' => 'UserGuide.pdf',
+                'typeLabel' => 'PDF',
+            ],
+            'api-guide' => [
+                'rules' => ['required', 'file', 'mimes:pdf', 'max:10240'],
+                'filename' => 'APIGuide.pdf',
+                'typeLabel' => 'PDF',
+            ],
+            'spreadsheet' => [
+                'rules' => ['required', 'file', 'mimetypes:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'max:5120'],
+                'filename' => 'GenCC Submission Spreadsheet.xlsx',
+                'typeLabel' => 'Excel (XLSX)',
+                'extensions' => ['xlsx'],
+            ],
+        ];
+
+        if (!isset($config[$type])) {
+            return response()->json(['error' => 'Invalid document type'], 400);
+        }
+
+        $docConfig = $config[$type];
+
+        $request->validate([
+            'file' => $docConfig['rules'],
+        ], [
+            'file.mimes' => "Please upload a {$docConfig['typeLabel']} file.",
+            'file.mimetypes' => "Please upload a {$docConfig['typeLabel']} file.",
+            'file.max' => 'File exceeds maximum allowed size.',
+        ]);
+
+        $file = $request->file('file');
+
+        // Additional extension check for spreadsheets
+        if (isset($docConfig['extensions'])) {
+            $extension = strtolower($file->getClientOriginalExtension());
+            if (!in_array($extension, $docConfig['extensions'])) {
+                return response()->json([
+                    'errors' => ['file' => ["Please upload a file with .{$docConfig['extensions'][0]} extension."]]
+                ], 422);
+            }
+        }
+
+        $targetPath = public_path('documents/' . $docConfig['filename']);
+        $backupPath = $targetPath . '.backup';
+
+        // Backup existing file if it exists
+        if (file_exists($targetPath)) {
+            if (!copy($targetPath, $backupPath)) {
+                return response()->json(['error' => 'Failed to create backup'], 500);
+            }
+        }
+
+        // Log upload details
+        $originalHash = file_exists($targetPath) ? md5_file($targetPath) : 'none';
+        $uploadedTempPath = $file->getRealPath();
+        $uploadedHash = md5_file($uploadedTempPath);
+        \Log::info("Document upload: type={$type}, original_hash={$originalHash}, uploaded_hash={$uploadedHash}, temp_path={$uploadedTempPath}");
+
+        // Move uploaded file to target location
+        try {
+            $file->move(public_path('documents'), $docConfig['filename']);
+        } catch (\Exception $e) {
+            \Log::error("Document upload failed: " . $e->getMessage());
+            return response()->json(['error' => 'Failed to save file: ' . $e->getMessage()], 500);
+        }
+
+        // Verify file was actually saved and changed
+        if (!file_exists($targetPath)) {
+            return response()->json(['error' => 'File was not saved correctly'], 500);
+        }
+
+        $newHash = md5_file($targetPath);
+        \Log::info("Document upload complete: new_hash={$newHash}, changed=" . ($newHash !== $originalHash ? 'yes' : 'no'));
+
+        // Get new file metadata
+        $newSize = filesize($targetPath);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Document updated successfully',
+            'meta' => [
+                'filename' => $docConfig['filename'],
+                'size' => $newSize,
+                'sizeFormatted' => $this->formatFileSize($newSize),
+                'lastModified' => date('Y-m-d H:i:s'),
+            ],
+        ]);
+    }
+
+    /**
+     * Format file size in human-readable format.
+     */
+    private function formatFileSize(int $bytes): string
+    {
+        if ($bytes >= 1048576) {
+            return round($bytes / 1048576, 1) . ' MB';
+        } elseif ($bytes >= 1024) {
+            return round($bytes / 1024, 1) . ' KB';
+        }
+        return $bytes . ' bytes';
+    }
+
+    /**
      * Download a file from GCS.
      * Returns file content on success, null if GCS is not configured or file not found.
      */

@@ -189,9 +189,9 @@
         removeLogo.value = false;
         // Set current contact
         selectedContact.value = props.members?.find(m => m.is_contact) || null;
-        // Set allow_submissions and downloadable flags
-        allowSubmissions.value = props.input.allow_submissions !== false;  // Default to true
-        downloadable.value = props.input.downloadable || false;
+        // Set allow_submissions and downloadable flags (handle both boolean and integer values)
+        allowSubmissions.value = props.input.allow_submissions === true || props.input.allow_submissions === 1;
+        downloadable.value = props.input.downloadable === true || props.input.downloadable === 1;
     }
 
 </script>
