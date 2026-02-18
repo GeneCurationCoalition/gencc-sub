@@ -110,6 +110,26 @@ See staging outputs for values needed in GitHub Actions:
 - `github_deploy_service_account`
 - `github_workload_identity_provider`
 
+## Remote State
+
+Terraform state is stored in per-project GCS buckets with versioning enabled:
+
+| Environment | Bucket              | Prefix       | GCP Project  |
+|-------------|---------------------|--------------|--------------|
+| Staging     | `gencc-dev-tfstate` | `staging`    | clingen-dev  |
+| Production  | `gencc-prod-tfstate`| `production` | clingen-dx   |
+
+These buckets are **not Terraform-managed** (chicken-and-egg). They were created once via `gcloud`:
+
+```bash
+gcloud storage buckets create gs://gencc-dev-tfstate \
+  --project=clingen-dev --location=us-east1 \
+  --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://gencc-dev-tfstate --versioning
+```
+
+`terraform init` configures the backend automatically from the `backend "gcs"` block in each environment's `main.tf`. The GCS backend provides built-in state locking — concurrent `terraform apply` runs will block rather than corrupt state.
+
 ## Outputs
 
 | Output                              | Description                                        |

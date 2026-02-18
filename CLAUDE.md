@@ -302,6 +302,8 @@ Provisions GCP resources via `deployment/terraform/`. Each environment is a self
 - **Compute**: Ubuntu VM with static external IP
 - **Firewall**: HTTP/HTTPS ingress (80/443), IAP SSH (22 from 35.235.240.0/20)
 
+**State** is stored remotely in per-project GCS buckets (`gencc-dev-tfstate`, `gencc-prod-tfstate`) with versioning and locking.
+
 **Usage** — `cd` into the environment directory, no extra flags needed:
 ```bash
 cd deployment/terraform/staging    # or production/

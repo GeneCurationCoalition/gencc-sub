@@ -7,6 +7,11 @@ terraform {
       version = ">= 7.18.0, < 8.0.0"
     }
   }
+
+  backend "gcs" {
+    bucket = "gencc-prod-tfstate"
+    prefix = "production"
+  }
 }
 
 provider "google" {
@@ -34,53 +39,4 @@ module "gencc_infra" {
   github_deploy_branch        = var.github_deploy_branch
   github_wif_pool_id          = var.github_wif_pool_id
   github_wif_provider_id      = var.github_wif_provider_id
-}
-
-# ---------------------------------------------------------------------------
-# moved blocks — map old root-module addresses to module addresses.
-# Safe to remove after first successful `terraform apply` in this directory.
-# ---------------------------------------------------------------------------
-
-# compute.tf resources
-moved {
-  from = google_service_account.vm
-  to   = module.gencc_infra.google_service_account.vm
-}
-moved {
-  from = google_compute_address.vm_internal_ip
-  to   = module.gencc_infra.google_compute_address.vm_internal_ip
-}
-moved {
-  from = google_compute_address.vm_external_ip
-  to   = module.gencc_infra.google_compute_address.vm_external_ip
-}
-moved {
-  from = google_compute_instance.vm
-  to   = module.gencc_infra.google_compute_instance.vm
-}
-moved {
-  from = google_storage_bucket.gencc_data
-  to   = module.gencc_infra.google_storage_bucket.gencc_data
-}
-moved {
-  from = google_storage_bucket_iam_member.gencc_data_vm_object_admin
-  to   = module.gencc_infra.google_storage_bucket_iam_member.gencc_data_vm_object_admin
-}
-
-# network.tf resources
-moved {
-  from = google_compute_network.vpc
-  to   = module.gencc_infra.google_compute_network.vpc
-}
-moved {
-  from = google_compute_subnetwork.subnet
-  to   = module.gencc_infra.google_compute_subnetwork.subnet
-}
-moved {
-  from = google_compute_firewall.allow_iap_ssh
-  to   = module.gencc_infra.google_compute_firewall.allow_iap_ssh
-}
-moved {
-  from = google_compute_firewall.allow_http_https
-  to   = module.gencc_infra.google_compute_firewall.allow_http_https
 }
