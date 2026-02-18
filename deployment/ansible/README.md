@@ -59,6 +59,8 @@ To restore a database dump and then migrate:
 
 The restore is destructive: it drops and recreates `gencc_mysql_database`.
 
+(See `./deployment/ansible/inventories/group_vars/all/vars.yml` for all config options)
+
 ## Notes
 - Uses **rootless Podman** for the app containers via a dedicated `gencc` user and `loginctl enable-linger`.
 - Uses **host MySQL** and allows container connections via `slirp4netns` (`DB_HOST=10.0.2.2`).
