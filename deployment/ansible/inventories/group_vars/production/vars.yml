@@ -2,10 +2,8 @@
 # Production environment overrides.
 
 # Container images
-# gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:latest
-# gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:latest
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0-beta6
-gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0-beta6
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.1
 
 # Public routing / TLS
 gencc_submit_hostname: pre-portal.thegencc.org
@@ -17,3 +15,8 @@ gencc_letsencrypt_domains:
   - "{{ gencc_submit_hostname }}"
   - "{{ gencc_search_hostname }}"
   - pre-search.thegencc.org
+
+#  --extra-vars '{"gencc_db_bootstrap_mode":"restore_and_migrate","gencc_db_restore_source":"gs://gencc-prod/application-private/backups/gencc_sub_baseline_20260205.sql.gz","gencc_db_restore_force":true}'
+# gencc_db_bootstrap_mode: restore_and_migrate
+# gencc_db_restore_source: gs://gencc-prod/application-private/backups/gencc_sub_baseline_20260205.sql.gz
+# gencc_db_restore_force: true
