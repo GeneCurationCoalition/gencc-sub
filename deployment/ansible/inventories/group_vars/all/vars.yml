@@ -1,17 +1,14 @@
 ---
 # Shared defaults for all environments.
-# Environment-specific overrides live in group_vars/staging/ or group_vars/production/.
+# Environment-specific overrides live in inventories/<env>/group_vars/all/vars.yml.
 # Secrets belong in the per-environment vault.yml files.
 
 gencc_deploy_user: gencc
 
-<<<<<<< HEAD
-=======
 # Container images (override per environment)
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0
 
->>>>>>> origin/main
 # Host bind ports (nginx routes to these)
 gencc_sub_port: 8080
 gencc_search_port: 8081
