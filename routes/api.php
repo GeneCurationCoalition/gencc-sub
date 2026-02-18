@@ -14,6 +14,7 @@ use App\Http\Controllers\API\DocumentController;
 use App\Http\Controllers\API\PubmedController;
 use App\Http\Controllers\API\AdminController;
 use App\Http\Controllers\API\SubmitterController;
+use App\Http\Controllers\AdminPageController;
 use App\Http\Controllers\API\TeamController;
 
 /*
@@ -207,6 +208,9 @@ Route::group(['middleware' => ['auth:sanctum'], 'prefix' => 'admin'], function (
     // Submitter member management (add/remove users from submitter detail page)
     Route::post('/submitters/{id}/members', [AdminController::class, 'addUserToSubmitter']);
     Route::delete('/submitters/{id}/members/{userId}', [AdminController::class, 'removeUserFromSubmitter']);
+
+    // Document management (update portal documents)
+    Route::post('/documents/{type}', [AdminPageController::class, 'updateDocument']);
 });
 
 // Progress polling endpoint - outside web middleware to avoid session locking
