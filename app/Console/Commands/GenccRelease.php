@@ -7,11 +7,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Carbon\Carbon;
 use Google\Cloud\Storage\StorageClient;
-use PhpOffice\PhpSpreadsheet\IOFactory;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Csv as CsvWriter;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
-use PhpOffice\PhpSpreadsheet\Writer\Xls as XlsWriter;
 
 use App\Models\Job;
 use App\Models\Action;
@@ -21,6 +16,8 @@ use App\Models\Release;
 
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
+use App\Exports\ReleaseSubmissionExport;
+use Maatwebsite\Excel\Facades\Excel;
 
 use App\Events\PublishStatusUpdate;
 
@@ -1359,12 +1356,12 @@ class GenccRelease extends Command
     }
 
     /**
-     * Generate a CSV file with all live submissions for download.
-     * Uses the same format as gencc-search SubmissionExport for consistency.
+     * Generate submissions export files (CSV, XLSX, XLS, TSV) for download.
+     * Uses ReleaseSubmissionExport with Maatwebsite/Excel for efficient chunked processing.
      */
     protected function generateSubmissionsCsv()
     {
-        $this->info("Generating submissions CSV...");
+        $this->info("Generating submissions export files...");
 
         // Ensure the exports directory exists (in public storage for web access)
         $exportsDir = storage_path('app/public/exports');
@@ -1372,418 +1369,181 @@ class GenccRelease extends Command
             File::makeDirectory($exportsDir, 0755, true);
         }
 
-        // Generate timestamped filename and a "latest" symlink
+        // Generate timestamped base filename
         $releaseDate = Carbon::now();
-        $timestampedFilename = 'gencc-submissions-' . $releaseDate->format('Y-m-d_His') . '.csv';
-        $latestFilename = 'gencc-submissions.csv';
-
-        // Get all live, published submissions with relationships
-        // Note: gencc-search filters by submitter.downloadable=true for public downloads,
-        // but for the release export we include all submissions
-        $submissions = Submission::where('is_live', true)
-            ->where('status', Submission::STATUS_PUBLISHED)
-            ->with([
-                'gene',
-                'disease',
-                'originalDisease',
-                'classification',
-                'inheritance',
-                'submitter',
-            ])
-            ->orderBy('sid')
-            ->get();
-
-        // Define CSV headers - matches gencc-search SubmissionExport format exactly
-        $headers = [
-            'sgc_id',
-            'version_number',
-            'gene_curie',
-            'gene_symbol',
-            'disease_curie',
-            'disease_title',
-            'disease_original_curie',
-            'disease_original_title',
-            'classification_curie',
-            'classification_title',
-            'moi_curie',
-            'moi_title',
-            'submitter_curie',
-            'submitter_title',
-            'submitted_as_hgnc_id',
-            'submitted_as_hgnc_symbol',
-            'submitted_as_disease_id',
-            'submitted_as_disease_name',
-            'submitted_as_moi_id',
-            'submitted_as_moi_name',
-            'submitted_as_submitter_id',
-            'submitted_as_submitter_name',
-            'submitted_as_classification_id',
-            'submitted_as_classification_name',
-            'submitted_as_date',
-            'submitted_as_public_report_url',
-            'submitted_as_notes',
-            'submitted_as_pmids',
-            'submitted_as_assertion_criteria_url',
-            'submitted_as_submission_id',
-            'submitted_run_date',
-        ];
-
-        // Build CSV content
-        $csvContent = $this->arrayToCsvLine($headers);
-
-        foreach ($submissions as $submission) {
-            // Extract data from original_submission_data JSON (what was originally submitted)
-            $originalData = $submission->original_submission_data;
-
-            // Handle both object and array access (JSON cast can return either)
-            $getNestedValue = function($data, $keys, $default = '') use (&$getNestedValue) {
-                if ($data === null) return $default;
-                foreach ($keys as $key) {
-                    if (is_object($data)) {
-                        $data = $data->$key ?? null;
-                    } elseif (is_array($data)) {
-                        $data = $data[$key] ?? null;
-                    } else {
-                        return $default;
-                    }
-                    if ($data === null) return $default;
-                }
-                return $data;
-            };
-
-            // Extract submitted_as fields from original_submission_data
-            $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
-            $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
-            $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
-            $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
-            $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
-            $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
-            $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
-            $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
-            $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
-            $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
-            $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
-            $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-            // Notes come from submission_data (current/editable) rather than original_submission_data
-            $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
-            $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
-            $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
-
-            // PMIDs - add space after commas for readability (matches gencc-search format)
-            $pmids = $submission->normalized_pmids
-                ? str_replace(',', ', ', $submission->normalized_pmids)
-                : '';
-
-            // submitted_run_date is the release date (date portion only)
-            $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
-
-            $row = [
-                $submission->sid,                                           // sgc_id
-                $submission->version_number ?? 1,                           // version_number
-                $submission->gene?->hgnc_id ?? '',                          // gene_curie (HGNC ID)
-                $submission->gene?->symbol ?? '',                           // gene_symbol
-                $submission->disease?->curie ?? '',                         // disease_curie
-                $submission->disease?->name ?? '',                          // disease_title
-                $submission->originalDisease?->curie ?? '',                 // disease_original_curie
-                $submission->originalDisease?->name ?? '',                  // disease_original_title
-                $submission->classification?->curie ?? '',                  // classification_curie
-                $submission->classification?->name ?? '',                   // classification_title
-                $submission->inheritance?->curie ?? '',                     // moi_curie
-                $submission->inheritance?->name ?? '',                      // moi_title
-                $submission->submitter?->curie ?? '',                       // submitter_curie
-                $submission->submitter?->name ?? '',                        // submitter_title
-                $submittedAsHgncId,                                         // submitted_as_hgnc_id
-                $submittedAsHgncSymbol,                                     // submitted_as_hgnc_symbol
-                $submittedAsDiseaseId,                                      // submitted_as_disease_id
-                $submittedAsDiseaseName,                                    // submitted_as_disease_name
-                $submittedAsMoiId,                                          // submitted_as_moi_id
-                $submittedAsMoiName,                                        // submitted_as_moi_name
-                $submittedAsSubmitterId,                                    // submitted_as_submitter_id
-                $submittedAsSubmitterName,                                  // submitted_as_submitter_name
-                $submittedAsClassificationId,                               // submitted_as_classification_id
-                $submittedAsClassificationName,                             // submitted_as_classification_name
-                $submittedAsDate,                                           // submitted_as_date
-                $submittedAsReportUrl,                                      // submitted_as_public_report_url
-                $submittedAsNotes,                                          // submitted_as_notes
-                $pmids,                                                     // submitted_as_pmids
-                $submittedAsCriteriaUrl,                                    // submitted_as_assertion_criteria_url
-                $submittedAsSubmissionId,                                   // submitted_as_submission_id
-                $submittedRunDate,                                          // submitted_run_date
-            ];
-
-            $csvContent .= $this->arrayToCsvLine($row);
-        }
-
-        // Upload timestamped file to GCS (with local fallback)
-        $timestampedPath = $exportsDir . '/' . $timestampedFilename;
-        $this->uploadToGcs($csvContent, "csv/{$timestampedFilename}", 'text/csv', $timestampedPath);
-
-        // Also upload "latest" version for easy access
-        $latestPath = $exportsDir . '/' . $latestFilename;
-        $this->uploadToGcs($csvContent, "csv/{$latestFilename}", 'text/csv', $latestPath);
-
-        // Generate additional formats (xlsx, xls, tsv)
-        $this->generateAdditionalFormats($exportsDir, $timestampedFilename, $headers, $submissions);
-
-        $this->submissionsCsvFile = $timestampedFilename;
-        $this->info("Submissions CSV generated: {$timestampedFilename}");
-        $this->info("Latest CSV available as: {$latestFilename}");
-
-        \Log::info("GenCC Release: Submissions CSV generated", [
-            'timestamped_file' => $timestampedFilename,
-            'latest_file' => $latestFilename,
-            'submission_count' => $submissions->count(),
-        ]);
-    }
-
-    /**
-     * Generate xlsx, xls, and tsv versions of the submissions export.
-     */
-    protected function generateAdditionalFormats(string $exportsDir, string $csvFilename, array $headers, $submissions): void
-    {
-        $this->info("  Generating additional formats...");
-
-        // Create a spreadsheet with the data
-        $spreadsheet = new Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Submissions');
-
-        // Add headers in row 1
-        $col = 1;
-        foreach ($headers as $header) {
-            $sheet->setCellValue([$col, 1], $header);
-            $col++;
-        }
-
-        // Helper function to extract nested values
-        $getNestedValue = function($data, $keys, $default = '') use (&$getNestedValue) {
-            if ($data === null) return $default;
-            foreach ($keys as $key) {
-                if (is_object($data)) {
-                    $data = $data->$key ?? null;
-                } elseif (is_array($data)) {
-                    $data = $data[$key] ?? null;
-                } else {
-                    return $default;
-                }
-                if ($data === null) return $default;
-            }
-            return $data;
-        };
-
-        // Add data rows starting at row 2
-        $row = 2;
-        foreach ($submissions as $submission) {
-            $originalData = $submission->original_submission_data;
-
-            // Extract submitted_as fields
-            $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
-            $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
-            $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
-            $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
-            $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
-            $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
-            $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
-            $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
-            $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
-            $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
-            $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
-            $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-            // Notes come from submission_data (current/editable) rather than original_submission_data
-            $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
-            $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
-            $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
-
-            $pmids = $submission->normalized_pmids
-                ? str_replace(',', ', ', $submission->normalized_pmids)
-                : '';
-            $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
-
-            $rowData = [
-                $submission->sid,
-                $submission->version_number ?? 1,
-                $submission->gene?->hgnc_id ?? '',
-                $submission->gene?->symbol ?? '',
-                $submission->disease?->curie ?? '',
-                $submission->disease?->name ?? '',
-                $submission->originalDisease?->curie ?? '',
-                $submission->originalDisease?->name ?? '',
-                $submission->classification?->curie ?? '',
-                $submission->classification?->name ?? '',
-                $submission->inheritance?->curie ?? '',
-                $submission->inheritance?->name ?? '',
-                $submission->submitter?->curie ?? '',
-                $submission->submitter?->name ?? '',
-                $submittedAsHgncId,
-                $submittedAsHgncSymbol,
-                $submittedAsDiseaseId,
-                $submittedAsDiseaseName,
-                $submittedAsMoiId,
-                $submittedAsMoiName,
-                $submittedAsSubmitterId,
-                $submittedAsSubmitterName,
-                $submittedAsClassificationId,
-                $submittedAsClassificationName,
-                $submittedAsDate,
-                $submittedAsReportUrl,
-                $submittedAsNotes,
-                $pmids,
-                $submittedAsCriteriaUrl,
-                $submittedAsSubmissionId,
-                $submittedRunDate,
-            ];
-
-            $col = 1;
-            foreach ($rowData as $value) {
-                $sheet->setCellValue([$col, $row], $value ?? '');
-                $col++;
-            }
-            $row++;
-        }
-
-        // Generate base filename without extension
-        $baseFilename = preg_replace('/\.csv$/', '', $csvFilename);
+        $timestampedBase = 'gencc-submissions-' . $releaseDate->format('Y-m-d_His');
         $latestBase = 'gencc-submissions';
 
-        // Write XLSX (timestamped and latest)
-        try {
-            $xlsxWriter = new XlsxWriter($spreadsheet);
+        // Create the export instance
+        $export = new ReleaseSubmissionExport();
 
-            $xlsxTimestamped = $exportsDir . '/' . $baseFilename . '.xlsx';
-            $xlsxWriter->save($xlsxTimestamped);
-            $this->uploadToGcs(File::get($xlsxTimestamped), "csv/{$baseFilename}.xlsx",
+        // Get count for logging (query runs once here, then chunked during export)
+        $submissionCount = Submission::where('is_live', true)
+            ->where('status', Submission::STATUS_PUBLISHED)
+            ->count();
+
+        // Generate CSV
+        $csvTimestamped = $exportsDir . '/' . $timestampedBase . '.csv';
+        Excel::store($export, 'public/exports/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
+        $csvContent = File::get($csvTimestamped);
+        $this->uploadToGcs($csvContent, "csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
+
+        // Copy to latest
+        $csvLatest = $exportsDir . '/' . $latestBase . '.csv';
+        File::copy($csvTimestamped, $csvLatest);
+        $this->uploadToGcs($csvContent, "csv/{$latestBase}.csv", 'text/csv', $csvLatest);
+        $this->info("  CSV: {$timestampedBase}.csv");
+
+        // Generate XLSX
+        try {
+            $xlsxTimestamped = $exportsDir . '/' . $timestampedBase . '.xlsx';
+            Excel::store($export, 'public/exports/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
+            $xlsxContent = File::get($xlsxTimestamped);
+            $this->uploadToGcs($xlsxContent, "csv/{$timestampedBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxTimestamped);
 
             $xlsxLatest = $exportsDir . '/' . $latestBase . '.xlsx';
             File::copy($xlsxTimestamped, $xlsxLatest);
-            $this->uploadToGcs(File::get($xlsxLatest), "csv/{$latestBase}.xlsx",
+            $this->uploadToGcs($xlsxContent, "csv/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
-
-            $this->info("    XLSX: {$baseFilename}.xlsx");
+            $this->info("  XLSX: {$timestampedBase}.xlsx");
         } catch (\Exception $e) {
-            $this->warn("    Failed to generate XLSX: {$e->getMessage()}");
+            $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
         }
 
-        // Write XLS (timestamped and latest)
+        // Generate XLS (legacy format)
         try {
-            $xlsWriter = new XlsWriter($spreadsheet);
-
-            $xlsTimestamped = $exportsDir . '/' . $baseFilename . '.xls';
-            $xlsWriter->save($xlsTimestamped);
-            $this->uploadToGcs(File::get($xlsTimestamped), "csv/{$baseFilename}.xls",
+            $xlsTimestamped = $exportsDir . '/' . $timestampedBase . '.xls';
+            Excel::store($export, 'public/exports/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
+            $xlsContent = File::get($xlsTimestamped);
+            $this->uploadToGcs($xlsContent, "csv/{$timestampedBase}.xls",
                 'application/vnd.ms-excel', $xlsTimestamped);
 
             $xlsLatest = $exportsDir . '/' . $latestBase . '.xls';
             File::copy($xlsTimestamped, $xlsLatest);
-            $this->uploadToGcs(File::get($xlsLatest), "csv/{$latestBase}.xls",
+            $this->uploadToGcs($xlsContent, "csv/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
-
-            $this->info("    XLS: {$baseFilename}.xls");
+            $this->info("  XLS: {$timestampedBase}.xls");
         } catch (\Exception $e) {
-            $this->warn("    Failed to generate XLS: {$e->getMessage()}");
+            $this->warn("  Failed to generate XLS: {$e->getMessage()}");
         }
 
-        // Write TSV (timestamped and latest)
+        // Generate TSV
         try {
-            $tsvContent = $this->arrayToTsvLine($headers);
-            foreach ($submissions as $submission) {
-                $originalData = $submission->original_submission_data;
-
-                $submittedAsHgncId = $getNestedValue($originalData, ['gene', 'id']);
-                $submittedAsHgncSymbol = $getNestedValue($originalData, ['gene', 'symbol']);
-                $submittedAsDiseaseId = $getNestedValue($originalData, ['disease', 'id']);
-                $submittedAsDiseaseName = $getNestedValue($originalData, ['disease', 'name']);
-                $submittedAsMoiId = $getNestedValue($originalData, ['moi', 'id']);
-                $submittedAsMoiName = $getNestedValue($originalData, ['moi', 'name']);
-                $submittedAsSubmitterId = $getNestedValue($originalData, ['additional_information', 'submitter_curie']);
-                $submittedAsSubmitterName = $getNestedValue($originalData, ['additional_information', 'submitter_title']);
-                $submittedAsClassificationId = $getNestedValue($originalData, ['classification', 'id']);
-                $submittedAsClassificationName = $getNestedValue($originalData, ['classification', 'name']);
-                $submittedAsDate = $getNestedValue($originalData, ['report', 'display_date']);
-                $submittedAsReportUrl = $getNestedValue($originalData, ['report', 'ext_url']);
-                // Notes come from submission_data (current/editable) rather than original_submission_data
-                $submittedAsNotes = $getNestedValue($submission->submission_data, ['notes', 'display']);
-                $submittedAsCriteriaUrl = $getNestedValue($originalData, ['criteria', 'url']);
-                $submittedAsSubmissionId = $getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
-
-                $pmids = $submission->normalized_pmids
-                    ? str_replace(',', ', ', $submission->normalized_pmids)
-                    : '';
-                $submittedRunDate = $submission->released_at?->format('Y-m-d') ?? '';
-
-                $rowData = [
-                    $submission->sid,
-                    $submission->version_number ?? 1,
-                    $submission->gene?->hgnc_id ?? '',
-                    $submission->gene?->symbol ?? '',
-                    $submission->disease?->curie ?? '',
-                    $submission->disease?->name ?? '',
-                    $submission->originalDisease?->curie ?? '',
-                    $submission->originalDisease?->name ?? '',
-                    $submission->classification?->curie ?? '',
-                    $submission->classification?->name ?? '',
-                    $submission->inheritance?->curie ?? '',
-                    $submission->inheritance?->name ?? '',
-                    $submission->submitter?->curie ?? '',
-                    $submission->submitter?->name ?? '',
-                    $submittedAsHgncId,
-                    $submittedAsHgncSymbol,
-                    $submittedAsDiseaseId,
-                    $submittedAsDiseaseName,
-                    $submittedAsMoiId,
-                    $submittedAsMoiName,
-                    $submittedAsSubmitterId,
-                    $submittedAsSubmitterName,
-                    $submittedAsClassificationId,
-                    $submittedAsClassificationName,
-                    $submittedAsDate,
-                    $submittedAsReportUrl,
-                    $submittedAsNotes,
-                    $pmids,
-                    $submittedAsCriteriaUrl,
-                    $submittedAsSubmissionId,
-                    $submittedRunDate,
-                ];
-                $tsvContent .= $this->arrayToTsvLine($rowData);
-            }
-
-            $tsvTimestamped = $exportsDir . '/' . $baseFilename . '.tsv';
-            File::put($tsvTimestamped, $tsvContent);
-            $this->uploadToGcs($tsvContent, "csv/{$baseFilename}.tsv", 'text/tab-separated-values', $tsvTimestamped);
+            $tsvTimestamped = $exportsDir . '/' . $timestampedBase . '.tsv';
+            Excel::store($export, 'public/exports/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            $tsvContent = File::get($tsvTimestamped);
+            $this->uploadToGcs($tsvContent, "csv/{$timestampedBase}.tsv",
+                'text/tab-separated-values', $tsvTimestamped);
 
             $tsvLatest = $exportsDir . '/' . $latestBase . '.tsv';
-            File::put($tsvLatest, $tsvContent);
-            $this->uploadToGcs($tsvContent, "csv/{$latestBase}.tsv", 'text/tab-separated-values', $tsvLatest);
-
-            $this->info("    TSV: {$baseFilename}.tsv");
+            File::copy($tsvTimestamped, $tsvLatest);
+            $this->uploadToGcs($tsvContent, "csv/{$latestBase}.tsv",
+                'text/tab-separated-values', $tsvLatest);
+            $this->info("  TSV: {$timestampedBase}.tsv");
         } catch (\Exception $e) {
-            $this->warn("    Failed to generate TSV: {$e->getMessage()}");
+            $this->warn("  Failed to generate TSV: {$e->getMessage()}");
         }
 
-        $this->info("  Additional formats complete");
+        $this->submissionsCsvFile = $timestampedBase . '.csv';
+        $this->info("Submissions export complete: {$timestampedBase}.*");
+        $this->info("Latest files available as: {$latestBase}.*");
+
+        // Generate legacy format files in legacy subdirectory
+        $this->generateLegacyExports($exportsDir, $timestampedBase, $latestBase);
+
+        \Log::info("GenCC Release: Submissions export generated", [
+            'timestamped_base' => $timestampedBase,
+            'latest_base' => $latestBase,
+            'submission_count' => $submissionCount,
+        ]);
     }
 
     /**
-     * Convert an array to a TSV line.
+     * Generate legacy format export files (using UUID instead of sgc_id/version_number).
      */
-    protected function arrayToTsvLine(array $fields): string
+    protected function generateLegacyExports(string $exportsDir, string $timestampedBase, string $latestBase): void
     {
-        $escaped = array_map(function ($field) {
-            if ($field === null) {
-                return '';
-            }
-            $field = (string) $field;
-            // Escape tabs and newlines within fields
-            $field = str_replace(["\t", "\n", "\r"], [' ', ' ', ' '], $field);
-            return $field;
-        }, $fields);
+        $this->info("  Generating legacy format files...");
 
-        return implode("\t", $escaped) . "\n";
+        // Ensure legacy directory exists
+        $legacyDir = $exportsDir . '/legacy';
+        if (!File::isDirectory($legacyDir)) {
+            File::makeDirectory($legacyDir, 0755, true);
+        }
+
+        // Create the legacy export instance
+        $legacyExport = new ReleaseSubmissionExport(useLegacyFormat: true);
+
+        // Generate legacy CSV
+        try {
+            $csvTimestamped = $legacyDir . '/' . $timestampedBase . '.csv';
+            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
+            $csvContent = File::get($csvTimestamped);
+            $this->uploadToGcs($csvContent, "csv/legacy/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
+
+            $csvLatest = $legacyDir . '/' . $latestBase . '.csv';
+            File::copy($csvTimestamped, $csvLatest);
+            $this->uploadToGcs($csvContent, "csv/legacy/{$latestBase}.csv", 'text/csv', $csvLatest);
+            $this->info("    Legacy CSV: legacy/{$timestampedBase}.csv");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate legacy CSV: {$e->getMessage()}");
+        }
+
+        // Generate legacy XLSX
+        try {
+            $xlsxTimestamped = $legacyDir . '/' . $timestampedBase . '.xlsx';
+            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
+            $xlsxContent = File::get($xlsxTimestamped);
+            $this->uploadToGcs($xlsxContent, "csv/legacy/{$timestampedBase}.xlsx",
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxTimestamped);
+
+            $xlsxLatest = $legacyDir . '/' . $latestBase . '.xlsx';
+            File::copy($xlsxTimestamped, $xlsxLatest);
+            $this->uploadToGcs($xlsxContent, "csv/legacy/{$latestBase}.xlsx",
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
+            $this->info("    Legacy XLSX: legacy/{$timestampedBase}.xlsx");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
+        }
+
+        // Generate legacy XLS
+        try {
+            $xlsTimestamped = $legacyDir . '/' . $timestampedBase . '.xls';
+            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
+            $xlsContent = File::get($xlsTimestamped);
+            $this->uploadToGcs($xlsContent, "csv/legacy/{$timestampedBase}.xls",
+                'application/vnd.ms-excel', $xlsTimestamped);
+
+            $xlsLatest = $legacyDir . '/' . $latestBase . '.xls';
+            File::copy($xlsTimestamped, $xlsLatest);
+            $this->uploadToGcs($xlsContent, "csv/legacy/{$latestBase}.xls",
+                'application/vnd.ms-excel', $xlsLatest);
+            $this->info("    Legacy XLS: legacy/{$timestampedBase}.xls");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
+        }
+
+        // Generate legacy TSV
+        try {
+            $tsvTimestamped = $legacyDir . '/' . $timestampedBase . '.tsv';
+            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            $tsvContent = File::get($tsvTimestamped);
+            $this->uploadToGcs($tsvContent, "csv/legacy/{$timestampedBase}.tsv",
+                'text/tab-separated-values', $tsvTimestamped);
+
+            $tsvLatest = $legacyDir . '/' . $latestBase . '.tsv';
+            File::copy($tsvTimestamped, $tsvLatest);
+            $this->uploadToGcs($tsvContent, "csv/legacy/{$latestBase}.tsv",
+                'text/tab-separated-values', $tsvLatest);
+            $this->info("    Legacy TSV: legacy/{$timestampedBase}.tsv");
+        } catch (\Exception $e) {
+            $this->warn("    Failed to generate legacy TSV: {$e->getMessage()}");
+        }
+
+        $this->info("  Legacy format complete");
     }
 
-    /**
-     * Convert an array to a properly escaped CSV line.
-     */
     /**
      * Create a Release record with statistics from this release run.
      */
@@ -1822,27 +1582,5 @@ class GenccRelease extends Command
             'unpublish' => $this->releaseStats['unpublish'],
             'duration' => $duration,
         ]);
-    }
-
-    protected function arrayToCsvLine(array $fields): string
-    {
-        $escaped = array_map(function ($field) {
-            // Handle null values
-            if ($field === null) {
-                return '';
-            }
-
-            // Convert to string
-            $field = (string) $field;
-
-            // Escape fields containing commas, quotes, or newlines
-            if (strpos($field, ',') !== false || strpos($field, '"') !== false || strpos($field, "\n") !== false) {
-                return '"' . str_replace('"', '""', $field) . '"';
-            }
-
-            return $field;
-        }, $fields);
-
-        return implode(',', $escaped) . "\n";
     }
 }
