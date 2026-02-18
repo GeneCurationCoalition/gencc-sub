@@ -1,8 +1,8 @@
 # Ansible — VM configuration + Podman/Quadlet deployment
 
-This automation scaffold matches the deployment architecture in `ai/2026-02-05T001502Z-synthesized-gencc-deploy-plan.GEMINI.md`.
+It is intentionally written so it can be run idempotently after Terraform provisions the VM (SSH via IAP is supported).
 
-It is intentionally written so it can be run safely after Terraform provisions the VM (SSH via IAP is supported).
+The easiest way to configure the connection to the VM is to add a block to your `~/.ssh/config` for each VM, with the host named the same as referred to in `production.ini` (`gencc-prod-vm`) and `staging.ini` (`gencc-vm`) which uses the `ProxyCommand` directive to tell ssh (and ansible) to use IAP tunneling to reach the VM. Public ssh connections are disabled for the VMs in our terraform config.
 
 ## Layout
 - `playbooks/site.yml` — main entrypoint
