@@ -82,18 +82,24 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-# Copy application files
-COPY --chown=www-data:www-data . .
+# Copy application files (root-owned for security - app code should be read-only)
+COPY . .
 
 # Copy built frontend assets
 COPY --from=frontend /app/public/build ./public/build
 
-# Install PHP dependencies
+# Install PHP dependencies (root-owned - vendor should be read-only)
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Set permissions
-RUN chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+# Set permissions for runtime directories (only these need www-data write access)
+# - storage/: Laravel logs, cache, sessions, views, uploads
+# - storage/releases/: GenCC release notes files (local fallback when GCS not configured)
+# - bootstrap/cache/: Laravel compiled services and routes
+# - data/: cache files for UpdateGenes, UpdateDiseases, CachesFileHeaders
+# - data/clingen/comparison/: Python ClinGen sync pipeline outputs
+RUN mkdir -p data/clingen/comparison storage/app/temp storage/app/public/exports storage/releases \
+    && chown -R www-data:www-data storage bootstrap/cache data \
+    && chmod -R 775 storage bootstrap/cache data
 
 # PHP configuration
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"

@@ -8,6 +8,7 @@ use Inertia\Inertia;
 use App\Models\Release;
 use App\Models\Submitter;
 use App\Models\User;
+use Google\Cloud\Storage\StorageClient;
 
 class AdminPageController extends Controller
 {
@@ -252,15 +253,33 @@ class AdminPageController extends Controller
             abort(404, 'Release or CSV file not found');
         }
 
-        $filePath = storage_path('app/public/exports/' . $release->submissions_csv_file);
+        $filename = $release->submissions_csv_file;
 
-        if (!file_exists($filePath)) {
-            abort(404, 'CSV file not found on disk');
+        // Try GCS first (current path structure)
+        $content = $this->downloadFromGcs("current/csv/{$filename}");
+        if ($content !== null) {
+            return response($content, 200, [
+                'Content-Type' => 'text/csv',
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            ]);
         }
 
-        return response()->download($filePath, $release->submissions_csv_file, [
-            'Content-Type' => 'text/csv',
-        ]);
+        // Fall back to local storage - try multiple possible paths
+        $possiblePaths = [
+            storage_path('app/public/current/csv/' . $filename),
+            storage_path('app/public/releases/current/csv/' . $filename),
+            storage_path('app/public/exports/' . $filename), // legacy path
+        ];
+
+        foreach ($possiblePaths as $filePath) {
+            if (file_exists($filePath)) {
+                return response()->download($filePath, $filename, [
+                    'Content-Type' => 'text/csv',
+                ]);
+            }
+        }
+
+        abort(404, 'CSV file not found');
     }
 
     /**
@@ -275,14 +294,60 @@ class AdminPageController extends Controller
             abort(404, 'Release or notes file not found');
         }
 
-        $filePath = storage_path('releases/' . $release->release_notes_file);
+        $filename = $release->release_notes_file;
 
-        if (!file_exists($filePath)) {
-            abort(404, 'Release notes file not found on disk');
+        // Determine content type based on file extension (supports both .txt and legacy .md)
+        $contentType = str_ends_with($filename, '.md') ? 'text/markdown' : 'text/plain';
+
+        // Try GCS first
+        $content = $this->downloadFromGcs("notes/{$filename}");
+        if ($content !== null) {
+            return response($content, 200, [
+                'Content-Type' => $contentType,
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            ]);
         }
 
-        return response()->download($filePath, $release->release_notes_file, [
-            'Content-Type' => 'text/markdown',
+        // Fall back to local storage
+        $filePath = storage_path('releases/' . $filename);
+        if (!file_exists($filePath)) {
+            abort(404, 'Release notes file not found');
+        }
+
+        return response()->download($filePath, $filename, [
+            'Content-Type' => $contentType,
         ]);
+    }
+
+    /**
+     * Download a file from GCS.
+     * Returns file content on success, null if GCS is not configured or file not found.
+     */
+    private function downloadFromGcs(string $objectName): ?string
+    {
+        $bucketName = config('filesystems.disks.gcs.bucket');
+        if (empty($bucketName)) {
+            return null;
+        }
+
+        $prefix = config('filesystems.disks.gcs.path_prefix', 'releases');
+        $fullObjectName = $prefix ? "{$prefix}/{$objectName}" : $objectName;
+
+        try {
+            $storage = new StorageClient([
+                'projectId' => config('filesystems.disks.gcs.project_id'),
+            ]);
+            $bucket = $storage->bucket($bucketName);
+            $object = $bucket->object($fullObjectName);
+
+            if (!$object->exists()) {
+                return null;
+            }
+
+            return $object->downloadAsString();
+        } catch (\Exception $e) {
+            \Log::warning("GCS download failed for {$fullObjectName}: {$e->getMessage()}");
+            return null;
+        }
     }
 }

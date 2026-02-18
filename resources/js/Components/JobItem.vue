@@ -887,7 +887,7 @@ const formatDate = (dateString) => {
                 </p>
             </div>
             <!-- Draft status: show submit button if no errors, not processing, and not partial upload -->
-            <div v-else-if="job.status === 'draft' && job.type == 0 && submissions.length > 0 && !hasErrors && !hasPartialUpload && !job.is_processing"
+            <div v-else-if="job.status === 'draft' && job.type == 0 && submissions.length > 0 && !hasErrors && !hasPartialUpload && !job.is_processing && !uploadProgress.is_processing"
                  class="bg-yellow-100 border-l-4 border-yellow-700 text-yellow-800 p-4 mb-2" role="alert">
                 <p class="font-bold">There are no errors.
                 <Button class="float-right !bg-amber-600 !ring-amber-600 hover:!bg-amber-700" label="Submit" icon="pi pi-send" @click="publishConfirmation()" raised /></p>

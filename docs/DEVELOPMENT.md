@@ -761,11 +761,11 @@ php artisan config:clear
 - **PubMed E-utilities**: https://www.ncbi.nlm.nih.gov/books/NBK25501/
 
 ### Project-Specific Docs
-- `CLAUDE.md` - Instructions for Claude Code AI assistant
+
+- `../CLAUDE.md` - Instructions for Claude Code AI assistant
 - `DEPLOYMENT.md` - Production deployment guide
-- `docs/STATE_MODEL_QUICK_REFERENCE.md` - Job/submission state transitions
-- `docs/SUBMISSION_PROCESSING_GUIDE.md` - Detailed submission workflow
-- `docs/DASHBOARD_TECHNICAL_GUIDE.md` - Dashboard metrics implementation
+- `STATE_MODEL_QUICK_REFERENCE.md` - Job/submission state transitions
+- `SUBMISSION_PROCESSING_GUIDE.md` - Detailed submission workflow
 
 ---
 

@@ -99,3 +99,20 @@
   failed_when:
     - gencc_db_migrate_status.finished | bool
     - (gencc_db_migrate_status.rc | default(0)) != 0
+
+- name: Bootstrap initial release after database restore
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan gencc:release bootstrap --no-interaction'
+  args:
+    executable: /bin/bash
+  register: gencc_release_bootstrap
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+  failed_when: false  # Don't fail if bootstrap fails (may already exist)
+
+- name: Show bootstrap result
+  ansible.builtin.debug:
+    msg: "{{ gencc_release_bootstrap.stdout_lines | default([]) }}"
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_release_bootstrap.stdout_lines is defined

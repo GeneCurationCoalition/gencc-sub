@@ -34,6 +34,10 @@ class Release extends Model
 
     /**
      * Auto-generate slug in GCC-XXXXX format.
+     *
+     * Slugs are 0-indexed sequential numbers (GCC-00000, GCC-00001, etc.)
+     * based on the highest existing slug number, ensuring uniqueness even
+     * if records are deleted.
      */
     public static function booted(): void
     {
@@ -44,11 +48,34 @@ class Release extends Model
             }
         });
 
-        // Update with the real ID-based slug after creation
-        static::created(fn (Model $model) =>
-            $model->update(['slug' => 'GCC-'
-                    . str_pad($model->id, 5, '0', STR_PAD_LEFT)])
-        );
+        // Update with the real sequential slug after creation
+        // Uses max slug number + 1 to ensure uniqueness
+        static::created(function (Model $model) {
+            if (str_starts_with($model->slug, 'GCC-TEMP-')) {
+                $nextNumber = self::getNextSlugNumber();
+                $model->update(['slug' => 'GCC-'
+                    . str_pad($nextNumber, 5, '0', STR_PAD_LEFT)]);
+            }
+        });
+    }
+
+    /**
+     * Get the next available slug number (max existing + 1, or 0 if none).
+     */
+    public static function getNextSlugNumber(): int
+    {
+        $maxSlug = Release::where('slug', 'like', 'GCC-%')
+            ->where('slug', 'not like', 'GCC-TEMP-%')
+            ->orderByRaw("CAST(SUBSTRING(slug, 5) AS UNSIGNED) DESC")
+            ->value('slug');
+
+        if (!$maxSlug) {
+            return 0;
+        }
+
+        // Extract number from GCC-XXXXX format
+        $number = (int) substr($maxSlug, 4);
+        return $number + 1;
     }
 
     /**

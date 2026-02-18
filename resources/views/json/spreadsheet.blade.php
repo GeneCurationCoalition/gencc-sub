@@ -49,5 +49,9 @@
 			'name' => $d->primary_contributor_group_name ?? ''
 		]
 	],
-	'additional_information' => [['key' => 'values']]
+	'additional_information' => [
+		'submitter_curie' => $d->submitter_curie ?? '',
+		'submitter_title' => $d->submitter_title ?? '',
+		'submitted_as_submission_id' => $d->local_key ?? ''
+	]
 ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !!}
