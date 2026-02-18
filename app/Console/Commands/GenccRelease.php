@@ -1358,15 +1358,25 @@ class GenccRelease extends Command
     /**
      * Generate submissions export files (CSV, XLSX, XLS, TSV) for download.
      * Uses ReleaseSubmissionExport with Maatwebsite/Excel for efficient chunked processing.
+     *
+     * Files are organized under releases/:
+     *   releases/current/{csv,tsv,xlsx,xls}/ - Standard format (sgc_id + version_number)
+     *   releases/legacy/{csv,tsv,xlsx,xls}/  - Legacy format (uuid)
      */
     protected function generateSubmissionsCsv()
     {
         $this->info("Generating submissions export files...");
 
-        // Ensure the exports directory exists (in public storage for web access)
-        $exportsDir = storage_path('app/public/exports');
-        if (!File::isDirectory($exportsDir)) {
-            File::makeDirectory($exportsDir, 0755, true);
+        // Base directories
+        $releasesDir = storage_path('app/public/releases');
+        $currentDir = $releasesDir . '/current';
+
+        // Ensure format subdirectories exist
+        foreach (['csv', 'tsv', 'xlsx', 'xls'] as $format) {
+            $formatDir = $currentDir . '/' . $format;
+            if (!File::isDirectory($formatDir)) {
+                File::makeDirectory($formatDir, 0755, true);
+            }
         }
 
         // Generate timestamped base filename
@@ -1383,74 +1393,76 @@ class GenccRelease extends Command
             ->count();
 
         // Generate CSV
-        $csvTimestamped = $exportsDir . '/' . $timestampedBase . '.csv';
-        Excel::store($export, 'public/exports/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
+        $csvDir = $currentDir . '/csv';
+        $csvTimestamped = $csvDir . '/' . $timestampedBase . '.csv';
+        Excel::store($export, 'public/releases/current/csv/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
         $csvContent = File::get($csvTimestamped);
-        $this->uploadToGcs($csvContent, "csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
+        $this->uploadToGcs($csvContent, "releases/current/csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
 
-        // Copy to latest
-        $csvLatest = $exportsDir . '/' . $latestBase . '.csv';
+        $csvLatest = $csvDir . '/' . $latestBase . '.csv';
         File::copy($csvTimestamped, $csvLatest);
-        $this->uploadToGcs($csvContent, "csv/{$latestBase}.csv", 'text/csv', $csvLatest);
-        $this->info("  CSV: {$timestampedBase}.csv");
+        $this->uploadToGcs($csvContent, "releases/current/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
+        $this->info("  CSV: current/csv/{$timestampedBase}.csv");
 
         // Generate XLSX
         try {
-            $xlsxTimestamped = $exportsDir . '/' . $timestampedBase . '.xlsx';
-            Excel::store($export, 'public/exports/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
+            $xlsxDir = $currentDir . '/xlsx';
+            $xlsxTimestamped = $xlsxDir . '/' . $timestampedBase . '.xlsx';
+            Excel::store($export, 'public/releases/current/xlsx/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
             $xlsxContent = File::get($xlsxTimestamped);
-            $this->uploadToGcs($xlsxContent, "csv/{$timestampedBase}.xlsx",
+            $this->uploadToGcs($xlsxContent, "releases/current/xlsx/{$timestampedBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxTimestamped);
 
-            $xlsxLatest = $exportsDir . '/' . $latestBase . '.xlsx';
+            $xlsxLatest = $xlsxDir . '/' . $latestBase . '.xlsx';
             File::copy($xlsxTimestamped, $xlsxLatest);
-            $this->uploadToGcs($xlsxContent, "csv/{$latestBase}.xlsx",
+            $this->uploadToGcs($xlsxContent, "releases/current/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
-            $this->info("  XLSX: {$timestampedBase}.xlsx");
+            $this->info("  XLSX: current/xlsx/{$timestampedBase}.xlsx");
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
         }
 
-        // Generate XLS (legacy format)
+        // Generate XLS
         try {
-            $xlsTimestamped = $exportsDir . '/' . $timestampedBase . '.xls';
-            Excel::store($export, 'public/exports/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
+            $xlsDir = $currentDir . '/xls';
+            $xlsTimestamped = $xlsDir . '/' . $timestampedBase . '.xls';
+            Excel::store($export, 'public/releases/current/xls/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
             $xlsContent = File::get($xlsTimestamped);
-            $this->uploadToGcs($xlsContent, "csv/{$timestampedBase}.xls",
+            $this->uploadToGcs($xlsContent, "releases/current/xls/{$timestampedBase}.xls",
                 'application/vnd.ms-excel', $xlsTimestamped);
 
-            $xlsLatest = $exportsDir . '/' . $latestBase . '.xls';
+            $xlsLatest = $xlsDir . '/' . $latestBase . '.xls';
             File::copy($xlsTimestamped, $xlsLatest);
-            $this->uploadToGcs($xlsContent, "csv/{$latestBase}.xls",
+            $this->uploadToGcs($xlsContent, "releases/current/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
-            $this->info("  XLS: {$timestampedBase}.xls");
+            $this->info("  XLS: current/xls/{$timestampedBase}.xls");
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLS: {$e->getMessage()}");
         }
 
         // Generate TSV
         try {
-            $tsvTimestamped = $exportsDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($export, 'public/exports/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            $tsvDir = $currentDir . '/tsv';
+            $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
+            Excel::store($export, 'public/releases/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
             $tsvContent = File::get($tsvTimestamped);
-            $this->uploadToGcs($tsvContent, "csv/{$timestampedBase}.tsv",
+            $this->uploadToGcs($tsvContent, "releases/current/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
 
-            $tsvLatest = $exportsDir . '/' . $latestBase . '.tsv';
+            $tsvLatest = $tsvDir . '/' . $latestBase . '.tsv';
             File::copy($tsvTimestamped, $tsvLatest);
-            $this->uploadToGcs($tsvContent, "csv/{$latestBase}.tsv",
+            $this->uploadToGcs($tsvContent, "releases/current/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
-            $this->info("  TSV: {$timestampedBase}.tsv");
+            $this->info("  TSV: current/tsv/{$timestampedBase}.tsv");
         } catch (\Exception $e) {
             $this->warn("  Failed to generate TSV: {$e->getMessage()}");
         }
 
         $this->submissionsCsvFile = $timestampedBase . '.csv';
-        $this->info("Submissions export complete: {$timestampedBase}.*");
-        $this->info("Latest files available as: {$latestBase}.*");
+        $this->info("Current format export complete");
 
-        // Generate legacy format files in legacy subdirectory
-        $this->generateLegacyExports($exportsDir, $timestampedBase, $latestBase);
+        // Generate legacy format files
+        $this->generateLegacyExports($releasesDir, $timestampedBase, $latestBase);
 
         \Log::info("GenCC Release: Submissions export generated", [
             'timestamped_base' => $timestampedBase,
@@ -1461,15 +1473,20 @@ class GenccRelease extends Command
 
     /**
      * Generate legacy format export files (using UUID instead of sgc_id/version_number).
+     * Files are organized under releases/legacy/{csv,tsv,xlsx,xls}/
      */
-    protected function generateLegacyExports(string $exportsDir, string $timestampedBase, string $latestBase): void
+    protected function generateLegacyExports(string $releasesDir, string $timestampedBase, string $latestBase): void
     {
         $this->info("  Generating legacy format files...");
 
-        // Ensure legacy directory exists
-        $legacyDir = $exportsDir . '/legacy';
-        if (!File::isDirectory($legacyDir)) {
-            File::makeDirectory($legacyDir, 0755, true);
+        $legacyDir = $releasesDir . '/legacy';
+
+        // Ensure format subdirectories exist
+        foreach (['csv', 'tsv', 'xlsx', 'xls'] as $format) {
+            $formatDir = $legacyDir . '/' . $format;
+            if (!File::isDirectory($formatDir)) {
+                File::makeDirectory($formatDir, 0755, true);
+            }
         }
 
         // Create the legacy export instance
@@ -1477,66 +1494,70 @@ class GenccRelease extends Command
 
         // Generate legacy CSV
         try {
-            $csvTimestamped = $legacyDir . '/' . $timestampedBase . '.csv';
-            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
+            $csvDir = $legacyDir . '/csv';
+            $csvTimestamped = $csvDir . '/' . $timestampedBase . '.csv';
+            Excel::store($legacyExport, 'public/releases/legacy/csv/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
             $csvContent = File::get($csvTimestamped);
-            $this->uploadToGcs($csvContent, "csv/legacy/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
+            $this->uploadToGcs($csvContent, "releases/legacy/csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
 
-            $csvLatest = $legacyDir . '/' . $latestBase . '.csv';
+            $csvLatest = $csvDir . '/' . $latestBase . '.csv';
             File::copy($csvTimestamped, $csvLatest);
-            $this->uploadToGcs($csvContent, "csv/legacy/{$latestBase}.csv", 'text/csv', $csvLatest);
-            $this->info("    Legacy CSV: legacy/{$timestampedBase}.csv");
+            $this->uploadToGcs($csvContent, "releases/legacy/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
+            $this->info("    CSV: legacy/csv/{$timestampedBase}.csv");
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy CSV: {$e->getMessage()}");
         }
 
         // Generate legacy XLSX
         try {
-            $xlsxTimestamped = $legacyDir . '/' . $timestampedBase . '.xlsx';
-            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
+            $xlsxDir = $legacyDir . '/xlsx';
+            $xlsxTimestamped = $xlsxDir . '/' . $timestampedBase . '.xlsx';
+            Excel::store($legacyExport, 'public/releases/legacy/xlsx/' . $timestampedBase . '.xlsx', 'local', \Maatwebsite\Excel\Excel::XLSX);
             $xlsxContent = File::get($xlsxTimestamped);
-            $this->uploadToGcs($xlsxContent, "csv/legacy/{$timestampedBase}.xlsx",
+            $this->uploadToGcs($xlsxContent, "releases/legacy/xlsx/{$timestampedBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxTimestamped);
 
-            $xlsxLatest = $legacyDir . '/' . $latestBase . '.xlsx';
+            $xlsxLatest = $xlsxDir . '/' . $latestBase . '.xlsx';
             File::copy($xlsxTimestamped, $xlsxLatest);
-            $this->uploadToGcs($xlsxContent, "csv/legacy/{$latestBase}.xlsx",
+            $this->uploadToGcs($xlsxContent, "releases/legacy/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
-            $this->info("    Legacy XLSX: legacy/{$timestampedBase}.xlsx");
+            $this->info("    XLSX: legacy/xlsx/{$timestampedBase}.xlsx");
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
         }
 
         // Generate legacy XLS
         try {
-            $xlsTimestamped = $legacyDir . '/' . $timestampedBase . '.xls';
-            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
+            $xlsDir = $legacyDir . '/xls';
+            $xlsTimestamped = $xlsDir . '/' . $timestampedBase . '.xls';
+            Excel::store($legacyExport, 'public/releases/legacy/xls/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
             $xlsContent = File::get($xlsTimestamped);
-            $this->uploadToGcs($xlsContent, "csv/legacy/{$timestampedBase}.xls",
+            $this->uploadToGcs($xlsContent, "releases/legacy/xls/{$timestampedBase}.xls",
                 'application/vnd.ms-excel', $xlsTimestamped);
 
-            $xlsLatest = $legacyDir . '/' . $latestBase . '.xls';
+            $xlsLatest = $xlsDir . '/' . $latestBase . '.xls';
             File::copy($xlsTimestamped, $xlsLatest);
-            $this->uploadToGcs($xlsContent, "csv/legacy/{$latestBase}.xls",
+            $this->uploadToGcs($xlsContent, "releases/legacy/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
-            $this->info("    Legacy XLS: legacy/{$timestampedBase}.xls");
+            $this->info("    XLS: legacy/xls/{$timestampedBase}.xls");
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
         }
 
         // Generate legacy TSV
         try {
-            $tsvTimestamped = $legacyDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($legacyExport, 'public/exports/legacy/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            $tsvDir = $legacyDir . '/tsv';
+            $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
+            Excel::store($legacyExport, 'public/releases/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
             $tsvContent = File::get($tsvTimestamped);
-            $this->uploadToGcs($tsvContent, "csv/legacy/{$timestampedBase}.tsv",
+            $this->uploadToGcs($tsvContent, "releases/legacy/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
 
-            $tsvLatest = $legacyDir . '/' . $latestBase . '.tsv';
+            $tsvLatest = $tsvDir . '/' . $latestBase . '.tsv';
             File::copy($tsvTimestamped, $tsvLatest);
-            $this->uploadToGcs($tsvContent, "csv/legacy/{$latestBase}.tsv",
+            $this->uploadToGcs($tsvContent, "releases/legacy/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
-            $this->info("    Legacy TSV: legacy/{$timestampedBase}.tsv");
+            $this->info("    TSV: legacy/tsv/{$timestampedBase}.tsv");
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy TSV: {$e->getMessage()}");
         }
