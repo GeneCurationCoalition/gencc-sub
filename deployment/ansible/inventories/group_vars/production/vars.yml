@@ -2,16 +2,22 @@
 # Production environment overrides.
 
 # Container images
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0.1
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0.2
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.1
 
 # Public routing / TLS
-gencc_submit_hostname: pre-portal.thegencc.org
-gencc_search_hostname: pre.thegencc.org
+gencc_submit_hostname: portal.thegencc.org
+gencc_search_hostname: thegencc.org
 gencc_search_hostname_redirects:
-  - pre-search.thegencc.org
+  - search.thegencc.org
 gencc_letsencrypt_cert_name: gencc-prod
 gencc_letsencrypt_domains:
   - "{{ gencc_submit_hostname }}"
   - "{{ gencc_search_hostname }}"
-  - pre-search.thegencc.org
+  - search.thegencc.org
+
+
+# Used to both reset the database from a dump, and trigger the playbook step which runs the release bootstrap.
+# gencc_db_restore_source: "gs://gencc-prod/application-private/backups/gencc_sub_baseline_20260205.sql.gz"
+# gencc_db_bootstrap_mode: restore_and_migrate
+# gencc_db_restore_force: true

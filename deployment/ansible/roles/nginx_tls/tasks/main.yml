@@ -58,12 +58,7 @@
     name: nginx
     state: reloaded
 
-- name: Check if Let's Encrypt certificate already exists
-  ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem"
-  register: gencc_le_cert
-
-- name: Obtain Let's Encrypt certificate (HTTP-01)
+- name: Obtain or update Let's Encrypt certificate (HTTP-01)
   ansible.builtin.command: >
     certbot certonly
     --webroot
@@ -74,14 +69,15 @@
     -m {{ gencc_letsencrypt_email }}
     {% for d in gencc_letsencrypt_domains %}-d {{ d }} {% endfor %}
     --deploy-hook "systemctl reload nginx"
+  register: gencc_certbot_result
+  changed_when: "'no action taken' not in (gencc_certbot_result.stdout | default(''))"
   when:
     - gencc_enable_letsencrypt | bool
-    - not gencc_le_cert.stat.exists
 
-- name: Re-check if Let's Encrypt certificate exists (post-issuance)
+- name: Check if Let's Encrypt certificate exists (post-issuance)
   ansible.builtin.stat:
     path: "/etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem"
-  register: gencc_le_cert_after
+  register: gencc_le_cert
 
 - name: Install HTTPS nginx config (post-certificate)
   ansible.builtin.template:
@@ -92,7 +88,7 @@
     mode: "0644"
   when:
     - gencc_enable_letsencrypt | bool
-    - gencc_le_cert.stat.exists or gencc_le_cert_after.stat.exists
+    - gencc_le_cert.stat.exists
   notify: reload nginx
 
 - name: Enable certbot renewal timer
