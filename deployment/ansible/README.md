@@ -23,6 +23,16 @@ It is intentionally written so it can be run safely after Terraform provisions t
    - `ansible-playbook -i inventories/staging.ini playbooks/site.yml --ask-vault-pass`
    - `ansible-playbook -i inventories/production.ini playbooks/site.yml --ask-vault-pass`
 
+The vault passphrases for staging and production are both stored in Google Secret Manager in their respective projects (dev/prod). You can also save each value to a local txt file and pass it to ansible-playbook to run without re-prompting for the passphrase interactively.
+
+For example, for staging:
+```
+ansible-playbook \
+  -i inventories/staging.ini \
+  playbooks/site.yml \
+  --vault-password-file gencc-staging-ansible-vault-passphrase.txt
+```
+
 ## Running from GitHub Actions
 Repository workflow:
 - `.github/workflows/deploy-via-ansible.yml`
