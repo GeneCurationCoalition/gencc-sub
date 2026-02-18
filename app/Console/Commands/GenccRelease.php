@@ -1480,18 +1480,18 @@ class GenccRelease extends Command
             $row = [
                 $submission->sid,                                           // sgc_id
                 $submission->version_number ?? 1,                           // version_number
-                $submission->gene->hgnc_id ?? '',                           // gene_curie (HGNC ID)
-                $submission->gene->symbol ?? '',                            // gene_symbol
-                $submission->disease->curie ?? '',                          // disease_curie
-                $submission->disease->name ?? '',                           // disease_title
-                $submission->originalDisease->curie ?? '',                  // disease_original_curie
-                $submission->originalDisease->name ?? '',                   // disease_original_title
-                $submission->classification->curie ?? '',                   // classification_curie
-                $submission->classification->name ?? '',                    // classification_title
-                $submission->inheritance->curie ?? '',                      // moi_curie
-                $submission->inheritance->name ?? '',                       // moi_title
-                $submission->submitter->curie ?? '',                        // submitter_curie
-                $submission->submitter->name ?? '',                         // submitter_title
+                $submission->gene?->hgnc_id ?? '',                          // gene_curie (HGNC ID)
+                $submission->gene?->symbol ?? '',                           // gene_symbol
+                $submission->disease?->curie ?? '',                         // disease_curie
+                $submission->disease?->name ?? '',                          // disease_title
+                $submission->originalDisease?->curie ?? '',                 // disease_original_curie
+                $submission->originalDisease?->name ?? '',                  // disease_original_title
+                $submission->classification?->curie ?? '',                  // classification_curie
+                $submission->classification?->name ?? '',                   // classification_title
+                $submission->inheritance?->curie ?? '',                     // moi_curie
+                $submission->inheritance?->name ?? '',                      // moi_title
+                $submission->submitter?->curie ?? '',                       // submitter_curie
+                $submission->submitter?->name ?? '',                        // submitter_title
                 $submittedAsHgncId,                                         // submitted_as_hgnc_id
                 $submittedAsHgncSymbol,                                     // submitted_as_hgnc_symbol
                 $submittedAsDiseaseId,                                      // submitted_as_disease_id
@@ -1602,18 +1602,18 @@ class GenccRelease extends Command
             $rowData = [
                 $submission->sid,
                 $submission->version_number ?? 1,
-                $submission->gene->hgnc_id ?? '',
-                $submission->gene->symbol ?? '',
-                $submission->disease->curie ?? '',
-                $submission->disease->name ?? '',
-                $submission->originalDisease->curie ?? '',
-                $submission->originalDisease->name ?? '',
-                $submission->classification->curie ?? '',
-                $submission->classification->name ?? '',
-                $submission->inheritance->curie ?? '',
-                $submission->inheritance->name ?? '',
-                $submission->submitter->curie ?? '',
-                $submission->submitter->name ?? '',
+                $submission->gene?->hgnc_id ?? '',
+                $submission->gene?->symbol ?? '',
+                $submission->disease?->curie ?? '',
+                $submission->disease?->name ?? '',
+                $submission->originalDisease?->curie ?? '',
+                $submission->originalDisease?->name ?? '',
+                $submission->classification?->curie ?? '',
+                $submission->classification?->name ?? '',
+                $submission->inheritance?->curie ?? '',
+                $submission->inheritance?->name ?? '',
+                $submission->submitter?->curie ?? '',
+                $submission->submitter?->name ?? '',
                 $submittedAsHgncId,
                 $submittedAsHgncSymbol,
                 $submittedAsDiseaseId,
@@ -1714,18 +1714,18 @@ class GenccRelease extends Command
                 $rowData = [
                     $submission->sid,
                     $submission->version_number ?? 1,
-                    $submission->gene->hgnc_id ?? '',
-                    $submission->gene->symbol ?? '',
-                    $submission->disease->curie ?? '',
-                    $submission->disease->name ?? '',
-                    $submission->originalDisease->curie ?? '',
-                    $submission->originalDisease->name ?? '',
-                    $submission->classification->curie ?? '',
-                    $submission->classification->name ?? '',
-                    $submission->inheritance->curie ?? '',
-                    $submission->inheritance->name ?? '',
-                    $submission->submitter->curie ?? '',
-                    $submission->submitter->name ?? '',
+                    $submission->gene?->hgnc_id ?? '',
+                    $submission->gene?->symbol ?? '',
+                    $submission->disease?->curie ?? '',
+                    $submission->disease?->name ?? '',
+                    $submission->originalDisease?->curie ?? '',
+                    $submission->originalDisease?->name ?? '',
+                    $submission->classification?->curie ?? '',
+                    $submission->classification?->name ?? '',
+                    $submission->inheritance?->curie ?? '',
+                    $submission->inheritance?->name ?? '',
+                    $submission->submitter?->curie ?? '',
+                    $submission->submitter?->name ?? '',
                     $submittedAsHgncId,
                     $submittedAsHgncSymbol,
                     $submittedAsDiseaseId,
