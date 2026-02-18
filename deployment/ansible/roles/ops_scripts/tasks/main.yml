@@ -9,7 +9,7 @@
 
 - name: Install backup/restore scripts from repo
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../scripts/{{ item }}"
+    src: "{{ playbook_dir }}/../../../scripts/backup/{{ item }}"
     dest: "/opt/gencc/bin/{{ item }}"
     owner: root
     group: root
@@ -17,7 +17,7 @@
   loop:
     - backup-db.sh
     - restore-db-from-gcs.sh
-    - setup-backup-cron.sh
+    - setup-backup-timer.sh
 
 - name: Write backup env file from vault
   ansible.builtin.copy:

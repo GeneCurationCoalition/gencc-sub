@@ -990,6 +990,10 @@ class DocumentController extends Controller
             $data->notes_display = $row['notes'];
             $data->notes_private = "File " . $document->file_name . " Row " . $rownum;
 
+            // Capture submitter info for original_submission_data
+            $data->submitter_curie = $document->submitter->curie ?? '';
+            $data->submitter_title = $document->submitter->name ?? '';
+
             $check = $document->submitter->submissions()->sid($row['local_key'])->first();
             if ($check === null)
             {

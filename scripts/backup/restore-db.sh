@@ -9,7 +9,7 @@
 
 # Get the directory of this script (so it works when called from other scripts)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
 BACKUP_FILE="$PROJECT_ROOT/data/backups/gencc_sub_baseline_20260205.sql.gz"
 
 # Parse arguments
@@ -79,6 +79,16 @@ else
     echo ""
     echo "Error running migrations"
     exit 1
+fi
+
+echo ""
+echo "Bootstrapping initial release (GCC-00000)..."
+if php artisan gencc:release bootstrap --no-interaction; then
+    echo ""
+    echo "Bootstrap release created successfully!"
+else
+    echo ""
+    echo "Note: Bootstrap may have failed if a release already exists (this is OK)"
 fi
 
 echo ""

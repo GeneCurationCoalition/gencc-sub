@@ -170,7 +170,8 @@ PUBMED_API_KEY=your_ncbi_api_key
 
 ## Development
 
-### Running Development Server
+### Option 1: Native Development Server
+
 ```bash
 # Terminal 1: Start Laravel development server
 php artisan serve
@@ -180,6 +181,55 @@ npm run dev
 ```
 
 The application will be available at `http://localhost:8000`
+
+### Option 2: Container-Based Development
+
+Use Docker/Podman for a consistent development environment:
+
+```bash
+# Start development container (with hot reload)
+podman-compose -f docker-compose.dev.yml up -d
+
+# View logs
+podman-compose -f docker-compose.dev.yml logs -f app
+
+# Stop
+podman-compose -f docker-compose.dev.yml down
+```
+
+The application will be available at `http://localhost:8001` (Laravel) and `http://localhost:5173` (Vite HMR).
+
+**Note**: Requires local MySQL with `gencc_sub` database. Run `./scripts/backup/restore-db.sh` first to set up the database.
+
+### Option 3: Production-Like Local Testing
+
+Test the production container locally to catch permission issues before deployment:
+
+```bash
+# Build production image
+podman-compose -f docker-compose.prod-test.yml build
+
+# Run production-like container
+podman-compose -f docker-compose.prod-test.yml up -d
+
+# Test commands as www-data (how PHP-FPM runs)
+podman-compose -f docker-compose.prod-test.yml exec app \
+  su -s /bin/bash www-data -c 'php artisan clingen:sync -v'
+
+# Interactive shell
+podman-compose -f docker-compose.prod-test.yml exec app bash
+
+# Stop
+podman-compose -f docker-compose.prod-test.yml down
+```
+
+The application will be available at `http://localhost:8080`.
+
+**Key differences from dev container**:
+
+- App code is baked into image (root-owned, read-only)
+- Only `storage/`, `bootstrap/cache/`, and `data/` are www-data writable
+- Mimics production container behavior exactly
 
 ### Code Quality
 ```bash
@@ -308,7 +358,7 @@ GET /api/query/job/{job_id}
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed production deployment instructions.
+See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed production deployment instructions.
 
 ### Quick Deploy
 ```bash
@@ -404,7 +454,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 For issues and questions:
 - **GitHub Issues**: https://github.com/GeneCurationCoalition/gencc-sub/issues
-- **Documentation**: See `CLAUDE.md` and `DEVELOPMENT.md` for additional guidance
+- **Documentation**: See `CLAUDE.md` and `docs/DEVELOPMENT.md` for additional guidance
 
 ---
 

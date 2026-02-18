@@ -5,7 +5,8 @@
 # Usage:
 #   ./scripts/start-dev-servers.sh          # Start locally with PM2 (default)
 #   ./scripts/start-dev-servers.sh local    # Start locally with PM2
-#   ./scripts/start-dev-servers.sh docker   # Start with Docker/Podman
+#   ./scripts/start-dev-servers.sh docker   # Start with Docker/Podman (dev mode)
+#   ./scripts/start-dev-servers.sh prod-test # Start production-like container for testing
 #   ./scripts/start-dev-servers.sh stop     # Stop all servers (local and Docker)
 #   ./scripts/start-dev-servers.sh status   # Show status (local or Docker)
 #   ./scripts/start-dev-servers.sh logs     # View logs (local or Docker)
@@ -84,12 +85,13 @@ show_usage() {
     echo -e "  $0 [command] [options]"
     echo ""
     echo -e "${BLUE}Commands:${NC}"
-    echo -e "  local    Start servers locally using PM2 (default)"
-    echo -e "  docker   Start servers using Docker/Podman containers"
-    echo -e "  stop     Stop all servers (both local and Docker)"
-    echo -e "  status   Show server status (auto-detects local or Docker)"
-    echo -e "  logs     View server logs (auto-detects local or Docker)"
-    echo -e "  shell    Open shell in Docker container"
+    echo -e "  local      Start servers locally using PM2 (default)"
+    echo -e "  docker     Start servers using Docker/Podman containers (dev mode)"
+    echo -e "  prod-test  Start production-like container for testing before deployment"
+    echo -e "  stop       Stop all servers (local, Docker dev, and prod-test)"
+    echo -e "  status     Show server status (auto-detects running mode)"
+    echo -e "  logs       View server logs (auto-detects running mode)"
+    echo -e "  shell      Open shell in Docker container"
     echo ""
     echo -e "${BLUE}Options:${NC}"
     echo -e "  -r, --restore    Restore database from baseline backup before starting"
@@ -97,18 +99,19 @@ show_usage() {
     echo -e "${BLUE}Examples:${NC}"
     echo -e "  $0                      # Start locally (default)"
     echo -e "  $0 local --restore      # Restore DB, then start locally"
-    echo -e "  $0 docker -r            # Restore DB, then start with Docker"
+    echo -e "  $0 docker -r            # Restore DB, then start with Docker (dev)"
+    echo -e "  $0 prod-test            # Build and run production-like container"
     echo -e "  $0 --restore            # Restore DB, then start locally (default)"
     echo ""
 }
 
-# Function to restore database using restore-db.sh (handles restore, migrations, logos)
+# Function to restore database using backup/restore-db.sh (handles restore, migrations, logos)
 restore_database() {
     echo -e "${YELLOW}========================================${NC}"
     echo -e "${YELLOW}  Restoring Database from Baseline${NC}"
     echo -e "${YELLOW}========================================${NC}"
     echo ""
-    "$SCRIPT_DIR/restore-db.sh" --no-confirm
+    "$SCRIPT_DIR/backup/restore-db.sh" --no-confirm
     echo ""
 }
 
@@ -278,6 +281,82 @@ start_docker() {
     echo ""
 }
 
+# Function to start production-like container for testing
+start_prod_test() {
+    echo -e "${BLUE}========================================${NC}"
+    echo -e "${BLUE}  GenCC Startup (Production Test Mode)${NC}"
+    echo -e "${BLUE}========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}This mode builds and runs a production-like container${NC}"
+    echo -e "${YELLOW}to test for permission issues before deployment.${NC}"
+    echo ""
+
+    cd "$PROJECT_DIR"
+
+    CONTAINER_CMD=$(detect_container_runtime)
+    if [ -z "$CONTAINER_CMD" ]; then
+        echo -e "${RED}Error: Neither podman-compose nor docker-compose found.${NC}"
+        echo -e "${RED}Please install one of them to use prod-test mode.${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}Using container runtime: ${CONTAINER_CMD}${NC}"
+    echo ""
+
+    # Use existing APP_VERSION if set, otherwise generate from git
+    if [ -z "$APP_VERSION" ]; then
+        APP_VERSION=$("$SCRIPT_DIR/version.sh")
+    fi
+    export APP_VERSION
+    echo -e "${YELLOW}Application version: ${APP_VERSION}${NC}"
+    echo ""
+
+    # Restore database if --restore flag was passed
+    if [ "$RESTORE_DB" = true ]; then
+        restore_database
+    fi
+
+    # Stop any existing prod-test containers
+    echo -e "${YELLOW}Stopping existing prod-test containers...${NC}"
+    $CONTAINER_CMD -f docker-compose.prod-test.yml down 2>/dev/null || true
+    echo ""
+
+    # Build and start containers (always rebuild to catch code changes)
+    echo -e "${YELLOW}Building production image (this may take a few minutes)...${NC}"
+    $CONTAINER_CMD -f docker-compose.prod-test.yml build
+    echo ""
+
+    echo -e "${YELLOW}Starting prod-test container...${NC}"
+    $CONTAINER_CMD -f docker-compose.prod-test.yml up -d
+    echo ""
+
+    # Show status
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}  Production Test Container Started!${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo ""
+    $CONTAINER_CMD -f docker-compose.prod-test.yml ps
+
+    echo ""
+    echo -e "${BLUE}Server URL:${NC}"
+    echo -e "  Application: http://127.0.0.1:8080"
+    echo ""
+    echo -e "${BLUE}Test commands as www-data (how PHP-FPM runs):${NC}"
+    echo -e "  $CONTAINER_CMD -f docker-compose.prod-test.yml exec app \\"
+    echo -e "    su -s /bin/bash www-data -c 'php artisan clingen:sync -v'"
+    echo ""
+    echo -e "${BLUE}Useful commands:${NC}"
+    echo -e "  $CONTAINER_CMD -f docker-compose.prod-test.yml logs -f      - View logs"
+    echo -e "  $CONTAINER_CMD -f docker-compose.prod-test.yml exec app bash - Shell (as root)"
+    echo -e "  $CONTAINER_CMD -f docker-compose.prod-test.yml down         - Stop"
+    echo ""
+    echo -e "${YELLOW}Key differences from dev mode:${NC}"
+    echo -e "  - App code is baked into image (root-owned, read-only)"
+    echo -e "  - Only storage/, bootstrap/cache/, data/ are www-data writable"
+    echo -e "  - Mimics production container behavior exactly"
+    echo ""
+}
+
 # Function to stop all servers
 stop_all() {
     echo -e "${BLUE}========================================${NC}"
@@ -292,11 +371,14 @@ stop_all() {
     pm2 stop all 2>/dev/null || echo -e "${YELLOW}No PM2 processes running${NC}"
     echo ""
 
-    # Stop Docker/Podman
+    # Stop Docker/Podman (both dev and prod-test)
     CONTAINER_CMD=$(detect_container_runtime)
     if [ -n "$CONTAINER_CMD" ]; then
-        echo -e "${YELLOW}Stopping Docker containers...${NC}"
-        $CONTAINER_CMD -f docker-compose.dev.yml down 2>/dev/null || echo -e "${YELLOW}No containers running${NC}"
+        echo -e "${YELLOW}Stopping dev containers...${NC}"
+        $CONTAINER_CMD -f docker-compose.dev.yml down 2>/dev/null || echo -e "${YELLOW}No dev containers running${NC}"
+        echo ""
+        echo -e "${YELLOW}Stopping prod-test containers...${NC}"
+        $CONTAINER_CMD -f docker-compose.prod-test.yml down 2>/dev/null || echo -e "${YELLOW}No prod-test containers running${NC}"
     fi
     echo ""
 
@@ -304,13 +386,26 @@ stop_all() {
     echo ""
 }
 
-# Function to detect if Docker container is running
+# Function to detect if Docker dev container is running
 is_docker_running() {
     cd "$PROJECT_DIR"
     CONTAINER_CMD=$(detect_container_runtime)
     if [ -n "$CONTAINER_CMD" ]; then
         # Check if gencc-dev container is running
         if $CONTAINER_CMD -f docker-compose.dev.yml ps 2>/dev/null | grep -q "Up\|running"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Function to detect if prod-test container is running
+is_prod_test_running() {
+    cd "$PROJECT_DIR"
+    CONTAINER_CMD=$(detect_container_runtime)
+    if [ -n "$CONTAINER_CMD" ]; then
+        # Check if gencc-prod-test container is running
+        if $CONTAINER_CMD -f docker-compose.prod-test.yml ps 2>/dev/null | grep -q "Up\|running"; then
             return 0
         fi
     fi
@@ -326,17 +421,24 @@ show_status() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
 
-    # Check Docker first
-    if is_docker_running; then
-        echo -e "${GREEN}Docker containers are running:${NC}"
+    CONTAINER_CMD=$(detect_container_runtime)
+
+    # Check prod-test container first
+    if is_prod_test_running; then
+        echo -e "${GREEN}Production test container is running (port 8080):${NC}"
         echo ""
-        CONTAINER_CMD=$(detect_container_runtime)
+        $CONTAINER_CMD -f docker-compose.prod-test.yml ps
+        echo ""
+    # Check Docker dev container
+    elif is_docker_running; then
+        echo -e "${GREEN}Docker dev containers are running (port 8001):${NC}"
+        echo ""
         $CONTAINER_CMD -f docker-compose.dev.yml ps
         echo ""
         echo -e "${YELLOW}PM2 status inside container:${NC}"
         $CONTAINER_CMD -f docker-compose.dev.yml exec app pm2 list 2>/dev/null || echo -e "${YELLOW}Could not get PM2 status from container${NC}"
     else
-        echo -e "${YELLOW}Docker containers are not running${NC}"
+        echo -e "${YELLOW}No Docker containers are running${NC}"
         echo ""
         echo -e "${GREEN}Local PM2 status:${NC}"
         pm2 list 2>/dev/null || echo -e "${YELLOW}PM2 is not running${NC}"
@@ -389,6 +491,9 @@ case "$MODE" in
         ;;
     docker|podman)
         start_docker
+        ;;
+    prod-test|prodtest|production-test)
+        start_prod_test
         ;;
     stop)
         stop_all

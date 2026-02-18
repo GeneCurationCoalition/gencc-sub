@@ -434,6 +434,8 @@
     const canSubmitJob = computed(() => {
         if (props.unprocessed_job_status !== 'draft') return false;
         if (!props.unprocessed_job_ident) return false;
+        // Not currently uploading/processing
+        if (props.unprocessed_job_is_processing) return false;
         // Has at least one submission
         const totalSubmissions = (props.unprocessed_new_count || 0) +
                                  (props.unprocessed_republish_count || 0) +

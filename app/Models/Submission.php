@@ -919,11 +919,12 @@ class Submission extends Model
         }
 
         /**
-         * We save the entire submission packet, unmodified, for future use
+         * We save the entire submission packet, unmodified, for future use.
+         * Clone to prevent subsequent modifications to submission_data from affecting original.
          */
-        $this->original_submission_data = $obj;
+        $this->original_submission_data = json_decode(json_encode($obj));
 
-        /** 
+        /**
          * We also save a copy which can be edited by the user
          */
         $this->submission_data = $obj;
