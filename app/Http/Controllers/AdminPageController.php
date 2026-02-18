@@ -255,8 +255,8 @@ class AdminPageController extends Controller
 
         $filename = $release->submissions_csv_file;
 
-        // Try GCS first
-        $content = $this->downloadFromGcs("csv/{$filename}");
+        // Try GCS first (current path structure)
+        $content = $this->downloadFromGcs("current/csv/{$filename}");
         if ($content !== null) {
             return response($content, 200, [
                 'Content-Type' => 'text/csv',
@@ -264,15 +264,22 @@ class AdminPageController extends Controller
             ]);
         }
 
-        // Fall back to local storage
-        $filePath = storage_path('app/public/exports/' . $filename);
-        if (!file_exists($filePath)) {
-            abort(404, 'CSV file not found');
+        // Fall back to local storage - try multiple possible paths
+        $possiblePaths = [
+            storage_path('app/public/current/csv/' . $filename),
+            storage_path('app/public/releases/current/csv/' . $filename),
+            storage_path('app/public/exports/' . $filename), // legacy path
+        ];
+
+        foreach ($possiblePaths as $filePath) {
+            if (file_exists($filePath)) {
+                return response()->download($filePath, $filename, [
+                    'Content-Type' => 'text/csv',
+                ]);
+            }
         }
 
-        return response()->download($filePath, $filename, [
-            'Content-Type' => 'text/csv',
-        ]);
+        abort(404, 'CSV file not found');
     }
 
     /**

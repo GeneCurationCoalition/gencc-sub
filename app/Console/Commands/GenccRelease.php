@@ -14,6 +14,7 @@ use App\Models\Submission;
 use App\Models\Submitter;
 use App\Models\Release;
 
+use App\Services\AdminProgressTracker;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
 use App\Exports\ReleaseSubmissionExport;
@@ -23,6 +24,11 @@ use App\Events\PublishStatusUpdate;
 
 class GenccRelease extends Command
 {
+    /**
+     * Progress tracker operation identifier.
+     */
+    protected const PROGRESS_OPERATION = 'run_publish';
+
     /**
      * The name and signature of the console command.
      *
@@ -59,6 +65,11 @@ class GenccRelease extends Command
      * Track the release slug (predicted or explicit for bootstrap).
      */
     protected ?string $releaseSlug = null;
+
+    /**
+     * Consistent release datetime used across all release files and notes.
+     */
+    protected ?Carbon $releaseDate = null;
 
     /**
      * GCS bucket instance (lazy-loaded).
@@ -146,6 +157,7 @@ class GenccRelease extends Command
         {
             case 'process':
                 $startTime = Carbon::now();
+                $this->releaseDate = $startTime->copy();
 
                 // Check if there's anything to process before starting
                 $pendingJobs = $this->getPendingJobs();
@@ -154,14 +166,34 @@ class GenccRelease extends Command
                 if ($pendingJobs->count() === 0 && $pendingActions->count() === 0) {
                     $this->info("No jobs or actions to process. Skipping release.");
                     \Log::info('GenCC Release: No pending jobs or actions to process.');
+                    AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'No jobs or actions to process');
                     return 0;
                 }
 
+                // Report what we found
+                $totalJobs = $pendingJobs->count();
+                $totalActions = $pendingActions->count();
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, "Found {$totalJobs} jobs, {$totalActions} actions to process");
+
+                // Process actions
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Processing actions...');
                 $this->process_actions($pendingActions);
+
+                // Process jobs
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Processing jobs...');
                 $this->process_jobs($pendingJobs);
+
+                // Generate outputs
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Generating release notes...');
                 $this->generateReleaseNotes();
+
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Generating submissions CSV...');
                 $this->generateSubmissionsCsv();
+
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Updating submitter counts...');
                 $this->updateSubmitterCounts();
+
+                AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, 'Creating release record...');
                 $this->createReleaseRecord($startTime);
                 break;
 
@@ -194,6 +226,7 @@ class GenccRelease extends Command
     protected function bootstrapRelease(): int
     {
         $startTime = Carbon::now();
+        $this->releaseDate = $startTime->copy();
 
         $this->info("=== GenCC Release Bootstrap ===");
         $this->info("");
@@ -345,7 +378,8 @@ class GenccRelease extends Command
      */
     protected function generateBootstrapReleaseNotes(): void
     {
-        $releaseDate = Carbon::now();
+        // Use the consistent release date set at the start of the release process
+        $releaseDate = $this->releaseDate ?? Carbon::now();
         // Predict slug using the model's sequential numbering (should be GCC-00000 for bootstrap)
         $nextNumber = Release::getNextSlugNumber();
         $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
@@ -538,6 +572,7 @@ class GenccRelease extends Command
     protected function repairRelease(): int
     {
         $startTime = Carbon::now();
+        $this->releaseDate = $startTime->copy();
 
         $this->info("=== GenCC Release Repair ===");
         $this->info("");
@@ -755,14 +790,20 @@ class GenccRelease extends Command
             return 0;
         }
 
+        $totalJobs = $jobs->count();
+        $currentJob = 0;
+
         foreach ($jobs as $job)
         {
+            $currentJob++;
+
             if ($job->status == Job::STATUS_PROCESSED) {
                 $this->warn("Skipping job {$job->slug} - already processed");
                 continue;
             }
 
             $this->info("Releasing job {$job->slug} (status: {$job->status}) with {$job->submissions->count()} submissions");
+            AdminProgressTracker::addMessage(self::PROGRESS_OPERATION, "Releasing job {$currentJob}/{$totalJobs}: {$job->slug}");
 
             $this->trackJobStatistics($job);
 
@@ -1023,7 +1064,8 @@ class GenccRelease extends Command
      */
     protected function generateReleaseNotes()
     {
-        $releaseDate = Carbon::now();
+        // Use the consistent release date set at the start of the release process
+        $releaseDate = $this->releaseDate ?? Carbon::now();
 
         // Predict the release slug using the model's sequential numbering
         $nextNumber = Release::getNextSlugNumber();
@@ -1380,8 +1422,8 @@ class GenccRelease extends Command
             }
         }
 
-        // Generate timestamped base filename
-        $releaseDate = Carbon::now();
+        // Use the consistent release date set at the start of the release process
+        $releaseDate = $this->releaseDate ?? Carbon::now();
         $timestampedBase = 'gencc-submissions-' . $releaseDate->format('Y-m-d_His');
         $latestBase = 'gencc-submissions';
 
