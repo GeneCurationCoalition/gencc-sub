@@ -16,6 +16,8 @@ gencc_letsencrypt_domains:
   - "{{ gencc_search_hostname }}"
   - search.thegencc.org
 
+# Systemd timers for scheduled tasks
+gencc_enable_timers: true
 
 # Used to both reset the database from a dump, and trigger the playbook step which runs the release bootstrap.
 # gencc_db_restore_source: "gs://gencc-prod/application-private/backups/gencc_sub_baseline_20260205.sql.gz"
