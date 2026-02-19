@@ -17,7 +17,6 @@
   loop:
     - backup-db.sh
     - restore-db-from-gcs.sh
-    - setup-backup-timer.sh
 
 - name: Write backup env file from vault
   ansible.builtin.copy:

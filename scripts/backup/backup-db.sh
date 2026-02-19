@@ -3,7 +3,7 @@
 # GenCC-Sub Production Database Backup Script
 #
 # Backs up the MySQL database and uploads to Google Cloud Storage.
-# Designed to run via cron on the production GCP VM.
+# Designed to run via systemd timer on the production GCP VM.
 #
 # Usage:
 #   ./scripts/backup-db.sh                    # Uses defaults from environment
@@ -20,6 +20,10 @@
 #   DB_USERNAME       - Database user (default: root)
 #   DB_PASSWORD       - Database password (required)
 #
+# GCS retention policy:
+#   - Keeps all backups from the last 30 days
+#   - Beyond 30 days, keeps only the first-of-month backup
+#
 # Exit codes:
 #   0 - Success
 #   1 - Configuration error
@@ -31,7 +35,7 @@ set -euo pipefail
 
 # Script metadata
 SCRIPT_NAME="gencc-backup"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="2.0.0"
 LOG_TAG="[${SCRIPT_NAME}]"
 
 # Default configuration
@@ -54,7 +58,7 @@ DATE_STAMP=$(date -u +"%Y-%m-%d")
 # Logging functions
 #------------------------------------------------------------------------------
 log_info() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*" >&2
 }
 
 log_error() {
@@ -62,7 +66,7 @@ log_error() {
 }
 
 log_warn() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*" >&2
 }
 
 #------------------------------------------------------------------------------
@@ -118,6 +122,10 @@ Environment variables:
     DB_USERNAME       Database user (default: root)
     DB_PASSWORD       Database password (required)
 
+GCS retention:
+    Keeps all backups from the last 30 days.
+    Beyond 30 days, keeps only the first-of-month backup.
+
 Example:
     ./backup-db.sh --bucket gencc-backups
 EOF
@@ -158,8 +166,8 @@ validate_config() {
         errors=$((errors + 1))
     fi
 
-    if [[ "$DRY_RUN" == "false" ]] && ! command -v gsutil &> /dev/null; then
-        log_error "gsutil is not installed (required for GCS upload)"
+    if [[ "$DRY_RUN" == "false" ]] && ! command -v gcloud &> /dev/null; then
+        log_error "gcloud CLI is not installed (required for GCS upload)"
         errors=$((errors + 1))
     fi
 
@@ -234,11 +242,11 @@ upload_to_gcs() {
 
     log_info "Uploading to GCS: ${gcs_path}"
 
-    if gsutil cp "$backup_file" "$gcs_path"; then
+    if gcloud storage cp "$backup_file" "$gcs_path"; then
         log_info "Upload complete"
 
-        # Verify upload
-        if gsutil stat "$gcs_path" &> /dev/null; then
+        # Verify upload by listing the object
+        if gcloud storage ls "$gcs_path" &> /dev/null; then
             log_info "Upload verified successfully"
         else
             log_error "Upload verification failed"
@@ -265,6 +273,72 @@ cleanup_old_backups() {
 }
 
 #------------------------------------------------------------------------------
+# GCS retention: keep 30 days of dailies, then only first-of-month
+#------------------------------------------------------------------------------
+cleanup_gcs_backups() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Skipping GCS retention cleanup"
+        return 0
+    fi
+
+    log_info "Applying GCS retention policy (30 days daily, then first-of-month only)"
+
+    local cutoff_date
+    cutoff_date=$(date -u -d "30 days ago" +"%Y%m%d" 2>/dev/null) || \
+        cutoff_date=$(date -u -v-30d +"%Y%m%d" 2>/dev/null) || {
+            log_warn "Cannot compute 30-day cutoff date; skipping GCS retention"
+            return 0
+        }
+
+    log_info "Cutoff date: ${cutoff_date} (backups before this date follow monthly retention)"
+
+    local deleted=0
+    local kept=0
+
+    # List all backup objects under the prefix.
+    # Filenames follow: {DB_DATABASE}_YYYYMMDD-HHMMSS.sql.gz
+    local fname file_date day_of_month
+    while IFS= read -r object; do
+        fname=$(basename "$object")
+
+        # Parse the YYYYMMDD date from the filename using pure bash.
+        # Strip everything up to and including the last underscore, then
+        # take the 8 characters before the first hyphen.
+        file_date="${fname##*_}"        # YYYYMMDD-HHMMSS.sql.gz
+        file_date="${file_date%%-*}"    # YYYYMMDD
+
+        # Validate: must be exactly 8 digits
+        if [[ ! "$file_date" =~ ^[0-9]{8}$ ]]; then
+            continue
+        fi
+
+        # Skip if within the 30-day window
+        if [[ "$file_date" -ge "$cutoff_date" ]]; then
+            continue
+        fi
+
+        # Extract day-of-month (DD) from the date
+        day_of_month="${file_date:6:2}"
+
+        # Keep first-of-month backups
+        if [[ "$day_of_month" == "01" ]]; then
+            kept=$((kept + 1))
+            continue
+        fi
+
+        # Delete non-first-of-month backups older than 30 days
+        log_info "Deleting old backup: ${object}"
+        if gcloud storage rm "$object" 2>/dev/null; then
+            deleted=$((deleted + 1))
+        else
+            log_warn "Failed to delete: ${object}"
+        fi
+    done < <(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | grep '\.sql\.gz$' || true)
+
+    log_info "GCS retention cleanup: deleted=${deleted}, kept-monthly=${kept}"
+}
+
+#------------------------------------------------------------------------------
 # Main
 #------------------------------------------------------------------------------
 main() {
@@ -284,6 +358,9 @@ main() {
 
     # Cleanup old local backups
     cleanup_old_backups
+
+    # Apply GCS retention policy
+    cleanup_gcs_backups
 
     log_info "Backup completed successfully"
     log_info "  Local: ${backup_file}"
