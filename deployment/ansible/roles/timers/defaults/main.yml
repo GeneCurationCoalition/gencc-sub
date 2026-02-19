@@ -1,14 +1,21 @@
 ---
-# Timers are intentionally disabled by default until schedules/backups are reviewed.
+# Timers are disabled by default. Set gencc_enable_timers: true in the
+# environment group_vars to activate them.
 gencc_enable_timers: false
 
-# PubMed sync (relative interval)
-gencc_pubmed_sync_interval: 15m
+# All OnCalendar values are in UTC.  The approximate US-Eastern equivalents
+# (UTC-5, ignoring DST) are noted in comments.
 
-# Periodic data refresh (OnCalendar syntax)
-gencc_update_genes_oncalendar: "Sat 03:00"
-gencc_update_diseases_oncalendar: "Sun 03:00"
+# Database backup — daily at 05:00 UTC (midnight Eastern)
+gencc_backup_oncalendar: "*-*-* 05:00:00"
 
-# Backups (OnCalendar syntax)
-gencc_backup_oncalendar: "daily"
+# Weekly release — Saturday 06:00 UTC (Saturday 01:00 AM Eastern)
+gencc_release_oncalendar: "Sat *-*-* 06:00:00"
 
+# Reference-data refresh — staggered on Saturday to avoid concurrent heavy I/O
+# Genes:    Saturday 17:00 UTC (noon Eastern)
+# Diseases: Saturday 18:00 UTC (1 PM Eastern)
+# PubMed:   Saturday 19:00 UTC (2 PM Eastern)
+gencc_update_genes_oncalendar: "Sat *-*-* 17:00:00"
+gencc_update_diseases_oncalendar: "Sat *-*-* 18:00:00"
+gencc_pubmed_sync_oncalendar: "Sat *-*-* 19:00:00"

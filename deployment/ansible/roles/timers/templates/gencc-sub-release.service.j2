@@ -1,5 +1,5 @@
 [Unit]
-Description=Run gencc-sub update:genes inside container
+Description=Run gencc-sub gencc:release process inside container
 After=network-online.target
 Wants=network-online.target
 
@@ -8,5 +8,4 @@ Type=oneshot
 User={{ gencc_deploy_user }}
 Environment=XDG_RUNTIME_DIR=/run/user/{{ _gencc_deploy_uid.stdout }}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ _gencc_deploy_uid.stdout }}/bus
-ExecStart=/usr/bin/podman exec gencc-sub php artisan update:genes
-
+ExecStart=/usr/bin/podman exec gencc-sub php artisan gencc:release process --no-interaction

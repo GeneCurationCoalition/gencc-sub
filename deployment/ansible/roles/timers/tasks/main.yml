@@ -1,7 +1,13 @@
 ---
-- name: Install timers (pubmed sync, update jobs, backups)
+- name: Look up deploy user UID (needed for rootless podman environment)
+  ansible.builtin.command: id -u {{ gencc_deploy_user }}
+  register: _gencc_deploy_uid
+  changed_when: false
+  when: gencc_enable_timers | bool
+
+- name: Install timers (pubmed sync, update jobs, release, backups)
   ansible.builtin.debug:
-    msg: "Installing GenCC systemd timers"
+    msg: "Installing GenCC systemd timers (deploy user UID: {{ _gencc_deploy_uid.stdout }})"
   when: gencc_enable_timers | bool
 
 - name: Install systemd service for pubmed sync
@@ -58,6 +64,24 @@
     mode: "0644"
   when: gencc_enable_timers | bool
 
+- name: Install release service
+  ansible.builtin.template:
+    src: gencc-sub-release.service.j2
+    dest: /etc/systemd/system/gencc-sub-release.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: gencc_enable_timers | bool
+
+- name: Install release timer
+  ansible.builtin.template:
+    src: gencc-sub-release.timer.j2
+    dest: /etc/systemd/system/gencc-sub-release.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when: gencc_enable_timers | bool
+
 - name: Install backup service
   ansible.builtin.template:
     src: gencc-backup-db.service.j2
@@ -90,5 +114,6 @@
     - gencc-sub-pubmed-sync.timer
     - gencc-sub-update-genes.timer
     - gencc-sub-update-diseases.timer
+    - gencc-sub-release.timer
     - gencc-backup-db.timer
   when: gencc_enable_timers | bool
