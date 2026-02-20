@@ -5,12 +5,14 @@ gencc_enable_timers: false
 
 # All OnCalendar values are in UTC.  The approximate US-Eastern equivalents
 # (UTC-5, ignoring DST) are noted in comments.
+# Release and backups target midnight-1am US Eastern.
 
-# Database backup — daily at 05:00 UTC (midnight Eastern)
+# Database backup — daily at 05:00 UTC (24:00/01:00 (Standard/DST) US Eastern)
 gencc_backup_oncalendar: "*-*-* 05:00:00"
 
-# Weekly release — Saturday 06:00 UTC (Saturday 01:00 AM Eastern)
-gencc_release_oncalendar: "Sat *-*-* 06:00:00"
+# Weekly release — Sunday 06:00 UTC (Sunday 01:00/02:00 (Standard/DST) US Eastern)
+# Runs 1 hour after the daily backup to ensure a pre-release snapshot exists.
+gencc_release_oncalendar: "Sun *-*-* 06:00:00"
 
 # Reference-data refresh — staggered on Saturday to avoid concurrent heavy I/O
 # Genes:    Saturday 17:00 UTC (noon Eastern)

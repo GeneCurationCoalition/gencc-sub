@@ -21,8 +21,8 @@
 #   DB_PASSWORD       - Database password (required)
 #
 # GCS retention policy:
-#   - Keeps all backups from the last 30 days
-#   - Beyond 30 days, keeps only the first-of-month backup
+#   - Current month + previous month: keeps all daily backups
+#   - Older months: keeps only the earliest backup per calendar month
 #
 # Exit codes:
 #   0 - Success
@@ -35,7 +35,7 @@ set -euo pipefail
 
 # Script metadata
 SCRIPT_NAME="gencc-backup"
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 LOG_TAG="[${SCRIPT_NAME}]"
 
 # Default configuration
@@ -123,8 +123,8 @@ Environment variables:
     DB_PASSWORD       Database password (required)
 
 GCS retention:
-    Keeps all backups from the last 30 days.
-    Beyond 30 days, keeps only the first-of-month backup.
+    Current + previous calendar month: keeps all daily backups.
+    Older months: keeps only the earliest backup per month.
 
 Example:
     ./backup-db.sh --bucket gencc-backups
@@ -273,7 +273,7 @@ cleanup_old_backups() {
 }
 
 #------------------------------------------------------------------------------
-# GCS retention: keep 30 days of dailies, then only first-of-month
+# GCS retention: current + previous month dailies, earliest-per-month for older
 #------------------------------------------------------------------------------
 cleanup_gcs_backups() {
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -281,61 +281,86 @@ cleanup_gcs_backups() {
         return 0
     fi
 
-    log_info "Applying GCS retention policy (30 days daily, then first-of-month only)"
+    log_info "Applying GCS retention policy (current + previous month dailies, earliest-per-month for older)"
 
-    local cutoff_date
-    cutoff_date=$(date -u -d "30 days ago" +"%Y%m%d" 2>/dev/null) || \
-        cutoff_date=$(date -u -v-30d +"%Y%m%d" 2>/dev/null) || {
-            log_warn "Cannot compute 30-day cutoff date; skipping GCS retention"
-            return 0
-        }
+    # Compute current and previous calendar months (YYYYMM) via pure arithmetic.
+    local year month_num current_month previous_month
+    year=$(date -u +"%Y")
+    month_num=$((10#$(date -u +"%m")))
+    current_month=$(printf "%s%02d" "$year" "$month_num")
+    if [[ $month_num -eq 1 ]]; then
+        previous_month="$((year - 1))12"
+    else
+        previous_month=$(printf "%s%02d" "$year" $((month_num - 1)))
+    fi
 
-    log_info "Cutoff date: ${cutoff_date} (backups before this date follow monthly retention)"
+    log_info "Keeping all dailies for months: ${current_month}, ${previous_month}"
 
-    local deleted=0
-    local kept=0
+    # Temp files for the sort+awk pipeline
+    local old_objects_file delete_list_file
+    old_objects_file=$(mktemp)
+    delete_list_file=$(mktemp)
+    trap 'rm -f "$old_objects_file" "$delete_list_file"' RETURN
 
-    # List all backup objects under the prefix.
+    local kept=0 monthly_kept=0
+
+    # List all backup objects, categorize into recent (keep) and old (need filtering).
     # Filenames follow: {DB_DATABASE}_YYYYMMDD-HHMMSS.sql.gz
-    local fname file_date day_of_month
+    local fname sort_key file_date file_month
     while IFS= read -r object; do
+        [[ -z "$object" ]] && continue
         fname=$(basename "$object")
 
-        # Parse the YYYYMMDD date from the filename using pure bash.
-        # Strip everything up to and including the last underscore, then
-        # take the 8 characters before the first hyphen.
-        file_date="${fname##*_}"        # YYYYMMDD-HHMMSS.sql.gz
-        file_date="${file_date%%-*}"    # YYYYMMDD
+        # Parse YYYYMMDD-HHMMSS from filename using pure shell.
+        # Strip everything up to and including the last underscore,
+        # then remove the .sql.gz suffix to get the sort key.
+        sort_key="${fname##*_}"         # YYYYMMDD-HHMMSS.sql.gz
+        sort_key="${sort_key%.sql.gz}"  # YYYYMMDD-HHMMSS
+        file_date="${sort_key%%-*}"     # YYYYMMDD
 
-        # Validate: must be exactly 8 digits
+        # Validate: file_date must be exactly 8 digits
         if [[ ! "$file_date" =~ ^[0-9]{8}$ ]]; then
+            log_warn "Skipping unrecognized filename: ${fname}"
             continue
         fi
 
-        # Skip if within the 30-day window
-        if [[ "$file_date" -ge "$cutoff_date" ]]; then
-            continue
-        fi
+        file_month="${file_date:0:6}"   # YYYYMM
 
-        # Extract day-of-month (DD) from the date
-        day_of_month="${file_date:6:2}"
-
-        # Keep first-of-month backups
-        if [[ "$day_of_month" == "01" ]]; then
+        # Recent months: keep unconditionally
+        if [[ "$file_month" == "$current_month" || "$file_month" == "$previous_month" ]]; then
             kept=$((kept + 1))
             continue
         fi
 
-        # Delete non-first-of-month backups older than 30 days
+        # Old month: record for sort+awk processing below
+        printf '%s\t%s\t%s\n' "$file_month" "$sort_key" "$object" >> "$old_objects_file"
+    done < <(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | grep '\.sql\.gz$' || true)
+
+    # Sort old objects by month then timestamp, pick earliest per month via awk.
+    # Awk emits all NON-earliest lines (the ones to delete).
+    if [[ -s "$old_objects_file" ]]; then
+        sort "$old_objects_file" \
+            | awk -F'\t' '{
+                if ($1 != prev_month) { prev_month = $1 }
+                else                  { print $3 }
+            }' > "$delete_list_file"
+        monthly_kept=$(cut -f1 "$old_objects_file" | sort -u | wc -l | tr -d ' ')
+    fi
+
+    # Delete queued objects
+    local deleted=0 failed=0
+    while IFS= read -r object; do
+        [[ -z "$object" ]] && continue
         log_info "Deleting old backup: ${object}"
         if gcloud storage rm "$object" 2>/dev/null; then
             deleted=$((deleted + 1))
         else
             log_warn "Failed to delete: ${object}"
+            failed=$((failed + 1))
         fi
-    done < <(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | grep '\.sql\.gz$' || true)
+    done < "$delete_list_file"
 
-    log_info "GCS retention cleanup: deleted=${deleted}, kept-monthly=${kept}"
+    log_info "GCS retention cleanup: kept-recent=${kept}, kept-monthly=${monthly_kept}, deleted=${deleted}, failed=${failed}"
 }
 
 #------------------------------------------------------------------------------
