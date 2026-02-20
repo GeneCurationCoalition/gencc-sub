@@ -264,7 +264,7 @@ find_backup_by_name() {
 
     local found
     found=$(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | \
-        grep "${name}$" | head -1)
+        grep -F "${name}" | head -1)
 
     if [[ -z "$found" ]]; then
         log_error "Backup not found: ${name}"
