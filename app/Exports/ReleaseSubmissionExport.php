@@ -7,15 +7,18 @@ use Maatwebsite\Excel\Concerns\FromQuery;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use Maatwebsite\Excel\Concerns\Exportable;
 use Maatwebsite\Excel\Concerns\WithHeadings;
-use Maatwebsite\Excel\Concerns\WithCustomCsvSettings;
 
 /**
  * CSV/XLSX Export for release submissions - uses FromQuery for efficient chunked processing.
  * This significantly reduces memory usage by not loading all 25K+ records at once.
  *
  * Matches the gencc-search SubmissionExport format exactly.
+ *
+ * Note: Do NOT implement WithCustomCsvSettings here - it would override the delimiter
+ * for both CSV and TSV exports. The default comma delimiter for CSV is correct,
+ * and TSV uses its own tab delimiter when Excel::TSV is specified.
  */
-class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, WithCustomCsvSettings
+class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping
 {
     use Exportable;
 
@@ -183,16 +186,6 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
         }
 
         return array_merge(['sgc_id', 'version_number'], $commonHeadings);
-    }
-
-    /**
-     * CSV settings.
-     */
-    public function getCsvSettings(): array
-    {
-        return [
-            'delimiter' => ',',
-        ];
     }
 
     /**
