@@ -1483,11 +1483,12 @@ class GenccRelease extends Command
             $this->warn("  Failed to generate XLS: {$e->getMessage()}");
         }
 
-        // Generate TSV
+        // Generate TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
         try {
+            $tsvExport = new ReleaseSubmissionExport(delimiter: "\t");
             $tsvDir = $currentDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($export, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            Excel::store($tsvExport, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "current/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
@@ -1587,11 +1588,12 @@ class GenccRelease extends Command
             $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
         }
 
-        // Generate legacy TSV
+        // Generate legacy TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
         try {
+            $legacyTsvExport = new ReleaseSubmissionExport(useLegacyFormat: true, delimiter: "\t");
             $tsvDir = $legacyDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($legacyExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            Excel::store($legacyTsvExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "legacy/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
