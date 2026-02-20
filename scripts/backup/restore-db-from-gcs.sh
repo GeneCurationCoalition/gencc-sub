@@ -55,7 +55,7 @@ CREATE_DB=false
 # Logging functions
 #------------------------------------------------------------------------------
 log_info() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*" >&2
 }
 
 log_error() {
@@ -63,7 +63,7 @@ log_error() {
 }
 
 log_warn() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*" >&2
 }
 
 #------------------------------------------------------------------------------
@@ -208,8 +208,8 @@ validate_config() {
         fi
     fi
 
-    if [[ "$MODE" != "local" ]] && ! command -v gsutil &> /dev/null; then
-        log_error "gsutil is not installed (required for GCS operations)"
+    if [[ "$MODE" != "local" ]] && ! command -v gcloud &> /dev/null; then
+        log_error "gcloud CLI is not installed (required for GCS operations)"
         errors=$((errors + 1))
     fi
 
@@ -227,8 +227,8 @@ list_backups() {
     echo "Available backups (newest first):"
     echo "=================================="
 
-    gsutil ls -l "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/**/*.sql.gz" 2>/dev/null | \
-        grep -v "TOTAL:" | \
+    gcloud storage ls -l --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | \
+        grep '\.sql\.gz$' | \
         sort -k2 -r | \
         head -20 | \
         while read -r size date time path; do
@@ -245,7 +245,8 @@ find_latest_backup() {
     log_info "Finding latest backup..."
 
     local latest
-    latest=$(gsutil ls "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/**/*.sql.gz" 2>/dev/null | \
+    latest=$(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | \
+        grep '\.sql\.gz$' | \
         sort -r | \
         head -1)
 
@@ -262,7 +263,8 @@ find_backup_by_name() {
     log_info "Searching for backup: ${name}"
 
     local found
-    found=$(gsutil ls "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/**/${name}" 2>/dev/null | head -1)
+    found=$(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | \
+        grep -F "${name}" | head -1)
 
     if [[ -z "$found" ]]; then
         log_error "Backup not found: ${name}"
@@ -284,7 +286,7 @@ download_backup() {
     log_info "Downloading: ${gcs_path}"
     log_info "  To: ${local_path}"
 
-    if gsutil cp "$gcs_path" "$local_path"; then
+    if gcloud storage cp "$gcs_path" "$local_path"; then
         log_info "Download complete"
         echo "$local_path"
     else

@@ -1,0 +1,9 @@
+[Unit]
+Description=Schedule gencc-sub weekly release
+
+[Timer]
+OnCalendar={{ gencc_release_oncalendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

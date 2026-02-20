@@ -3,7 +3,7 @@
 # GenCC-Sub Production Database Backup Script
 #
 # Backs up the MySQL database and uploads to Google Cloud Storage.
-# Designed to run via cron on the production GCP VM.
+# Designed to run via systemd timer on the production GCP VM.
 #
 # Usage:
 #   ./scripts/backup-db.sh                    # Uses defaults from environment
@@ -20,6 +20,10 @@
 #   DB_USERNAME       - Database user (default: root)
 #   DB_PASSWORD       - Database password (required)
 #
+# GCS retention policy:
+#   - Current month + previous month: keeps all daily backups
+#   - Older months: keeps only the earliest backup per calendar month
+#
 # Exit codes:
 #   0 - Success
 #   1 - Configuration error
@@ -31,7 +35,7 @@ set -euo pipefail
 
 # Script metadata
 SCRIPT_NAME="gencc-backup"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="2.1.0"
 LOG_TAG="[${SCRIPT_NAME}]"
 
 # Default configuration
@@ -54,7 +58,7 @@ DATE_STAMP=$(date -u +"%Y-%m-%d")
 # Logging functions
 #------------------------------------------------------------------------------
 log_info() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} INFO: $*" >&2
 }
 
 log_error() {
@@ -62,7 +66,7 @@ log_error() {
 }
 
 log_warn() {
-    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*"
+    echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ") ${LOG_TAG} WARN: $*" >&2
 }
 
 #------------------------------------------------------------------------------
@@ -118,6 +122,10 @@ Environment variables:
     DB_USERNAME       Database user (default: root)
     DB_PASSWORD       Database password (required)
 
+GCS retention:
+    Current + previous calendar month: keeps all daily backups.
+    Older months: keeps only the earliest backup per month.
+
 Example:
     ./backup-db.sh --bucket gencc-backups
 EOF
@@ -158,8 +166,8 @@ validate_config() {
         errors=$((errors + 1))
     fi
 
-    if [[ "$DRY_RUN" == "false" ]] && ! command -v gsutil &> /dev/null; then
-        log_error "gsutil is not installed (required for GCS upload)"
+    if [[ "$DRY_RUN" == "false" ]] && ! command -v gcloud &> /dev/null; then
+        log_error "gcloud CLI is not installed (required for GCS upload)"
         errors=$((errors + 1))
     fi
 
@@ -234,11 +242,11 @@ upload_to_gcs() {
 
     log_info "Uploading to GCS: ${gcs_path}"
 
-    if gsutil cp "$backup_file" "$gcs_path"; then
+    if gcloud storage cp "$backup_file" "$gcs_path"; then
         log_info "Upload complete"
 
-        # Verify upload
-        if gsutil stat "$gcs_path" &> /dev/null; then
+        # Verify upload by listing the object
+        if gcloud storage ls "$gcs_path" &> /dev/null; then
             log_info "Upload verified successfully"
         else
             log_error "Upload verification failed"
@@ -265,6 +273,100 @@ cleanup_old_backups() {
 }
 
 #------------------------------------------------------------------------------
+# GCS retention: current + previous month dailies, earliest-per-month for older
+#------------------------------------------------------------------------------
+cleanup_gcs_backups() {
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "[DRY RUN] Skipping GCS retention cleanup"
+        return 0
+    fi
+
+    log_info "Applying GCS retention policy (current + previous month dailies, earliest-per-month for older)"
+
+    # Compute current and previous calendar months (YYYYMM) via pure arithmetic.
+    local year month_num current_month previous_month
+    year=$(date -u +"%Y")
+    month_num=$((10#$(date -u +"%m")))
+    current_month=$(printf "%s%02d" "$year" "$month_num")
+    if [[ $month_num -eq 1 ]]; then
+        previous_month="$((year - 1))12"
+    else
+        previous_month=$(printf "%s%02d" "$year" $((month_num - 1)))
+    fi
+
+    log_info "Keeping all dailies for months: ${current_month}, ${previous_month}"
+
+    # Temp files for the sort+awk pipeline
+    local old_objects_file delete_list_file
+    old_objects_file=$(mktemp)
+    delete_list_file=$(mktemp)
+    trap 'rm -f "$old_objects_file" "$delete_list_file"' RETURN
+
+    local kept=0 monthly_kept=0
+
+    # List all backup objects, categorize into recent (keep) and old (need filtering).
+    # Filenames follow: {DB_DATABASE}_YYYYMMDD-HHMMSS.sql.gz
+    local fname sort_key file_date file_month
+    while IFS= read -r object; do
+        [[ -z "$object" ]] && continue
+        fname=$(basename "$object")
+
+        # Parse YYYYMMDD-HHMMSS from filename using pure shell.
+        # Strip everything up to and including the last underscore,
+        # then remove the .sql.gz suffix to get the sort key.
+        sort_key="${fname##*_}"         # YYYYMMDD-HHMMSS.sql.gz
+        sort_key="${sort_key%.sql.gz}"  # YYYYMMDD-HHMMSS
+        file_date="${sort_key%%-*}"     # YYYYMMDD
+
+        # Validate: file_date must be exactly 8 digits
+        if [[ ! "$file_date" =~ ^[0-9]{8}$ ]]; then
+            log_warn "Skipping unrecognized filename: ${fname}"
+            continue
+        fi
+
+        file_month="${file_date:0:6}"   # YYYYMM
+
+        # Recent months: keep unconditionally
+        if [[ "$file_month" == "$current_month" || "$file_month" == "$previous_month" ]]; then
+            kept=$((kept + 1))
+            continue
+        fi
+
+        # Old month: record for sort+awk processing below
+        printf '%s\t%s\t%s\n' "$file_month" "$sort_key" "$object" >> "$old_objects_file"
+    done < <(gcloud storage ls --recursive "gs://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" 2>/dev/null | grep '\.sql\.gz$' || true)
+
+    # Sort old objects by month then timestamp, pick earliest per month via awk.
+    # Awk emits all NON-earliest lines (the ones to delete).
+    # old_objects_file contains content like:
+    # 202511	20251101-050000	gs://bucket/prefix/2025/11/gencc_sub_20251101-050000.sql.gz
+    # 202511	20251102-050000	gs://bucket/prefix/2025/11/gencc_sub_20251102-050000.sql.gz
+    if [[ -s "$old_objects_file" ]]; then
+        sort "$old_objects_file" \
+            | awk -F'\t' '{
+                if ($1 != prev_month) { prev_month = $1 }
+                else                  { print $3 }
+            }' > "$delete_list_file"
+        monthly_kept=$(cut -f1 "$old_objects_file" | sort -u | wc -l | tr -d ' ')
+    fi
+
+    # Delete queued objects
+    local deleted=0 failed=0
+    while IFS= read -r object; do
+        [[ -z "$object" ]] && continue
+        log_info "Deleting old backup: ${object}"
+        if gcloud storage rm "$object" 2>/dev/null; then
+            deleted=$((deleted + 1))
+        else
+            log_warn "Failed to delete: ${object}"
+            failed=$((failed + 1))
+        fi
+    done < "$delete_list_file"
+
+    log_info "GCS retention cleanup: kept-recent=${kept}, kept-monthly=${monthly_kept}, deleted=${deleted}, failed=${failed}"
+}
+
+#------------------------------------------------------------------------------
 # Main
 #------------------------------------------------------------------------------
 main() {
@@ -284,6 +386,9 @@ main() {
 
     # Cleanup old local backups
     cleanup_old_backups
+
+    # Apply GCS retention policy
+    cleanup_gcs_backups
 
     log_info "Backup completed successfully"
     log_info "  Local: ${backup_file}"

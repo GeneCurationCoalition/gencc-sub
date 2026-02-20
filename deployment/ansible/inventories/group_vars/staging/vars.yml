@@ -12,3 +12,6 @@ gencc_letsencrypt_cert_name: gencc-stage
 gencc_letsencrypt_domains:
   - "{{ gencc_submit_hostname }}"
   - "{{ gencc_search_hostname }}"
+
+# Systemd timers for scheduled tasks
+gencc_enable_timers: true

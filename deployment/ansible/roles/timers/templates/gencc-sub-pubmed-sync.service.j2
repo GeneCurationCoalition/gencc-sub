@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=GENCC_USER={{ gencc_deploy_user }}
-ExecStart=/usr/bin/sudo -u {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR=/run/user/$(id -u {{ gencc_deploy_user }}); podman exec gencc-sub php artisan pubmed:sync'
+User={{ gencc_deploy_user }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ _gencc_deploy_uid.stdout }}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ _gencc_deploy_uid.stdout }}/bus
+ExecStart=/usr/bin/podman exec gencc-sub php artisan pubmed:sync
 
