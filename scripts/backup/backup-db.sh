@@ -338,6 +338,9 @@ cleanup_gcs_backups() {
 
     # Sort old objects by month then timestamp, pick earliest per month via awk.
     # Awk emits all NON-earliest lines (the ones to delete).
+    # old_objects_file contains content like:
+    # 202511	20251101-050000	gs://bucket/prefix/2025/11/gencc_sub_20251101-050000.sql.gz
+    # 202511	20251102-050000	gs://bucket/prefix/2025/11/gencc_sub_20251102-050000.sql.gz
     if [[ -s "$old_objects_file" ]]; then
         sort "$old_objects_file" \
             | awk -F'\t' '{
