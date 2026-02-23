@@ -62,13 +62,15 @@ class TsvFormatterTest extends TestCase
     }
 
     /**
-     * Test that values containing newlines remain quoted.
+     * Test that values containing newlines have them replaced with spaces.
+     * TSV files should have one row per line for compatibility.
      */
-    public function test_preserves_quotes_for_values_with_newlines(): void
+    public function test_replaces_newlines_with_spaces(): void
     {
-        // Input with a value containing a newline (properly quoted in TSV)
+        // Input with a value containing a newline (properly quoted in CSV/TSV)
         $input = "\"col1\"\t\"has\nnewline\"\t\"col3\"\n";
-        $expected = "col1\t\"has\nnewline\"\tcol3\n";
+        // Newline replaced with space, no quoting needed
+        $expected = "col1\thas newline\tcol3\n";
 
         $path = $this->createTsvFile($input);
         TsvFormatter::stripUnnecessaryQuotes($path);
@@ -122,12 +124,13 @@ class TsvFormatterTest extends TestCase
     }
 
     /**
-     * Test that values containing carriage return remain quoted.
+     * Test that values containing carriage return have them replaced with spaces.
      */
-    public function test_preserves_quotes_for_values_with_carriage_return(): void
+    public function test_replaces_carriage_return_with_spaces(): void
     {
         $input = "\"col1\"\t\"has\rreturn\"\t\"col3\"\n";
-        $expected = "col1\t\"has\rreturn\"\tcol3\n";
+        // CR replaced with space, no quoting needed
+        $expected = "col1\thas return\tcol3\n";
 
         $path = $this->createTsvFile($input);
         TsvFormatter::stripUnnecessaryQuotes($path);
@@ -192,8 +195,9 @@ class TsvFormatterTest extends TestCase
      */
     public function test_mixed_values(): void
     {
+        // Tab requires quoting, newline gets replaced with space
         $input = "\"simple\"\t\"has\ttab\"\t\"also simple\"\t\"has\nnewline\"\n";
-        $expected = "simple\t\"has\ttab\"\talso simple\t\"has\nnewline\"\n";
+        $expected = "simple\t\"has\ttab\"\talso simple\thas newline\n";
 
         $path = $this->createTsvFile($input);
         TsvFormatter::stripUnnecessaryQuotes($path);
@@ -209,6 +213,38 @@ class TsvFormatterTest extends TestCase
         // Simulate a typical gencc-submissions row with all quoted values
         $input = "\"SGC-100001\"\t\"1\"\t\"HGNC:1234\"\t\"GENE1\"\t\"MONDO:0000001\"\t\"Some Disease Name\"\n";
         $expected = "SGC-100001\t1\tHGNC:1234\tGENE1\tMONDO:0000001\tSome Disease Name\n";
+
+        $path = $this->createTsvFile($input);
+        TsvFormatter::stripUnnecessaryQuotes($path);
+
+        $this->assertEquals($expected, File::get($path));
+    }
+
+    /**
+     * Test that trailing newlines in values are trimmed.
+     */
+    public function test_trims_trailing_newlines(): void
+    {
+        // Value with trailing newline (common in notes fields)
+        $input = "\"col1\"\t\"text with trailing newline\n\"\t\"col3\"\n";
+        // Trailing newline replaced with space, then trimmed
+        $expected = "col1\ttext with trailing newline\tcol3\n";
+
+        $path = $this->createTsvFile($input);
+        TsvFormatter::stripUnnecessaryQuotes($path);
+
+        $this->assertEquals($expected, File::get($path));
+    }
+
+    /**
+     * Test notes field with embedded newline (real-world case from gencc data).
+     */
+    public function test_notes_field_with_embedded_newline(): void
+    {
+        // Simulates the actual problematic case - notes with trailing newline
+        $input = "\"SGC-125171\"\t\"1\"\t\"Long notes text here.\n\"\t\"30250217\"\n";
+        // Newline replaced with space, trimmed, unquoted
+        $expected = "SGC-125171\t1\tLong notes text here.\t30250217\n";
 
         $path = $this->createTsvFile($input);
         TsvFormatter::stripUnnecessaryQuotes($path);
