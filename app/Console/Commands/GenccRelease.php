@@ -17,6 +17,7 @@ use App\Models\Release;
 use App\Services\AdminProgressTracker;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
+use App\Services\TsvFormatter;
 use App\Exports\ReleaseSubmissionExport;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -1489,6 +1490,10 @@ class GenccRelease extends Command
             $tsvDir = $currentDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
             Excel::store($tsvExport, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+
+            // Post-process TSV to strip unnecessary quotes (Maatwebsite quotes all values by default)
+            TsvFormatter::stripUnnecessaryQuotes($tsvTimestamped);
+
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "current/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
@@ -1594,6 +1599,10 @@ class GenccRelease extends Command
             $tsvDir = $legacyDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
             Excel::store($legacyTsvExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+
+            // Post-process TSV to strip unnecessary quotes (Maatwebsite quotes all values by default)
+            TsvFormatter::stripUnnecessaryQuotes($tsvTimestamped);
+
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "legacy/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
