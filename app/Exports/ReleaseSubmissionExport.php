@@ -26,10 +26,13 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
 
     private string $delimiter;
 
-    public function __construct(bool $useLegacyFormat = false, string $delimiter = ',')
+    private string $enclosure;
+
+    public function __construct(bool $useLegacyFormat = false, string $delimiter = ',', string $enclosure = '"')
     {
         $this->useLegacyFormat = $useLegacyFormat;
         $this->delimiter = $delimiter;
+        $this->enclosure = $enclosure;
     }
 
     /**
@@ -192,12 +195,14 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
     }
 
     /**
-     * CSV settings — controls the delimiter for CSV/TSV exports.
+     * CSV settings — controls the delimiter and enclosure for CSV/TSV exports.
+     * For TSV, enclosure should be empty string to avoid quoting values.
      */
     public function getCsvSettings(): array
     {
         return [
             'delimiter' => $this->delimiter,
+            'enclosure' => $this->enclosure,
         ];
     }
 

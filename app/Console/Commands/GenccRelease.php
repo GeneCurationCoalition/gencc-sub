@@ -1484,8 +1484,9 @@ class GenccRelease extends Command
         }
 
         // Generate TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
+        // Also disable enclosure (quoting) for proper TSV format
         try {
-            $tsvExport = new ReleaseSubmissionExport(delimiter: "\t");
+            $tsvExport = new ReleaseSubmissionExport(delimiter: "\t", enclosure: '');
             $tsvDir = $currentDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
             Excel::store($tsvExport, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
@@ -1589,8 +1590,9 @@ class GenccRelease extends Command
         }
 
         // Generate legacy TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
+        // Also disable enclosure (quoting) for proper TSV format
         try {
-            $legacyTsvExport = new ReleaseSubmissionExport(useLegacyFormat: true, delimiter: "\t");
+            $legacyTsvExport = new ReleaseSubmissionExport(useLegacyFormat: true, delimiter: "\t", enclosure: '');
             $tsvDir = $legacyDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
             Excel::store($legacyTsvExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
