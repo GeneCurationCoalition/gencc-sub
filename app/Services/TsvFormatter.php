@@ -57,9 +57,6 @@ class TsvFormatter
     /**
      * Format a single field, quoting only if necessary.
      *
-     * TSV files should have one row per line for maximum compatibility,
-     * so embedded newlines are replaced with spaces.
-     *
      * @param string|null $value The field value
      * @return string The formatted field (quoted if necessary)
      */
@@ -70,14 +67,7 @@ class TsvFormatter
             return '';
         }
 
-        // Replace embedded newlines with spaces for TSV compatibility
-        // (most TSV parsers expect one row per line)
-        $value = preg_replace('/\r\n|\r|\n/', ' ', $value);
-
-        // Trim trailing spaces that may have resulted from trailing newlines
-        $value = rtrim($value);
-
-        // Check if the value needs quoting (now only tabs or quotes)
+        // Check if the value needs quoting
         if (!self::needsQuoting($value)) {
             return $value;
         }
@@ -93,10 +83,8 @@ class TsvFormatter
      *
      * A value needs quoting if it contains:
      * - Tab characters (the delimiter)
+     * - Newline characters (CR or LF)
      * - Double quote characters
-     *
-     * Note: Newlines are replaced with spaces before this check,
-     * so they don't need to be considered here.
      *
      * @param string $value The value to check
      * @return bool True if the value needs quoting
@@ -108,7 +96,7 @@ class TsvFormatter
             return false;
         }
 
-        // Check for characters that require quoting (tabs or quotes only)
-        return strpbrk($value, "\t\"") !== false;
+        // Check for characters that require quoting
+        return strpbrk($value, "\t\r\n\"") !== false;
     }
 }
