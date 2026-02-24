@@ -406,10 +406,10 @@ class GenccRelease extends Command
         $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
         $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
-        // Ensure the releases directory exists
-        $releasesDir = storage_path('releases');
-        if (!File::isDirectory($releasesDir)) {
-            File::makeDirectory($releasesDir, 0755, true);
+        // Ensure the notes directory exists (mirrors GCS structure)
+        $notesDir = storage_path('app/public/notes');
+        if (!File::isDirectory($notesDir)) {
+            File::makeDirectory($notesDir, 0755, true);
         }
 
         // Gather cumulative statistics
@@ -510,11 +510,11 @@ class GenccRelease extends Command
         $content .= "{$separator}\n";
 
         // Upload to GCS (with local fallback)
-        $localFallbackPath = $releasesDir . '/' . $filename;
+        $localFallbackPath = $notesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
         // Also create/overwrite Release_Notes.txt as a copy of the latest
-        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $latestNotesPath = $notesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
 
         // Clean up local files after GCS upload
@@ -627,12 +627,12 @@ class GenccRelease extends Command
         $this->info("  CSV file ({$csvFilename}): " . ($csvExists ? "EXISTS" : "MISSING"));
 
         // Check release notes (check both .txt and legacy .md)
-        $releasesDir = storage_path('releases');
+        $notesDir = storage_path('app/public/notes');
         $notesTxtPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.txt';
         $notesMdPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.md';
         $notesFiles = array_merge(
-            glob($releasesDir . '/' . $notesTxtPattern),
-            glob($releasesDir . '/' . $notesMdPattern)
+            glob($notesDir . '/' . $notesTxtPattern),
+            glob($notesDir . '/' . $notesMdPattern)
         );
         $notesExist = !empty($notesFiles);
         $this->info("  Release notes: " . ($notesExist ? "EXISTS (" . count($notesFiles) . " files)" : "MISSING"));
@@ -1097,10 +1097,10 @@ class GenccRelease extends Command
 
         $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
-        // Ensure the releases directory exists
-        $releasesDir = storage_path('releases');
-        if (!File::isDirectory($releasesDir)) {
-            File::makeDirectory($releasesDir, 0755, true);
+        // Ensure the notes directory exists (mirrors GCS structure)
+        $notesDir = storage_path('app/public/notes');
+        if (!File::isDirectory($notesDir)) {
+            File::makeDirectory($notesDir, 0755, true);
         }
 
         $totalSubmissions = $this->releaseStats['new'] + $this->releaseStats['republish'];
@@ -1259,11 +1259,11 @@ class GenccRelease extends Command
         $content .= "{$separator}\n";
 
         // Upload to GCS (with local fallback)
-        $localFallbackPath = $releasesDir . '/' . $filename;
+        $localFallbackPath = $notesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
         // Also create/overwrite Release_Notes.txt as a copy of the latest
-        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $latestNotesPath = $notesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
 
         // Clean up local files after GCS upload
