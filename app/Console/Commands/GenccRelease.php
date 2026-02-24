@@ -17,6 +17,7 @@ use App\Models\Release;
 use App\Services\AdminProgressTracker;
 use App\Services\JobStateMachine;
 use App\Services\SubmissionStateMachine;
+use App\Services\TsvFormatter;
 use App\Exports\ReleaseSubmissionExport;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -144,6 +145,26 @@ class GenccRelease extends Command
         }
 
         return $objectName;
+    }
+
+    /**
+     * Delete local files after successful GCS upload.
+     * Only deletes if GCS is configured and available.
+     *
+     * @param array $localPaths Array of local file paths to delete
+     */
+    protected function deleteLocalFilesAfterGcsUpload(array $localPaths): void
+    {
+        // Only delete if GCS is configured and available
+        if (!$this->getGcsBucket()) {
+            return;
+        }
+
+        foreach ($localPaths as $path) {
+            if (File::exists($path)) {
+                File::delete($path);
+            }
+        }
     }
 
     /**
@@ -385,10 +406,10 @@ class GenccRelease extends Command
         $this->releaseSlug = 'GCC-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
         $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
-        // Ensure the releases directory exists
-        $releasesDir = storage_path('releases');
-        if (!File::isDirectory($releasesDir)) {
-            File::makeDirectory($releasesDir, 0755, true);
+        // Ensure the notes directory exists (mirrors GCS structure)
+        $notesDir = storage_path('app/public/notes');
+        if (!File::isDirectory($notesDir)) {
+            File::makeDirectory($notesDir, 0755, true);
         }
 
         // Gather cumulative statistics
@@ -489,12 +510,15 @@ class GenccRelease extends Command
         $content .= "{$separator}\n";
 
         // Upload to GCS (with local fallback)
-        $localFallbackPath = $releasesDir . '/' . $filename;
+        $localFallbackPath = $notesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
         // Also create/overwrite Release_Notes.txt as a copy of the latest
-        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $latestNotesPath = $notesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
+
+        // Clean up local files after GCS upload
+        $this->deleteLocalFilesAfterGcsUpload([$localFallbackPath, $latestNotesPath]);
 
         $this->releaseNotesFile = $filename;
         $this->info("  Release notes generated: {$filename}");
@@ -603,12 +627,12 @@ class GenccRelease extends Command
         $this->info("  CSV file ({$csvFilename}): " . ($csvExists ? "EXISTS" : "MISSING"));
 
         // Check release notes (check both .txt and legacy .md)
-        $releasesDir = storage_path('releases');
+        $notesDir = storage_path('app/public/notes');
         $notesTxtPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.txt';
         $notesMdPattern = 'Release_Notes_' . $releaseDate->format('Y-m-d') . '*.md';
         $notesFiles = array_merge(
-            glob($releasesDir . '/' . $notesTxtPattern),
-            glob($releasesDir . '/' . $notesMdPattern)
+            glob($notesDir . '/' . $notesTxtPattern),
+            glob($notesDir . '/' . $notesMdPattern)
         );
         $notesExist = !empty($notesFiles);
         $this->info("  Release notes: " . ($notesExist ? "EXISTS (" . count($notesFiles) . " files)" : "MISSING"));
@@ -1073,10 +1097,10 @@ class GenccRelease extends Command
 
         $filename = 'Release_Notes_' . $releaseDate->format('Y-m-d_His') . '.txt';
 
-        // Ensure the releases directory exists
-        $releasesDir = storage_path('releases');
-        if (!File::isDirectory($releasesDir)) {
-            File::makeDirectory($releasesDir, 0755, true);
+        // Ensure the notes directory exists (mirrors GCS structure)
+        $notesDir = storage_path('app/public/notes');
+        if (!File::isDirectory($notesDir)) {
+            File::makeDirectory($notesDir, 0755, true);
         }
 
         $totalSubmissions = $this->releaseStats['new'] + $this->releaseStats['republish'];
@@ -1235,12 +1259,15 @@ class GenccRelease extends Command
         $content .= "{$separator}\n";
 
         // Upload to GCS (with local fallback)
-        $localFallbackPath = $releasesDir . '/' . $filename;
+        $localFallbackPath = $notesDir . '/' . $filename;
         $this->uploadToGcs($content, "notes/{$filename}", 'text/plain', $localFallbackPath);
 
         // Also create/overwrite Release_Notes.txt as a copy of the latest
-        $latestNotesPath = $releasesDir . '/Release_Notes.txt';
+        $latestNotesPath = $notesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
+
+        // Clean up local files after GCS upload
+        $this->deleteLocalFilesAfterGcsUpload([$localFallbackPath, $latestNotesPath]);
 
         $this->releaseNotesFile = $filename;
         $this->info("Release notes generated: {$filename}");
@@ -1446,6 +1473,7 @@ class GenccRelease extends Command
         File::copy($csvTimestamped, $csvLatest);
         $this->uploadToGcs($csvContent, "current/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
         $this->info("  CSV: current/csv/{$timestampedBase}.csv");
+        $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
 
         // Generate XLSX
         try {
@@ -1461,6 +1489,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsxContent, "current/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
             $this->info("  XLSX: current/xlsx/{$timestampedBase}.xlsx");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
         }
@@ -1479,15 +1508,21 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsContent, "current/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
             $this->info("  XLS: current/xls/{$timestampedBase}.xls");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLS: {$e->getMessage()}");
         }
 
-        // Generate TSV
+        // Generate TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
         try {
+            $tsvExport = new ReleaseSubmissionExport(delimiter: "\t");
             $tsvDir = $currentDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($export, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            Excel::store($tsvExport, 'public/current/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+
+            // Post-process TSV to strip unnecessary quotes (Maatwebsite quotes all values by default)
+            TsvFormatter::stripUnnecessaryQuotes($tsvTimestamped);
+
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "current/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
@@ -1497,6 +1532,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($tsvContent, "current/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
             $this->info("  TSV: current/tsv/{$timestampedBase}.tsv");
+            $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate TSV: {$e->getMessage()}");
         }
@@ -1547,6 +1583,7 @@ class GenccRelease extends Command
             File::copy($csvTimestamped, $csvLatest);
             $this->uploadToGcs($csvContent, "legacy/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
             $this->info("    CSV: legacy/csv/{$timestampedBase}.csv");
+            $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy CSV: {$e->getMessage()}");
         }
@@ -1565,6 +1602,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsxContent, "legacy/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
             $this->info("    XLSX: legacy/xlsx/{$timestampedBase}.xlsx");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
         }
@@ -1583,15 +1621,21 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsContent, "legacy/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
             $this->info("    XLS: legacy/xls/{$timestampedBase}.xls");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
         }
 
-        // Generate legacy TSV
+        // Generate legacy TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
         try {
+            $legacyTsvExport = new ReleaseSubmissionExport(useLegacyFormat: true, delimiter: "\t");
             $tsvDir = $legacyDir . '/tsv';
             $tsvTimestamped = $tsvDir . '/' . $timestampedBase . '.tsv';
-            Excel::store($legacyExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+            Excel::store($legacyTsvExport, 'public/legacy/tsv/' . $timestampedBase . '.tsv', 'local', \Maatwebsite\Excel\Excel::TSV);
+
+            // Post-process TSV to strip unnecessary quotes (Maatwebsite quotes all values by default)
+            TsvFormatter::stripUnnecessaryQuotes($tsvTimestamped);
+
             $tsvContent = File::get($tsvTimestamped);
             $this->uploadToGcs($tsvContent, "legacy/tsv/{$timestampedBase}.tsv",
                 'text/tab-separated-values', $tsvTimestamped);
@@ -1601,6 +1645,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($tsvContent, "legacy/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
             $this->info("    TSV: legacy/tsv/{$timestampedBase}.tsv");
+            $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy TSV: {$e->getMessage()}");
         }

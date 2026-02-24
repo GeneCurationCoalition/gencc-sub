@@ -14,6 +14,9 @@ use Maatwebsite\Excel\Concerns\WithCustomCsvSettings;
  * This significantly reduces memory usage by not loading all 25K+ records at once.
  *
  * Matches the gencc-search SubmissionExport format exactly.
+ *
+ * Note: Excel::TSV is just an alias for 'Csv' in Maatwebsite Excel — it does NOT
+ * automatically use tab delimiters. Pass delimiter: "\t" to the constructor for TSV.
  */
 class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, WithCustomCsvSettings
 {
@@ -21,9 +24,12 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
 
     private bool $useLegacyFormat;
 
-    public function __construct(bool $useLegacyFormat = false)
+    private string $delimiter;
+
+    public function __construct(bool $useLegacyFormat = false, string $delimiter = ',')
     {
         $this->useLegacyFormat = $useLegacyFormat;
+        $this->delimiter = $delimiter;
     }
 
     /**
@@ -186,12 +192,12 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
     }
 
     /**
-     * CSV settings.
+     * CSV settings — controls the delimiter for CSV/TSV exports.
      */
     public function getCsvSettings(): array
     {
         return [
-            'delimiter' => ',',
+            'delimiter' => $this->delimiter,
         ];
     }
 
