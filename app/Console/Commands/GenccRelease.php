@@ -148,6 +148,26 @@ class GenccRelease extends Command
     }
 
     /**
+     * Delete local files after successful GCS upload.
+     * Only deletes if GCS is configured and available.
+     *
+     * @param array $localPaths Array of local file paths to delete
+     */
+    protected function deleteLocalFilesAfterGcsUpload(array $localPaths): void
+    {
+        // Only delete if GCS is configured and available
+        if (!$this->getGcsBucket()) {
+            return;
+        }
+
+        foreach ($localPaths as $path) {
+            if (File::exists($path)) {
+                File::delete($path);
+            }
+        }
+    }
+
+    /**
      * Execute the console command.
      */
     public function handle()
@@ -496,6 +516,9 @@ class GenccRelease extends Command
         // Also create/overwrite Release_Notes.txt as a copy of the latest
         $latestNotesPath = $releasesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
+
+        // Clean up local files after GCS upload
+        $this->deleteLocalFilesAfterGcsUpload([$localFallbackPath, $latestNotesPath]);
 
         $this->releaseNotesFile = $filename;
         $this->info("  Release notes generated: {$filename}");
@@ -1243,6 +1266,9 @@ class GenccRelease extends Command
         $latestNotesPath = $releasesDir . '/Release_Notes.txt';
         $this->uploadToGcs($content, "notes/Release_Notes.txt", 'text/plain', $latestNotesPath);
 
+        // Clean up local files after GCS upload
+        $this->deleteLocalFilesAfterGcsUpload([$localFallbackPath, $latestNotesPath]);
+
         $this->releaseNotesFile = $filename;
         $this->info("Release notes generated: {$filename}");
         $this->info("Latest notes available as: Release_Notes.txt");
@@ -1447,6 +1473,7 @@ class GenccRelease extends Command
         File::copy($csvTimestamped, $csvLatest);
         $this->uploadToGcs($csvContent, "current/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
         $this->info("  CSV: current/csv/{$timestampedBase}.csv");
+        $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
 
         // Generate XLSX
         try {
@@ -1462,6 +1489,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsxContent, "current/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
             $this->info("  XLSX: current/xlsx/{$timestampedBase}.xlsx");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
         }
@@ -1480,6 +1508,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsContent, "current/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
             $this->info("  XLS: current/xls/{$timestampedBase}.xls");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLS: {$e->getMessage()}");
         }
@@ -1503,6 +1532,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($tsvContent, "current/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
             $this->info("  TSV: current/tsv/{$timestampedBase}.tsv");
+            $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate TSV: {$e->getMessage()}");
         }
@@ -1553,6 +1583,7 @@ class GenccRelease extends Command
             File::copy($csvTimestamped, $csvLatest);
             $this->uploadToGcs($csvContent, "legacy/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
             $this->info("    CSV: legacy/csv/{$timestampedBase}.csv");
+            $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy CSV: {$e->getMessage()}");
         }
@@ -1571,6 +1602,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsxContent, "legacy/xlsx/{$latestBase}.xlsx",
                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', $xlsxLatest);
             $this->info("    XLSX: legacy/xlsx/{$timestampedBase}.xlsx");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
         }
@@ -1589,6 +1621,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($xlsContent, "legacy/xls/{$latestBase}.xls",
                 'application/vnd.ms-excel', $xlsLatest);
             $this->info("    XLS: legacy/xls/{$timestampedBase}.xls");
+            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
         }
@@ -1612,6 +1645,7 @@ class GenccRelease extends Command
             $this->uploadToGcs($tsvContent, "legacy/tsv/{$latestBase}.tsv",
                 'text/tab-separated-values', $tsvLatest);
             $this->info("    TSV: legacy/tsv/{$timestampedBase}.tsv");
+            $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy TSV: {$e->getMessage()}");
         }
