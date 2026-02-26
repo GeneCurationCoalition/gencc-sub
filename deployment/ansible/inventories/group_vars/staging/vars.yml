@@ -2,8 +2,8 @@
 # Staging environment overrides.
 
 # Container images
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
-gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.1
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0.3
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.3
 
 # Public routing / TLS
 gencc_submit_hostname: portal-stage.thegencc.org
