@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# Matches nginx rate-limit rejection messages in error.log.
+[Definition]
+failregex = ^\s*\[error\] \d+#\d+: \*\d+ limiting requests, excess: [\d.]+ by zone "\S+", client: <HOST>,
+ignoreregex =

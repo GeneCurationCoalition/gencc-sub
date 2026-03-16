@@ -15,3 +15,6 @@ gencc_letsencrypt_domains:
 
 # Systemd timers for scheduled tasks
 gencc_enable_timers: true
+
+# Security: short HSTS max-age on staging (5 minutes)
+gencc_hsts_max_age: 300
