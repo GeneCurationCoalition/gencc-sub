@@ -8,6 +8,7 @@ backend  = auto
 banaction = iptables-multiport
 
 [sshd]
+# We have port 22 disabled at the GCP firewall level, so this is just a failsafe
 enabled  = true
 port     = ssh
 logpath  = /var/log/auth.log

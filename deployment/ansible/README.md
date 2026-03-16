@@ -61,6 +61,38 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 
 (See `./deployment/ansible/inventories/group_vars/all/vars.yml` for all config options)
 
+## Security hardening
+
+The `nginx_tls` role deploys several layers of abuse prevention, configured via templates in `roles/nginx_tls/templates/`:
+
+**Bot blocking** — A user-agent map (`gencc-security.conf.j2`) blocks known SEO crawlers, AI training bots, and vulnerability scanners. Certain paths (downloads, health checks, robots.txt) are exempt so external tools can still fetch exports.
+
+**Rate limiting** — nginx `limit_req` zones throttle requests per client IP. Different zones apply to different route types (general pages, auth endpoints, search, data exports). Limits are defined at the `http` level in `gencc-security.conf.j2` and applied per-location in `gencc-https.conf.j2`.
+
+**Connection limiting** — `limit_conn` caps simultaneous connections per IP (30 general, 3 for exports), protecting against slowloris-style attacks and download abuse.
+
+**IP blocklist** — `gencc-ip-blocklist.conf.j2` renders `deny` directives from the `gencc_blocked_ips` Ansible variable. Re-run the playbook to update.
+
+**Security headers** — HSTS, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy are set on all responses (including errors). HSTS max-age is configurable per environment (`gencc_hsts_max_age`).
+
+**fail2ban** — Monitors nginx logs over longer windows and bans repeat offenders at the iptables level. Four jails are configured:
+
+| Jail | Watches | Triggers on | Ban duration |
+|------|---------|-------------|-------------|
+| `sshd` | auth.log | SSH brute force | 1 hour |
+| `nginx-req-limit` | error.log | Repeated rate-limit 429s | 10 minutes |
+| `nginx-forbidden` | access.log | Repeated bot-blocked 403s | 24 hours |
+| `nginx-botsearch` | access.log | Vulnerability probe paths (wp-admin, .env, .git, etc.) | 24 hours |
+
+GCP IAP tunnel IPs (`35.235.240.0/20`) are in `ignoreip` so fail2ban never locks out SSH operators.
+
+Useful operational commands:
+```bash
+fail2ban-client status                              # List all jails
+fail2ban-client status nginx-req-limit              # Show banned IPs for a jail
+fail2ban-client set nginx-req-limit unbanip 1.2.3.4 # Manual unban
+```
+
 ## Notes
 - Uses **rootless Podman** for the app containers via a dedicated `gencc` user and `loginctl enable-linger`.
 - Uses **host MySQL** and allows container connections via `slirp4netns` (`DB_HOST=10.0.2.2`).
