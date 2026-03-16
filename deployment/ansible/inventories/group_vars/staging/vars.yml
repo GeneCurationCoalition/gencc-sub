@@ -2,7 +2,7 @@
 # Staging environment overrides.
 
 # Container images
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0.3
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0.4
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0.3
 
 # Public routing / TLS
