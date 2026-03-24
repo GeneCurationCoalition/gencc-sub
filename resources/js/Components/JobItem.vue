@@ -24,6 +24,7 @@ const confirm = useConfirm();
 const uploadErrors = ref([]);
 const uploadWarnings = ref([]);
 const showErrorCard = ref(false);
+const expandedDetailRows = ref({});
 const uploadedFilename = ref('');
 const uploadedDocumentId = ref(null);
 const uploadedFileSize = ref(0);
@@ -205,8 +206,11 @@ const fileFormatErrors = computed(() => {
 });
 
 // Data row errors are displayed in the table format
+// __index is added for DataTable's dataKey (needed for row expansion)
 const dataRowErrors = computed(() => {
-    return uploadErrors.value.filter(err => !isFileFormatError(err));
+    return uploadErrors.value
+        .filter(err => !isFileFormatError(err))
+        .map((err, idx) => ({ ...err, __index: idx }));
 });
 
 // Computed: PMID normalization warnings
@@ -317,6 +321,7 @@ const displayErrorCard = (errors) => {
   if (actualErrors.length > 0) {
     showErrorCard.value = true; // Default to expanded when errors first appear
     expandedErrorRows.value = {}; // Reset expanded state when showing new errors
+    expandedDetailRows.value = {}; // Reset detail expansion state
   } else if (warnings.length > 0) {
     console.log('Validation passed with warnings:', warnings);
   } else {
@@ -371,17 +376,26 @@ const formatRowsForDisplay = (rowsString, index) => {
 };
 
 const downloadErrors = () => {
-  const headers = 'Error Type,Severity,Message,Rows\n';
-  const rows = uploadErrors.value.map(error => {
+  const headers = 'Error Type,Severity,Column,Message,Value,Rows\n';
+  const csvRows = [];
+
+  uploadErrors.value.forEach(error => {
     const errorType = error.error_type || 'validation_error';
     const severity = error.severity || 'error';
+    const column = error.column || '';
     const message = error.message || '';
-    const rowsList = error.rows || '';
 
-    return `"${errorType}","${severity}","${message.replace(/"/g, '""')}","${rowsList}"`;
-  }).join('\n');
+    // If error has details (grouped with unique values), output one row per detail
+    if (error.details && error.details.length > 0) {
+      error.details.forEach(detail => {
+        csvRows.push(`"${errorType}","${severity}","${column}","${message.replace(/"/g, '""')}","${(detail.value || '').replace(/"/g, '""')}","${detail.rows}"`);
+      });
+    } else {
+      csvRows.push(`"${errorType}","${severity}","${column}","${message.replace(/"/g, '""')}","","${error.rows || ''}"`);
+    }
+  });
 
-  const csvContent = headers + rows;
+  const csvContent = headers + csvRows.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv' });
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1311,11 +1325,15 @@ const formatDate = (dateString) => {
                             </p>
                         </div>
                         <DataTable :value="dataRowErrors"
+                                   v-model:expandedRows="expandedDetailRows"
+                                   dataKey="__index"
                                    size="small"
                                    stripedRows
                                    scrollable
                                    scrollHeight="400px"
                                    class="text-sm">
+                            <Column :expander="true" :style="{width: '40px'}"
+                                    v-if="dataRowErrors.some(e => e.details && e.details.length > 0)" />
                             <Column field="error_type" header="Error Type" :style="{width: '180px'}">
                                 <template #body="slotProps">
                                     <span class="font-mono text-xs">{{ slotProps.data.error_type || 'validation_error' }}</span>
@@ -1351,6 +1369,30 @@ const formatDate = (dateString) => {
                                     </div>
                                 </template>
                             </Column>
+                            <template #expansion="slotProps">
+                                <div class="p-3 bg-gray-50">
+                                    <div class="text-xs font-semibold text-gray-600 mb-2">
+                                        {{ slotProps.data.details.length }} distinct value(s) found:
+                                    </div>
+                                    <table class="w-full text-xs">
+                                        <thead>
+                                            <tr class="border-b border-gray-200">
+                                                <th class="text-left py-1 pr-4 text-gray-500 font-medium">Value</th>
+                                                <th class="text-left py-1 pr-4 text-gray-500 font-medium">Count</th>
+                                                <th class="text-left py-1 text-gray-500 font-medium">Rows</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="(detail, dIdx) in slotProps.data.details" :key="dIdx"
+                                                class="border-b border-gray-100 last:border-b-0">
+                                                <td class="py-1 pr-4 font-mono text-red-700">{{ detail.value }}</td>
+                                                <td class="py-1 pr-4 text-gray-600">{{ detail.count }}</td>
+                                                <td class="py-1 font-mono text-gray-500">{{ detail.rows }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </template>
                         </DataTable>
                     </div>
                 </template>
