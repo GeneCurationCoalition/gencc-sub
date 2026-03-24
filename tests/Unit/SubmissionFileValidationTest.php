@@ -892,4 +892,221 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertEmpty($geneChangeErrors, 'HGNC prefix comparison should be case-insensitive');
     }
+
+    // =========================================================================
+    // Error Grouping & Detail Tests
+    // =========================================================================
+
+    /**
+     * Test: Field-level errors include column and value fields
+     */
+    public function test_field_errors_include_column_and_value(): void
+    {
+        $row = $this->createValidDataRow(['hgnc_id' => 'INVALID']);
+
+        $errors = SubmissionFileValidation::validate_data_row($row, 13);
+
+        $formatError = collect($errors)->firstWhere('error_type', 'invalid_field_format');
+        $this->assertNotNull($formatError, 'Should have invalid_field_format error');
+        $this->assertEquals('hgnc_id', $formatError['column']);
+        $this->assertEquals('INVALID', $formatError['value']);
+        $this->assertStringContainsString('INVALID', $formatError['message']);
+    }
+
+    /**
+     * Test: Enum validation errors include column and value
+     */
+    public function test_enum_errors_include_column_and_value(): void
+    {
+        $row = $this->createValidDataRow(['classification_id' => 'GENCC:999999']);
+
+        $errors = SubmissionFileValidation::validate_data_row($row, 13);
+
+        $valueError = collect($errors)->first(fn($e) => ($e['error_type'] ?? '') === 'invalid_field_value' && ($e['column'] ?? '') === 'classification_id');
+        $this->assertNotNull($valueError, 'Should have invalid_field_value error for classification_id');
+        $this->assertEquals('classification_id', $valueError['column']);
+        $this->assertEquals('GENCC:999999', $valueError['value']);
+        $this->assertStringContainsString('GENCC:999999', $valueError['message']);
+    }
+
+    /**
+     * Test: Database lookup errors include column and value
+     */
+    public function test_database_lookup_errors_include_column_and_value(): void
+    {
+        $row = $this->createValidDataRow(['disease_id' => 'MONDO:9999999']);
+
+        $errors = SubmissionFileValidation::validate_data_row($row, 13);
+
+        $valueError = collect($errors)->firstWhere('error_type', 'invalid_field_value');
+        $this->assertNotNull($valueError, 'Should have invalid_field_value error for unknown disease');
+        $this->assertEquals('disease_id', $valueError['column']);
+        $this->assertEquals('MONDO:9999999', $valueError['value']);
+    }
+
+    /**
+     * Test: Long values are truncated to 80 characters
+     */
+    public function test_long_values_are_truncated(): void
+    {
+        $longValue = str_repeat('x', 120);
+        $row = $this->createValidDataRow(['assertion_criteria_url' => $longValue]);
+
+        $errors = SubmissionFileValidation::validate_data_row($row, 13);
+
+        $formatError = collect($errors)->firstWhere('column', 'assertion_criteria_url');
+        $this->assertNotNull($formatError);
+        $this->assertEquals(83, mb_strlen($formatError['value'])); // 80 + '...'
+        $this->assertStringEndsWith('...', $formatError['value']);
+    }
+
+    /**
+     * Test: Errors with same column are grouped together in validate_spreadsheet
+     */
+    public function test_errors_grouped_by_column(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'MONDO:9999999']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:8888888', 'local_key' => 'TEST002']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // Filter to just disease_id errors
+        $diseaseErrors = collect($errors)->filter(fn($e) => ($e['column'] ?? null) === 'disease_id');
+
+        // Should be grouped into one entry (not two separate ones)
+        $this->assertCount(1, $diseaseErrors, 'Disease ID errors should be grouped into one entry');
+
+        $grouped = $diseaseErrors->first();
+        $this->assertStringContainsString('2 rows', $grouped['message']);
+        $this->assertArrayHasKey('details', $grouped);
+        $this->assertCount(2, $grouped['details']); // Two distinct values
+    }
+
+    /**
+     * Test: Grouped errors have details with value, rows, and count
+     */
+    public function test_grouped_errors_have_details_structure(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'MONDO:9999999']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:9999999', 'local_key' => 'TEST002']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:8888888', 'local_key' => 'TEST003']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        $diseaseError = collect($errors)->firstWhere('column', 'disease_id');
+        $this->assertNotNull($diseaseError);
+
+        // 3 total rows
+        $this->assertStringContainsString('3 rows', $diseaseError['message']);
+
+        // Details sorted by count descending
+        $this->assertCount(2, $diseaseError['details']);
+        $this->assertEquals(2, $diseaseError['details'][0]['count']); // MONDO:9999999 appears twice
+        $this->assertEquals(1, $diseaseError['details'][1]['count']); // MONDO:8888888 appears once
+
+        // Each detail has required fields
+        foreach ($diseaseError['details'] as $detail) {
+            $this->assertArrayHasKey('value', $detail);
+            $this->assertArrayHasKey('rows', $detail);
+            $this->assertArrayHasKey('count', $detail);
+        }
+    }
+
+    /**
+     * Test: Non-column errors (like duplicates) still group by message
+     */
+    public function test_non_column_errors_group_by_message(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100001'
+            ]),
+            $this->createValidDataRow([
+                'action' => 'R',
+                'sgc_id' => 'SGC-100001'
+            ])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        // duplicate_sgc_id errors should be grouped (same message, no column field)
+        $dupErrors = collect($errors)->where('error_type', 'duplicate_sgc_id');
+        $this->assertCount(1, $dupErrors, 'Duplicate SGC ID errors should be grouped into one entry');
+
+        $grouped = $dupErrors->first();
+        $this->assertStringContainsString('13, 14', $grouped['rows']);
+        $this->assertNull($grouped['column'] ?? null);
+        $this->assertArrayNotHasKey('details', $grouped);
+    }
+
+    /**
+     * Test: Grouped errors do not leak internal fields (sgc_id, local_key, _values)
+     */
+    public function test_grouped_errors_clean_internal_fields(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['hgnc_id' => 'INVALID']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        foreach ($errors as $error) {
+            $this->assertArrayNotHasKey('_values', $error, 'Internal _values should be removed');
+            $this->assertArrayNotHasKey('sgc_id', $error, 'sgc_id should be removed from grouped errors');
+            $this->assertArrayNotHasKey('local_key', $error, 'local_key should be removed from grouped errors');
+            $this->assertArrayNotHasKey('row', $error, 'Individual row field should be removed (rows string used instead)');
+        }
+    }
+
+    /**
+     * Test: File format errors preserve is_file_format_error, user_title, user_message
+     */
+    public function test_file_format_errors_preserve_user_fields(): void
+    {
+        $worksheet = [];
+        for ($i = 0; $i < 5; $i++) {
+            $worksheet[] = array_fill(0, 18, '');
+        }
+        // Invalid headers
+        $worksheet[] = ['wrong_col_1', 'wrong_col_2'];
+        for ($i = 0; $i < 6; $i++) {
+            $worksheet[] = array_fill(0, 18, '');
+        }
+        $worksheet[] = $this->createValidDataRow();
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        $this->assertNotEmpty($errors);
+        $this->assertTrue($errors[0]['is_file_format_error'] ?? false);
+        $this->assertNotEmpty($errors[0]['user_title'] ?? '');
+        $this->assertNotEmpty($errors[0]['user_message'] ?? '');
+    }
+
+    /**
+     * Test: Single row error still gets grouped summary with "1 row"
+     */
+    public function test_single_row_error_grouped_with_singular_count(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['hgnc_id' => 'INVALID']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+
+        $hgncError = collect($errors)->firstWhere('column', 'hgnc_id');
+        $this->assertNotNull($hgncError);
+        $this->assertStringContainsString('1 row)', $hgncError['message']);
+        $this->assertStringNotContainsString('1 rows', $hgncError['message']);
+    }
 }

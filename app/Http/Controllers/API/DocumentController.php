@@ -225,7 +225,8 @@ class DocumentController extends Controller
                 'message' => 'Validation failed',
                 'results' => false,
                 'document_id' => $document->id,
-                'errors' => $validationResult['errors']
+                'errors' => $validationResult['errors'],
+                'warnings' => $validationResult['warnings'] ?? []
             ], 422);
         }
 
@@ -514,23 +515,47 @@ class DocumentController extends Controller
 
         if (!empty($validation_errors)) {
             // Separate blocking errors from warnings
-            $errors = array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning');
-            $warnings = array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning');
+            // array_values() reindexes to ensure JSON serializes as array, not object
+            $errors = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning'));
+            $warnings = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning'));
 
             if (!empty($errors)) {
                 $formattedErrors = array_map(function($error) {
                     $rows = $error['rows'] ?? ($error['row'] ?? 'N/A');
-                    return [
+                    $formatted = [
                         'error_type' => $error['error_type'] ?? 'validation_error',
                         'severity' => $error['severity'] ?? 'error',
                         'message' => $error['message'] ?? 'Unknown validation error',
                         'rows' => $rows,
                     ];
+
+                    // Preserve column name for frontend grouping
+                    if (!empty($error['column'])) {
+                        $formatted['column'] = $error['column'];
+                    }
+
+                    // Preserve expandable details (unique values with their rows)
+                    if (!empty($error['details'])) {
+                        $formatted['details'] = $error['details'];
+                    }
+
+                    // Preserve file format error fields for frontend display
+                    if (!empty($error['is_file_format_error'])) {
+                        $formatted['is_file_format_error'] = true;
+                    }
+                    if (!empty($error['user_title'])) {
+                        $formatted['user_title'] = $error['user_title'];
+                    }
+                    if (!empty($error['user_message'])) {
+                        $formatted['user_message'] = $error['user_message'];
+                    }
+
+                    return $formatted;
                 }, $errors);
 
                 return [
                     'has_errors' => true,
-                    'errors' => $formattedErrors,
+                    'errors' => array_values($formattedErrors),
                     'warnings' => array_values(array_map(function($w) {
                         return [
                             'error_type' => $w['error_type'] ?? 'warning',

@@ -324,57 +324,122 @@ class SubmissionFileValidation
     }
 
     /**
-     * Group validation errors by message and collect rows that have each error
+     * Group validation errors by error_type + column (coarse grouping) and collect
+     * unique values with their rows as expandable details.
+     *
+     * For errors with a 'column' field (field-level validation), groups by error_type + column
+     * so all "invalid disease_id" errors become one group with details per unique value.
+     *
+     * For errors without a 'column' field (structural errors, duplicates, etc.),
+     * groups by exact message as before.
      *
      * @param array $validation_results Raw validation results (one per row)
-     * @return array Grouped validation results (one per unique message with comma-separated rows)
+     * @return array Grouped validation results with optional 'details' for expansion
      */
     private static function group_validation_errors(array $validation_results): array
     {
         $grouped = [];
 
         foreach ($validation_results as $error) {
-            // Skip errors that don't have a message or row (like fatal errors)
+            // Skip errors that don't have a message (like fatal errors without context)
             if (!isset($error['message'])) {
                 $grouped[] = $error;
                 continue;
             }
 
-            $message = $error['message'];
-
-            // Create a key that includes message and other identifying info (but not row)
-            $key = md5($message . ($error['error_type'] ?? '') . ($error['severity'] ?? ''));
-
-            if (!isset($grouped[$key])) {
-                // First occurrence of this error - create new entry
-                $grouped[$key] = $error;
-                $grouped[$key]['rows'] = [];
+            // Determine grouping key:
+            // - Field-level errors (with 'column'): group by error_type + column
+            // - Other errors: group by exact message
+            if (!empty($error['column'])) {
+                $key = ($error['error_type'] ?? 'error') . ':' . $error['column'];
+            } else {
+                $key = md5($error['message'] . ($error['error_type'] ?? '') . ($error['severity'] ?? ''));
             }
 
-            // Add row number to the list if it exists
+            if (!isset($grouped[$key])) {
+                $grouped[$key] = [
+                    'error_type' => $error['error_type'] ?? 'validation_error',
+                    'severity' => $error['severity'] ?? 'error',
+                    'validation_type' => $error['validation_type'] ?? null,
+                    'column' => $error['column'] ?? null,
+                    'rows' => [],
+                    '_values' => [],  // temporary: collect value → rows mapping
+                ];
+
+                // For non-column errors, keep the original message
+                if (empty($error['column'])) {
+                    $grouped[$key]['message'] = $error['message'];
+                }
+
+                // Preserve file format error fields
+                if (!empty($error['is_file_format_error'])) {
+                    $grouped[$key]['is_file_format_error'] = $error['is_file_format_error'];
+                    $grouped[$key]['user_title'] = $error['user_title'] ?? null;
+                    $grouped[$key]['user_message'] = $error['user_message'] ?? null;
+                }
+            }
+
+            // Add row number
             if (isset($error['row'])) {
                 $grouped[$key]['rows'][] = $error['row'];
             }
+
+            // Track unique values for column-level errors
+            if (!empty($error['value'])) {
+                $val = $error['value'];
+                if (!isset($grouped[$key]['_values'][$val])) {
+                    $grouped[$key]['_values'][$val] = [];
+                }
+                if (isset($error['row'])) {
+                    $grouped[$key]['_values'][$val][] = $error['row'];
+                }
+            }
         }
 
-        // Convert rows arrays to comma-separated strings
+        // Finalize grouped results
         $result = [];
         foreach ($grouped as $error) {
-            if (isset($error['rows']) && !empty($error['rows'])) {
-                // Sort row numbers
+            // Sort and format rows
+            if (!empty($error['rows'])) {
                 sort($error['rows'], SORT_NUMERIC);
-
-                // Keep rows as comma-separated string for frontend use
+                $rowCount = count($error['rows']);
                 $error['rows'] = implode(', ', $error['rows']);
-
-                // Remove row-specific fields from grouped output
-                unset($error['row']);
-                unset($error['sgc_id']);
-                unset($error['local_key']);
             } else {
-                // No rows to display
+                $rowCount = 0;
                 $error['rows'] = '';
             }
+
+            // Build summary message and details for column-level errors
+            if (!empty($error['column'])) {
+                $column = $error['column'];
+                $guidance = self::get_column_guidance($column);
+                $errorVerb = ($error['error_type'] === 'invalid_field_format') ? 'Invalid format' : 'Invalid value';
+                $error['message'] = "{$errorVerb} for column '{$column}' ({$rowCount} row" . ($rowCount !== 1 ? 's' : '') . "). {$guidance}";
+
+                // Build details array from unique values
+                if (!empty($error['_values'])) {
+                    $details = [];
+                    foreach ($error['_values'] as $value => $valueRows) {
+                        sort($valueRows, SORT_NUMERIC);
+                        $details[] = [
+                            'value' => $value,
+                            'rows' => implode(', ', $valueRows),
+                            'count' => count($valueRows),
+                        ];
+                    }
+                    // Sort details by count descending (most common first)
+                    usort($details, fn($a, $b) => $b['count'] - $a['count']);
+                    $error['details'] = $details;
+                }
+            }
+
+            // Clean up temporary and row-specific fields
+            unset($error['_values']);
+            unset($error['row']);
+            unset($error['sgc_id']);
+            unset($error['local_key']);
+            unset($error['value']);
+
             $result[] = $error;
         }
 
@@ -772,14 +837,17 @@ class SubmissionFileValidation
                 $normalized_value = preg_replace('/\s+/u', ' ', trim($value));
                 if (!preg_match($regexp, $normalized_value)) {
                     $guidance = self::get_column_guidance($column_name);
+                    $truncated_value = mb_strlen($normalized_value) > 80 ? mb_substr($normalized_value, 0, 80) . '...' : $normalized_value;
                     $validation_results[] = [
                         'error_type' => 'invalid_field_format',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
+                        'column' => $column_name,
+                        'value' => $truncated_value,
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid format for column '{$column_name}'. {$guidance}",
+                        'message' => "Invalid format for column '{$column_name}': '{$truncated_value}'. {$guidance}",
                     ];
                     $field_validation_failed = true;  // Stop further validation for this field
                 }
@@ -791,14 +859,17 @@ class SubmissionFileValidation
                 $valid_values = call_user_func($validator_method);
                 if (!in_array($value, $valid_values)) {
                     $guidance = self::get_column_guidance($column_name);
+                    $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
                     $validation_results[] = [
                         'error_type' => 'invalid_field_value',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
+                        'column' => $column_name,
+                        'value' => $truncated_value,
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid value for column '{$column_name}'. {$guidance}",
+                        'message' => "Invalid value for column '{$column_name}': '{$truncated_value}'. {$guidance}",
                     ];
                     $field_validation_failed = true;  // Stop further validation for this field
                 }
@@ -810,14 +881,17 @@ class SubmissionFileValidation
                 $return = call_user_func($validator_method, $value);
                 if ($return === null ) {
                     $guidance = self::get_column_guidance($column_name);
+                    $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
                     $validation_results[] = [
                         'error_type' => 'invalid_field_value',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
+                        'column' => $column_name,
+                        'value' => $truncated_value,
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid value for column '{$column_name}'. {$guidance}",
+                        'message' => "Invalid value for column '{$column_name}': '{$truncated_value}'. {$guidance}",
                     ];
                     // No need to set flag here as this is the last check
                 }
