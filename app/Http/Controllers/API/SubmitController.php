@@ -133,7 +133,7 @@ class SubmitController extends Controller
                     }
                     else
                     {
-                        $job->addEvent('SID $submision->sid encountered submission errors');
+                        $job->addEvent('SID ' . $submission->sid . ' encountered submission errors');
                         $submission->submission_errors = $status;
                         // Errors are determined by submission_errors via has_errors accessor
                         $job->submissions()->save($submission);
