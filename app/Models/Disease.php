@@ -226,18 +226,13 @@ class Disease extends Model
         if (empty($id))
             return null;
 
-        // Separate out prefix and identifier
+        // Separate out prefix and identifier — requires CURIE format (PREFIX:ID)
         $parts = explode(':', basename(trim($id)));
 
-        // If a prefix is omitted, assume it is a MIM number
+        // Reject bare values without a prefix — callers must supply a proper CURIE
         if (!isset($parts[1]))
         {
-            if (is_numeric($id)) {
-                $curie = 'OMIM:' . $id;
-                $record = self::rosettaOmim($curie);
-            } else {
-                $record = null;
-            }
+            return null;
         }
         else
         {
@@ -295,6 +290,49 @@ class Disease extends Model
         }
 
         return $record;
+    }
+
+
+    /**
+     * Stricter validation for submissions — ensures the MONDO mapping is
+     * discoverable via xrefs (the same path the Phase 2 processing cache uses).
+     *
+     * For OMIM IDs, rosetta() may find a MONDO record via the mondo_id FK on the
+     * OMIM record, but if the MONDO record doesn't list that OMIM ID in its xrefs,
+     * the Phase 2 cache won't find it either.  This method rejects those cases so
+     * Phase 1 validation is consistent with Phase 2 processing.
+     *
+     * @param string $id The disease identifier in CURIE format (PREFIX:ID)
+     * @return Disease|null The MONDO disease record, or null if not resolvable via xrefs
+     */
+    public static function rosettaForSubmission($id): ?Disease
+    {
+        $result = self::rosetta($id);
+        if ($result === null) {
+            return null;
+        }
+
+        // Only OMIM IDs need the extra xref check — MONDO/Orphanet map directly
+        $normalized = trim($id);
+        $parts = explode(':', $normalized);
+        if (!isset($parts[1])) {
+            return null;
+        }
+        $prefix = strtoupper($parts[0]);
+        $number = $parts[1];
+
+        if (!in_array($prefix, ['OMIM', 'OMIMPS'])) {
+            return $result;
+        }
+
+        // Verify the MONDO record's xrefs contain this OMIM number
+        $xrefOmimIds = $result->xrefs->omim_id ?? null;
+        if ($xrefOmimIds === null) {
+            return null;
+        }
+        $xrefOmimIds = is_array($xrefOmimIds) ? $xrefOmimIds : [$xrefOmimIds];
+
+        return in_array($number, $xrefOmimIds) ? $result : null;
     }
 
 

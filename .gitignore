@@ -76,3 +76,4 @@ deployment/terraform/**/*.tfstate.backup
 deployment/ansible/gencc-staging-ansible-vault-passphrase.txt
 data/mane_summary.txt
 data/uniprot_sprot_human.dat
+deployment/ansible/gencc-prod-ansible-vault-passphrase.txt

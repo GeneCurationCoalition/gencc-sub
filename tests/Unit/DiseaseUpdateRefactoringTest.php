@@ -203,7 +203,7 @@ class DiseaseUpdateRefactoringTest extends TestCase
     /**
      * Test rosetta with bare OMIM ID (no prefix)
      */
-    public function test_rosetta_handles_bare_omim_id()
+    public function test_rosetta_rejects_bare_omim_id()
     {
         $mondoDisease = Disease::factory()->create([
             'type' => Disease::TYPE_MONDO,
@@ -220,8 +220,12 @@ class DiseaseUpdateRefactoringTest extends TestCase
             'status' => Disease::STATUS_ACTIVE
         ]);
 
-        $result = Disease::rosetta('615438');  // No OMIM: prefix
+        // Bare numbers without CURIE prefix should be rejected
+        $result = Disease::rosetta('615438');
+        $this->assertNull($result);
 
+        // With proper CURIE prefix should resolve
+        $result = Disease::rosetta('OMIM:615438');
         $this->assertNotNull($result);
         $this->assertEquals($mondoDisease->id, $result->id);
     }
