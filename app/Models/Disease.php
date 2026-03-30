@@ -299,6 +299,53 @@ class Disease extends Model
 
 
     /**
+     * Stricter validation for submissions — ensures the MONDO mapping is
+     * discoverable via xrefs (the same path the Phase 2 processing cache uses).
+     *
+     * For OMIM IDs, rosetta() may find a MONDO record via the mondo_id FK on the
+     * OMIM record, but if the MONDO record doesn't list that OMIM ID in its xrefs,
+     * the Phase 2 cache won't find it either.  This method rejects those cases so
+     * Phase 1 validation is consistent with Phase 2 processing.
+     *
+     * @param string $id The disease identifier (with or without prefix)
+     * @return Disease|null The MONDO disease record, or null if not resolvable via xrefs
+     */
+    public static function rosettaForSubmission($id): ?Disease
+    {
+        $result = self::rosetta($id);
+        if ($result === null) {
+            return null;
+        }
+
+        // Only OMIM IDs need the extra xref check — MONDO/Orphanet map directly
+        $normalized = trim($id);
+        $parts = explode(':', $normalized);
+        if (isset($parts[1])) {
+            $prefix = strtoupper($parts[0]);
+            $number = $parts[1];
+        } elseif (is_numeric($normalized)) {
+            $prefix = 'OMIM';
+            $number = $normalized;
+        } else {
+            return $result;
+        }
+
+        if (!in_array($prefix, ['OMIM', 'OMIMPS'])) {
+            return $result;
+        }
+
+        // Verify the MONDO record's xrefs contain this OMIM number
+        $xrefOmimIds = $result->xrefs->omim_id ?? null;
+        if ($xrefOmimIds === null) {
+            return null;
+        }
+        $xrefOmimIds = is_array($xrefOmimIds) ? $xrefOmimIds : [$xrefOmimIds];
+
+        return in_array($number, $xrefOmimIds) ? $result : null;
+    }
+
+
+    /**
      * Resolve an OMIM ID to its canonical MONDO disease
      *
      * @param string $curie OMIM CURIE (e.g., "OMIM:615438")

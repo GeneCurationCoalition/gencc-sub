@@ -5,6 +5,9 @@ module.exports = {
       script: 'artisan',
       interpreter: 'php',
       args: 'serve --host=0.0.0.0 --port=8001',
+      env: {
+        XDEBUG_MODE: 'off',
+      },
       instances: 1,
       autorestart: true,
       watch: false,
@@ -36,6 +39,9 @@ module.exports = {
       script: 'artisan',
       interpreter: 'php',
       args: 'queue:work --tries=3 --timeout=3600 --memory=2048 --sleep=3 --max-jobs=1000',
+      env: {
+        XDEBUG_MODE: 'off',
+      },
       instances: 1,
       autorestart: true,
       watch: false,

@@ -88,8 +88,8 @@ class SubmissionFileValidation
             # MONDO:#####, OMIM:#### or ORPHA:######/Orphanet:######
             'regexp' => '/^(\d+|(MONDO|OMIM|ORPHA|Orphanet):\d+)$/i',
             'validator_with_argument' => [
-                'method' => [Disease::class, 'rosetta'],
-                'message' => 'Invalid Disease ID',
+                'method' => [Disease::class, 'rosettaForSubmission'],
+                'message' => 'No MONDO associated disease value for submitted OMIM or ORPHA disease id',
             ],
         ],
         'disease_name' => [
@@ -371,6 +371,11 @@ class SubmissionFileValidation
                     $grouped[$key]['message'] = $error['message'];
                 }
 
+                // Preserve custom group message from validator_with_argument
+                if (!empty($error['group_message'])) {
+                    $grouped[$key]['_group_message'] = $error['group_message'];
+                }
+
                 // Preserve file format error fields
                 if (!empty($error['is_file_format_error'])) {
                     $grouped[$key]['is_file_format_error'] = $error['is_file_format_error'];
@@ -412,9 +417,14 @@ class SubmissionFileValidation
             // Build summary message and details for column-level errors
             if (!empty($error['column'])) {
                 $column = $error['column'];
-                $guidance = self::get_column_guidance($column);
-                $errorVerb = ($error['error_type'] === 'invalid_field_format') ? 'Invalid format' : 'Invalid value';
-                $error['message'] = "{$errorVerb} for column '{$column}' ({$rowCount} row" . ($rowCount !== 1 ? 's' : '') . "). {$guidance}";
+                $rowLabel = $rowCount !== 1 ? "{$rowCount} rows" : "1 row";
+                if (!empty($error['_group_message'])) {
+                    $error['message'] = "{$error['_group_message']} ({$rowLabel}).";
+                } else {
+                    $guidance = self::get_column_guidance($column);
+                    $errorVerb = ($error['error_type'] === 'invalid_field_format') ? 'Invalid format' : 'Invalid value';
+                    $error['message'] = "{$errorVerb} for column '{$column}' ({$rowLabel}). {$guidance}";
+                }
 
                 // Build details array from unique values
                 if (!empty($error['_values'])) {
@@ -435,6 +445,7 @@ class SubmissionFileValidation
 
             // Clean up temporary and row-specific fields
             unset($error['_values']);
+            unset($error['_group_message']);
             unset($error['row']);
             unset($error['sgc_id']);
             unset($error['local_key']);
@@ -880,9 +891,9 @@ class SubmissionFileValidation
                 $validator_method = self::$COLUMN_MAP[$column_name]['validator_with_argument']['method'];
                 $return = call_user_func($validator_method, $value);
                 if ($return === null ) {
-                    $guidance = self::get_column_guidance($column_name);
+                    $custom_message = self::$COLUMN_MAP[$column_name]['validator_with_argument']['message'] ?? null;
                     $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
-                    $validation_results[] = [
+                    $error = [
                         'error_type' => 'invalid_field_value',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
@@ -891,8 +902,14 @@ class SubmissionFileValidation
                         'value' => $truncated_value,
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid value for column '{$column_name}': '{$truncated_value}'. {$guidance}",
+                        'message' => $custom_message
+                            ? "{$custom_message}: '{$truncated_value}'."
+                            : "Invalid value for column '{$column_name}': '{$truncated_value}'.",
                     ];
+                    if ($custom_message) {
+                        $error['group_message'] = $custom_message;
+                    }
+                    $validation_results[] = $error;
                     // No need to set flag here as this is the last check
                 }
             }

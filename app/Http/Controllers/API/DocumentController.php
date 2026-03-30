@@ -849,6 +849,9 @@ class DocumentController extends Controller
             if (empty(implode('', $row->toArray())))
                 continue;
 
+            // Trim all cell values to remove leading/trailing whitespace, tabs, and newlines
+            $row = $row->map(fn($value) => is_string($value) ? trim($value) : $value);
+
             $processedRows++;
 
             // Check wall-clock timeout (measures real time, not just CPU time)
@@ -1135,9 +1138,14 @@ class DocumentController extends Controller
                     ];
                     SpreadsheetUpdate::dispatch((object) $message);
                     $job->addEvent('SGC ID ' . $submission->sid . ' encountered submission errors');
-                    $job->update(['status' => Job::STATUS_ERRORS]);
                     $submission->submission_errors = $status;
                     // Errors are determined by submission_errors via has_errors accessor
+                    // Set draft status so the submission is editable/deletable in the UI
+                    if ($action === 'R') {
+                        $submission->status = Submission::STATUS_DRAFT_REPUBLISH;
+                    } elseif ($action === 'N') {
+                        $submission->status = Submission::STATUS_DRAFT_NEW;
+                    }
                     $submission->user_id = $document->user_id;
                     $submission->document_id = $document->id;
                     $job->submissions()->save($submission);
