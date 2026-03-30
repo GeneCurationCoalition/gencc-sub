@@ -226,18 +226,13 @@ class Disease extends Model
         if (empty($id))
             return null;
 
-        // Separate out prefix and identifier
+        // Separate out prefix and identifier — requires CURIE format (PREFIX:ID)
         $parts = explode(':', basename(trim($id)));
 
-        // If a prefix is omitted, assume it is a MIM number
+        // Reject bare values without a prefix — callers must supply a proper CURIE
         if (!isset($parts[1]))
         {
-            if (is_numeric($id)) {
-                $curie = 'OMIM:' . $id;
-                $record = self::rosettaOmim($curie);
-            } else {
-                $record = null;
-            }
+            return null;
         }
         else
         {
@@ -307,7 +302,7 @@ class Disease extends Model
      * the Phase 2 cache won't find it either.  This method rejects those cases so
      * Phase 1 validation is consistent with Phase 2 processing.
      *
-     * @param string $id The disease identifier (with or without prefix)
+     * @param string $id The disease identifier in CURIE format (PREFIX:ID)
      * @return Disease|null The MONDO disease record, or null if not resolvable via xrefs
      */
     public static function rosettaForSubmission($id): ?Disease
@@ -320,15 +315,11 @@ class Disease extends Model
         // Only OMIM IDs need the extra xref check — MONDO/Orphanet map directly
         $normalized = trim($id);
         $parts = explode(':', $normalized);
-        if (isset($parts[1])) {
-            $prefix = strtoupper($parts[0]);
-            $number = $parts[1];
-        } elseif (is_numeric($normalized)) {
-            $prefix = 'OMIM';
-            $number = $normalized;
-        } else {
-            return $result;
+        if (!isset($parts[1])) {
+            return null;
         }
+        $prefix = strtoupper($parts[0]);
+        $number = $parts[1];
 
         if (!in_array($prefix, ['OMIM', 'OMIMPS'])) {
             return $result;

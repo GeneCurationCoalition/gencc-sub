@@ -86,7 +86,7 @@ class SubmissionFileValidation
             'desc' => 'Disease ID (MONDO)',
             'required' => true,
             # MONDO:#####, OMIM:#### or ORPHA:######/Orphanet:######
-            'regexp' => '/^(\d+|(MONDO|OMIM|ORPHA|Orphanet):\d+)$/i',
+            'regexp' => '/^(MONDO|OMIM|ORPHA|Orphanet):\d+$/i',
             'validator_with_argument' => [
                 'method' => [Disease::class, 'rosettaForSubmission'],
                 'message' => 'No MONDO associated disease value for submitted OMIM or ORPHA disease id',

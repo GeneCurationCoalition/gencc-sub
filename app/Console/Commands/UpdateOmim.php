@@ -202,7 +202,7 @@ class UpdateOmim extends Command
                         if ($phenotype['key'] != 3)
                             continue;
 
-                        $disease = Disease::rosetta($phenotype['mim']);
+                        $disease = Disease::rosetta('OMIM:' . $phenotype['mim']);
 
                         if ($disease === null)
                             continue;
