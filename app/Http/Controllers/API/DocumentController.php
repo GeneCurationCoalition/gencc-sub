@@ -845,12 +845,12 @@ class DocumentController extends Controller
             // Debug logging disabled for performance - uncomment if needed
             // \Log::info("Row: " . $rownum . " Contents: " . $row);
 
+            // Trim all cell values to remove leading/trailing whitespace, tabs, and newlines
+            $row = $row->map(fn($value) => is_string($value) ? trim($value) : $value);
+
             // do not process blank lines
             if (empty(implode('', $row->toArray())))
                 continue;
-
-            // Trim all cell values to remove leading/trailing whitespace, tabs, and newlines
-            $row = $row->map(fn($value) => is_string($value) ? trim($value) : $value);
 
             $processedRows++;
 
