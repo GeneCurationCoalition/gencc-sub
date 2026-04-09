@@ -52,8 +52,10 @@ RUN apt-get update && apt-get install -y \
 # nginx: web server to convert FastCGI to HTTP
 # python3/python3-pip: required for ClinGen sync pipeline
 
-# Install Python dependencies for ClinGen sync
-RUN pip3 install --break-system-packages openpyxl mysql-connector-python
+# Install Python dependencies for ClinGen sync (single source of truth: scripts/requirements.txt)
+COPY scripts/requirements.txt /tmp/clingen-requirements.txt
+RUN pip3 install --break-system-packages -r /tmp/clingen-requirements.txt \
+    && rm /tmp/clingen-requirements.txt
 
 # Install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \

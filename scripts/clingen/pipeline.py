@@ -142,7 +142,12 @@ class ClinGenPipeline:
             self.current_step += 1
             log_step(self.current_step, self.total_steps, "Generating Excel outputs")
             if not generate_excel_outputs(self.output_config):
-                log_warn("Excel generation had some issues")
+                log_error(
+                    "Excel generation failed. This is usually caused by a missing "
+                    "`openpyxl` dependency. Install it via: "
+                    "pip install -r scripts/requirements.txt"
+                )
+                return False
 
             # Step 8: Cleanup
             self.current_step += 1
