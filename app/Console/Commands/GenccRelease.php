@@ -1442,7 +1442,7 @@ class GenccRelease extends Command
         $currentDir = $baseDir . '/current';
 
         // Ensure format subdirectories exist
-        foreach (['csv', 'tsv', 'xlsx', 'xls'] as $format) {
+        foreach (['csv', 'tsv', 'xlsx'] as $format) {
             $formatDir = $currentDir . '/' . $format;
             if (!File::isDirectory($formatDir)) {
                 File::makeDirectory($formatDir, 0755, true);
@@ -1494,25 +1494,6 @@ class GenccRelease extends Command
             $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
         }
 
-        // Generate XLS
-        try {
-            $xlsDir = $currentDir . '/xls';
-            $xlsTimestamped = $xlsDir . '/' . $timestampedBase . '.xls';
-            Excel::store($export, 'public/current/xls/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
-            $xlsContent = File::get($xlsTimestamped);
-            $this->uploadToGcs($xlsContent, "current/xls/{$timestampedBase}.xls",
-                'application/vnd.ms-excel', $xlsTimestamped);
-
-            $xlsLatest = $xlsDir . '/' . $latestBase . '.xls';
-            File::copy($xlsTimestamped, $xlsLatest);
-            $this->uploadToGcs($xlsContent, "current/xls/{$latestBase}.xls",
-                'application/vnd.ms-excel', $xlsLatest);
-            $this->info("  XLS: current/xls/{$timestampedBase}.xls");
-            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
-        } catch (\Exception $e) {
-            $this->warn("  Failed to generate XLS: {$e->getMessage()}");
-        }
-
         // Generate TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
         try {
             $tsvExport = new ReleaseSubmissionExport(delimiter: "\t");
@@ -1561,7 +1542,7 @@ class GenccRelease extends Command
         $legacyDir = $baseDir . '/legacy';
 
         // Ensure format subdirectories exist
-        foreach (['csv', 'tsv', 'xlsx', 'xls'] as $format) {
+        foreach (['csv', 'tsv', 'xlsx'] as $format) {
             $formatDir = $legacyDir . '/' . $format;
             if (!File::isDirectory($formatDir)) {
                 File::makeDirectory($formatDir, 0755, true);
@@ -1605,25 +1586,6 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
-        }
-
-        // Generate legacy XLS
-        try {
-            $xlsDir = $legacyDir . '/xls';
-            $xlsTimestamped = $xlsDir . '/' . $timestampedBase . '.xls';
-            Excel::store($legacyExport, 'public/legacy/xls/' . $timestampedBase . '.xls', 'local', \Maatwebsite\Excel\Excel::XLS);
-            $xlsContent = File::get($xlsTimestamped);
-            $this->uploadToGcs($xlsContent, "legacy/xls/{$timestampedBase}.xls",
-                'application/vnd.ms-excel', $xlsTimestamped);
-
-            $xlsLatest = $xlsDir . '/' . $latestBase . '.xls';
-            File::copy($xlsTimestamped, $xlsLatest);
-            $this->uploadToGcs($xlsContent, "legacy/xls/{$latestBase}.xls",
-                'application/vnd.ms-excel', $xlsLatest);
-            $this->info("    XLS: legacy/xls/{$timestampedBase}.xls");
-            $this->deleteLocalFilesAfterGcsUpload([$xlsTimestamped, $xlsLatest]);
-        } catch (\Exception $e) {
-            $this->warn("    Failed to generate legacy XLS: {$e->getMessage()}");
         }
 
         // Generate legacy TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
