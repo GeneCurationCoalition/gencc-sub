@@ -41,6 +41,9 @@ php81.sh
 __pycache__/
 *.pyc
 
+# Local Python venv for ClinGen sync pipeline (created via `python3 -m venv .venv`)
+/.venv/
+
 # Database backups
 /data/*.sql
 

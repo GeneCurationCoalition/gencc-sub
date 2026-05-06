@@ -25,6 +25,11 @@ composer install          # Install PHP dependencies
 npm install              # Install JavaScript dependencies
 php artisan key:generate # Generate application key (if needed)
 php artisan migrate      # Run database migrations
+
+# Python venv for the ClinGen sync pipeline (used by `php artisan clingen:sync`).
+# The artisan command auto-detects .venv/bin/python3 and falls back to system python3.
+python3 -m venv .venv
+.venv/bin/pip install -r scripts/requirements.txt
 ```
 
 ### Development

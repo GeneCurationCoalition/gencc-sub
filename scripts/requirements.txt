@@ -1,0 +1,11 @@
+# Python dependencies for the ClinGen sync pipeline (scripts/clingen/).
+# Used by both the local .venv and the production Docker image.
+#
+# Local setup:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r scripts/requirements.txt
+#
+# Production: installed by Dockerfile via `pip3 install -r scripts/requirements.txt`.
+
+mysql-connector-python>=8.0
+openpyxl>=3.1

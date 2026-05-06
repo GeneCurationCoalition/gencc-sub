@@ -48,10 +48,14 @@ class GeneGraphProcessor:
         """
         log_info(f"Downloading GeneGraph data from {self.config.genegraph_url}...")
 
-        if self.config.genegraph_download.exists() and not force:
-            log_warn("File already exists. Skipping download.")
-            log_warn(f"Delete {self.config.genegraph_download} to re-download.")
-            return self.config.genegraph_download
+        if self.config.genegraph_download.exists():
+            if force:
+                log_info("Removing cached file to fetch latest version...")
+                self.config.genegraph_download.unlink()
+            else:
+                log_warn("File already exists. Skipping download.")
+                log_warn(f"Delete {self.config.genegraph_download} to re-download.")
+                return self.config.genegraph_download
 
         self.config.genegraph_download.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(self.config.genegraph_url, self.config.genegraph_download)

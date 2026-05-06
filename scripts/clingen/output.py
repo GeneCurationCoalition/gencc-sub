@@ -276,6 +276,15 @@ def generate_excel_outputs(output_config: OutputConfig = None) -> bool:
 
     log_section("Generating Excel Output Files")
 
+    # Hard fail upfront if openpyxl is missing — don't silently continue and
+    # leave behind stale XLSX files from a previous run.
+    if not HAS_OPENPYXL:
+        log_error(
+            "openpyxl is not installed. Excel output cannot be generated. "
+            "Install dependencies with: pip install -r scripts/requirements.txt"
+        )
+        return False
+
     success = True
 
     # All current submissions
