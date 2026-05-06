@@ -73,7 +73,7 @@ The `nginx_tls` role deploys several layers of abuse prevention, configured via 
 
 **IP blocklist** — `gencc-ip-blocklist.conf.j2` renders `deny` directives from the `gencc_blocked_ips` Ansible variable. Re-run the playbook to update.
 
-**Security headers** — HSTS, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy are set on all responses (including errors). HSTS max-age is configurable per environment (`gencc_hsts_max_age`).
+**Security headers** — HSTS, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy are set on the main HTTPS application responses (including error responses from that vhost). Redirect-only vhosts may still return bare `301` responses without these headers. HSTS max-age is configurable per environment (`gencc_hsts_max_age`).
 
 **fail2ban** — Monitors nginx logs over longer windows and bans repeat offenders at the iptables level. Four jails are configured:
 
