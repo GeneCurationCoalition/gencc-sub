@@ -236,12 +236,19 @@ class GeneGraphProcessor:
         contrib_id = eval_contrib.get('id', '')
         date = eval_contrib.get('date', '')
 
-        # Extract UUID: take path after /r/ and strip the _contrib suffix
+        # Extract and validate UUID from the path after /r/.
+        # Accept optional "assertion_" prefix and optional contrib-style suffixes.
         uuid = ''
         if '/r/' in contrib_id:
             path_part = contrib_id.split('/r/')[-1]
-            # Remove known suffixes like _contrib, _publish_contrib, etc.
-            uuid = re.sub(r'_\w*contrib$', '', path_part)
+            match = re.fullmatch(
+                r'(?:assertion_)?'
+                r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+                r'(?:_\w*contrib)?',
+                path_part,
+            )
+            if match:
+                uuid = match.group(1)
 
         if not uuid or not date:
             return ''
