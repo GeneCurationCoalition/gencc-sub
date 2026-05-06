@@ -127,7 +127,8 @@ class GeneGraphProcessor:
             # SOP version and classification
             sop_version = data.get('specifiedBy', '')
             classification = data.get('classification', '')
-            classification_id = get_classification_id(classification).upper() if get_classification_id(classification) else ''
+            raw_classification_id = get_classification_id(classification)
+            classification_id = raw_classification_id.upper() if raw_classification_id else ''
 
             # Notes
             notes = self._clean_notes(data.get('dc:description', ''))
