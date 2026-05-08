@@ -37,6 +37,17 @@ gencc_submit_hostname_redirects: []
 gencc_search_hostname_redirects: []
 
 # -----------------------------------------------------------------------------
+# Security hardening
+# -----------------------------------------------------------------------------
+# HSTS max-age in seconds (1 year). Override to 300 on staging.
+gencc_hsts_max_age: 31536000
+
+# IPs to block at nginx level (individual IPs and CIDR ranges)
+gencc_blocked_ips: []
+  # - 185.100.157.14
+  # - 47.246.164.0/24
+
+# -----------------------------------------------------------------------------
 # Database bootstrap
 # -----------------------------------------------------------------------------
 # Choose one:

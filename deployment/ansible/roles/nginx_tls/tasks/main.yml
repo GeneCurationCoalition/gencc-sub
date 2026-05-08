@@ -1,9 +1,10 @@
 ---
-- name: Install nginx + certbot dependencies
+- name: Install nginx + certbot + fail2ban dependencies
   ansible.builtin.apt:
     name:
       - nginx
       - certbot
+      - fail2ban
       - ca-certificates
       - curl
     state: present
@@ -24,6 +25,33 @@
     owner: root
     group: root
     mode: "0755"
+
+- name: Deploy nginx security config (http-level rate limits, bot maps)
+  ansible.builtin.template:
+    src: gencc-security.conf.j2
+    dest: /etc/nginx/conf.d/gencc-security.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
+
+- name: Deploy nginx IP blocklist
+  ansible.builtin.template:
+    src: gencc-ip-blocklist.conf.j2
+    dest: /etc/nginx/snippets/gencc-ip-blocklist.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
+
+- name: Deploy nginx proxy params snippet
+  ansible.builtin.template:
+    src: gencc-proxy-params.conf.j2
+    dest: /etc/nginx/snippets/gencc-proxy-params.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
 
 - name: Disable default nginx site
   ansible.builtin.file:
@@ -91,9 +119,80 @@
     - gencc_le_cert.stat.exists
   notify: reload nginx
 
+- name: Validate nginx config syntax
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Render nginx config for hardening validation
+  ansible.builtin.command: nginx -T
+  register: gencc_nginx_rendered_config
+  changed_when: false
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists
+
+- name: Assert hardened HTTPS nginx config is rendered
+  ansible.builtin.assert:
+    that:
+      - "'access_log /var/log/nginx/access.log gencc' in gencc_nginx_rendered_config.stdout"
+      - "'limit_req zone=general' in gencc_nginx_rendered_config.stdout"
+      - "'limit_req zone=search' in gencc_nginx_rendered_config.stdout"
+      - "'limit_conn conn_per_ip 30' in gencc_nginx_rendered_config.stdout"
+      - "'location ^~ /api/pubmed' in gencc_nginx_rendered_config.stdout"
+    fail_msg: "Rendered nginx config is missing expected GenCC hardening directives."
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists
+
 - name: Enable certbot renewal timer
   ansible.builtin.service:
     name: certbot.timer
     state: started
     enabled: true
   when: gencc_enable_letsencrypt | bool
+
+# ---------------------------------------------------------------------------
+# fail2ban
+# ---------------------------------------------------------------------------
+
+- name: Deploy fail2ban jail config
+  ansible.builtin.template:
+    src: fail2ban/jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart fail2ban
+
+- name: Deploy fail2ban nginx rate-limit filter
+  ansible.builtin.template:
+    src: fail2ban/filter-nginx-ratelimit.conf.j2
+    dest: /etc/fail2ban/filter.d/nginx-ratelimit.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart fail2ban
+
+- name: Deploy fail2ban nginx forbidden filter
+  ansible.builtin.template:
+    src: fail2ban/filter-nginx-forbidden.conf.j2
+    dest: /etc/fail2ban/filter.d/nginx-forbidden.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart fail2ban
+
+- name: Deploy fail2ban nginx botsearch filter
+  ansible.builtin.template:
+    src: fail2ban/filter-nginx-botsearch.conf.j2
+    dest: /etc/fail2ban/filter.d/nginx-botsearch.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true

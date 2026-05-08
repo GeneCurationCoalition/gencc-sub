@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Matches 403 responses from bot-blocked requests in the nginx access log.
+# Only triggers when the gencc log format shows bot=1, so legitimate
+# application 403s (authorization failures) are not counted.
+[Definition]
+failregex = ^<HOST> - \S+ \[.*\] "\S+ \S+ \S+" 403 .* bot=1
+ignoreregex =

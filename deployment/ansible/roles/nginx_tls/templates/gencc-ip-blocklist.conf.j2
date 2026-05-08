@@ -1,0 +1,5 @@
+# gencc-ip-blocklist.conf — IP deny list managed via Ansible.
+# Add IPs/CIDRs to the gencc_blocked_ips variable and re-run the playbook.
+{% for ip in gencc_blocked_ips | default([]) %}
+deny {{ ip }};
+{% endfor %}

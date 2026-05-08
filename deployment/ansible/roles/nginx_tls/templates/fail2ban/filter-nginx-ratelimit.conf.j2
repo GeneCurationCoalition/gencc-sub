@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Matches nginx error.log rejections from both request-rate limits
+# (limit_req) and per-IP connection limits (limit_conn).
+[Definition]
+failregex = ^\s*\[error\] \d+#\d+: \*\d+ limiting requests, excess: [\d.]+ by zone "\S+", client: <HOST>,
+            ^\s*\[error\] \d+#\d+: \*\d+ limiting connections by zone "\S+", client: <HOST>,
+ignoreregex =

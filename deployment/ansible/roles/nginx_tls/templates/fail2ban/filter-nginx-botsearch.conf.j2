@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# Matches vulnerability probe paths in the nginx access log.
+[Definition]
+failregex = ^<HOST> - \S+ \[.*\] "(GET|POST|HEAD) /(wp-admin|wp-login|wp-content|\.env|\.git|phpinfo|phpmyadmin|admin\.php|cgi-bin|xmlrpc|actuator|\.aws|vendor/phpunit|telescope/requests|_ignition)
+ignoreregex =

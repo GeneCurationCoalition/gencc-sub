@@ -1,0 +1,102 @@
+# gencc-security.conf — http-level security directives
+# Included from /etc/nginx/conf.d/ so it applies to all server blocks.
+
+# ---------------------------------------------------------------------------
+# Rate-limit zones (10m ≈ 160 000 unique IPs)
+# ---------------------------------------------------------------------------
+
+# General page requests (both apps)
+limit_req_zone $binary_remote_addr zone=general:10m     rate=10r/s;
+
+# Search/browse pages (gencc-search)
+limit_req_zone $binary_remote_addr zone=search:10m      rate=8r/s;
+
+# Data exports (gencc-search: /download/action/*) — heavy DB queries
+limit_req_zone $binary_remote_addr zone=exports:5m      rate=2r/m;
+
+# Auth endpoints (login, register, forgot-password, reset-password)
+limit_req_zone $binary_remote_addr zone=auth:5m         rate=5r/m;
+
+limit_req_status 429;
+
+# ---------------------------------------------------------------------------
+# Connection-limit zone
+# ---------------------------------------------------------------------------
+
+limit_conn_zone $binary_remote_addr zone=conn_per_ip:10m;
+limit_conn_status 429;
+
+# ---------------------------------------------------------------------------
+# Bot-blocking maps
+# ---------------------------------------------------------------------------
+
+map $http_user_agent $block_bot {
+    default 0;
+
+    # Empty user agent
+    ""                          1;
+
+    # SEO crawlers
+    ~*SemrushBot                1;
+    ~*AhrefsBot                 1;
+    ~*MJ12bot                   1;
+    ~*DotBot                    1;
+    ~*Barkrowler                1;
+    ~*PetalBot                  1;
+    ~*BLEXBot                   1;
+    ~*DataForSeoBot             1;
+    ~*SeznamBot                 1;
+    ~*Sogou                     1;
+    ~*YandexBot                 1;
+    ~*MegaIndex                 1;
+    ~*BaiduSpider               1;
+
+    # AI training bots
+    ~*ClaudeBot                 1;
+    ~*GPTBot                    1;
+    ~*ChatGPT-User              1;
+    ~*CCBot                     1;
+    ~*Amazonbot                 1;
+    ~*Google-Extended            1;
+    ~*FacebookBot               1;
+    ~*Meta-ExternalAgent         1;
+    ~*anthropic-ai              1;
+    ~*Claude-Web                1;
+    ~*Bytespider                1;
+    ~*Diffbot                   1;
+    ~*Applebot-Extended         1;
+    ~*PerplexityBot             1;
+    ~*Cohere-ai                 1;
+
+    # Vulnerability scanners
+    ~*Nuclei                    1;
+    ~*sqlmap                    1;
+    ~*nikto                     1;
+    ~*Nessus                    1;
+    ~*masscan                   1;
+    ~*ZmEu                      1;
+}
+
+# Paths exempt from bot blocking (downloads, health checks, robots.txt)
+map $request_uri $bot_exempt_path {
+    default                     0;
+    ~^/download/                1;
+    ~^/-/healthz                1;
+    ~^/robots\.txt              1;
+    ~^/favicon\.ico             1;
+}
+
+# Block only when bot detected AND path not exempt
+map "$block_bot:$bot_exempt_path" $deny_bot {
+    default     0;
+    "1:0"       1;
+}
+
+# ---------------------------------------------------------------------------
+# Custom log format with bot flag
+# ---------------------------------------------------------------------------
+
+log_format gencc '$remote_addr - $remote_user [$time_local] '
+                 '"$request" $status $body_bytes_sent '
+                 '"$http_referer" "$http_user_agent" '
+                 'host=$host bot=$block_bot';
