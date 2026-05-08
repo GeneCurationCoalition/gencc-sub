@@ -107,44 +107,32 @@ class GeneGraphProcessor:
             gci_snapshot = data.get('GCISnapshot', '')
             local_id = gci_snapshot.split('/')[-1] if gci_snapshot else ''
 
-            # Extract websiteLegacyID
-            website_legacy_id_full = data.get('websiteLegacyID', '')
-            website_legacy_id = website_legacy_id_full.split('/')[-1] if website_legacy_id_full else ''
-
-            # Extract approval date from contributions
+            # Extract approval date and report URL from Evaluated contribution
             contributions = data.get('contributions')
-            approval_date = self._get_date_from_contribution(contributions, 'Approver')
+            eval_contrib = self._get_evaluated_contribution(contributions)
+            approval_date = eval_contrib.get('date', '') if eval_contrib else ''
+            public_report_url = self._build_report_url(eval_contrib)
 
-            # Extract PMIDs recursively from evidence
+            # Extract PMIDs recursively from hasEvidenceLines
             pmid_urls: Set[str] = set()
-            evidence = data.get('evidence')
-            if evidence:
-                self._extract_pmids_recursive(evidence, pmid_urls)
+            evidence_lines = data.get('hasEvidenceLines')
+            if evidence_lines:
+                self._extract_pmids_recursive(evidence_lines, pmid_urls)
             pmids = [url.split('/')[-1] for url in pmid_urls]
             pmids_sorted = sorted(pmids, key=lambda x: int(x) if x.isdigit() else 0)
             pubmed_ids = ', '.join(pmids_sorted)
 
-            # Extract subject fields
-            subject = data.get('subject', {})
-            if not isinstance(subject, dict):
-                subject = {}
-
-            # Disease
-            disease_list = self._to_list(subject.get('disease'))
-            disease_id = self._transform_disease('; '.join(disease_list)).upper()
-
-            # Gene
-            gene_list = self._to_list(subject.get('gene'))
-            gene_id = '; '.join(gene_list).upper()
-
-            # Mode of Inheritance
-            moi_list = self._to_list(subject.get('modeOfInheritance'))
-            mode_of_inheritance = self._transform_moi('; '.join(moi_list)).upper()
+            # Extract gene, disease, MOI from proposition
+            proposition = data.get('proposition', {})
+            gene_id = self._transform_gene(proposition.get('subjectGene', ''))
+            disease_id = self._transform_disease(proposition.get('objectCondition', ''))
+            mode_of_inheritance = self._transform_moi(proposition.get('qualifierModeOfInheritance', ''))
 
             # SOP version and classification
             sop_version = data.get('specifiedBy', '')
-            classification = data.get('evidenceStrength', '')
-            classification_id = get_classification_id(classification).upper() if get_classification_id(classification) else ''
+            classification = data.get('classification', '')
+            raw_classification_id = get_classification_id(classification)
+            classification_id = raw_classification_id.upper() if raw_classification_id else ''
 
             # Notes
             notes = self._clean_notes(data.get('dc:description', ''))
@@ -158,7 +146,7 @@ class GeneGraphProcessor:
                 'classification_id': classification_id,
                 'classification': classification,
                 'report_date': self._format_date_ymd(approval_date),
-                'public_report_url': f"https://search.clinicalgenome.org/kb/gene-validity/CGGV:{website_legacy_id}{approval_date}",
+                'public_report_url': public_report_url,
                 'notes': notes,
                 'pubmed_ids': pubmed_ids,
                 'assertion_criteria_url': get_assertion_criteria_url(sop_version)
@@ -228,54 +216,91 @@ class GeneGraphProcessor:
         return self.process_all()
 
     # Helper methods
-    def _to_list(self, value: Any) -> List[str]:
-        """Convert value to list of strings."""
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(v) for v in value]
-        return [str(value)]
-
-    def _get_date_from_contribution(self, contributions: Any, role: str) -> str:
-        """Extract date from contributions for a specific role."""
+    def _get_evaluated_contribution(self, contributions: Any) -> Optional[Dict]:
+        """Extract the Evaluated contribution dict."""
         if not contributions or not isinstance(contributions, list):
-            return ""
+            return None
 
         for contrib in contributions:
             if not isinstance(contrib, dict):
                 continue
-            if contrib.get('role') == role:
-                date = contrib.get('date')
-                if date:
-                    if isinstance(date, list):
-                        return date[-1] if date else ""
-                    return str(date)
-        return ""
+            if contrib.get('activityType') == 'Evaluated':
+                return contrib
+        return None
+
+    def _build_report_url(self, eval_contrib: Optional[Dict]) -> str:
+        """
+        Build public report URL from Evaluated contribution.
+
+        Extracts UUID from contribution id and appends the date.
+        Example: https://search.clinicalgenome.org/kb/gene-validity/CGGV:assertion_<uuid>-<date>
+        """
+        if not eval_contrib:
+            return ''
+
+        contrib_id = eval_contrib.get('id', '')
+        date = eval_contrib.get('date', '')
+
+        # Extract and validate UUID from the path after /r/.
+        # Accept optional "assertion_" prefix and optional contrib-style suffixes.
+        uuid = ''
+        if '/r/' in contrib_id:
+            path_part = contrib_id.split('/r/')[-1]
+            match = re.fullmatch(
+                r'(?:assertion_)?'
+                r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+                r'(?:_\w*contrib)?',
+                path_part,
+            )
+            if match:
+                uuid = match.group(1)
+
+        if not uuid or not date:
+            return ''
+
+        return f"https://search.clinicalgenome.org/kb/gene-validity/CGGV:assertion_{uuid}-{date}"
 
     def _extract_pmids_recursive(self, obj: Any, pmids: Set[str]) -> None:
-        """Extract PubMed URLs from evidence objects."""
+        """Extract PubMed URLs from hasEvidenceLines/hasEvidenceItems."""
         if isinstance(obj, dict):
-            if 'evidence' in obj:
-                evidence_value = obj['evidence']
-                if isinstance(evidence_value, list):
-                    for evidence_item in evidence_value:
-                        if isinstance(evidence_item, dict):
-                            source = evidence_item.get('dc:source')
-                            if source and isinstance(source, str) and 'pubmed' in source:
-                                pmids.add(source)
+            # Check dc:source for PubMed URLs
+            source = obj.get('dc:source')
+            if source and isinstance(source, str) and 'pubmed' in source:
+                pmids.add(source)
             for value in obj.values():
                 self._extract_pmids_recursive(value, pmids)
         elif isinstance(obj, list):
             for item in obj:
                 self._extract_pmids_recursive(item, pmids)
 
-    def _transform_disease(self, disease: str) -> str:
-        """Transform disease ID from obo:MONDO_999999 to MONDO:999999."""
-        return re.sub(r'obo:MONDO_', 'MONDO:', disease)
+    def _to_str(self, value: Any) -> str:
+        """Coerce a value that may be a list to a semicolon-separated string."""
+        if value is None:
+            return ''
+        if isinstance(value, list):
+            return '; '.join(str(v) for v in value)
+        return str(value)
 
-    def _transform_moi(self, moi: str) -> str:
+    def _transform_gene(self, gene: Any) -> str:
+        """Transform gene ID from hgnc:5036 to HGNC:5036."""
+        gene = self._to_str(gene)
+        if not gene:
+            return ''
+        return gene.upper()
+
+    def _transform_disease(self, disease: Any) -> str:
+        """Transform disease ID from obo:MONDO_999999 to MONDO:999999."""
+        disease = self._to_str(disease)
+        if not disease:
+            return ''
+        return re.sub(r'(?i)obo:MONDO_', 'MONDO:', disease).upper()
+
+    def _transform_moi(self, moi: Any) -> str:
         """Transform MOI from obo:HP_999999 to HP:999999."""
-        return re.sub(r'obo:HP_', 'HP:', moi)
+        moi = self._to_str(moi)
+        if not moi:
+            return ''
+        return re.sub(r'(?i)obo:HP_', 'HP:', moi).upper()
 
     def _clean_notes(self, notes: Any) -> str:
         """Clean and normalize notes field."""

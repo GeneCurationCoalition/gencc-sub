@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## General Rules
+
+- Don't assume. Don't hide confusion. Surface tradeoffs.
+- Minimum code that solves the problem. Nothing speculative.
+- Touch only what you must. Clean up only your own mess.
+- Define success criteria. Loop until verified.
+
 ## Project Overview
 
 GenCC Submission Portal - A Laravel 10 + Inertia.js + Vue 3 application for managing gene-disease relationship submissions. This system processes both API and file-based submissions, validates them against external data sources (HGNC, MONDO, OMIM), and publishes curated data.

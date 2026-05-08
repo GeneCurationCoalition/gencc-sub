@@ -23,8 +23,11 @@ COMPARISON_DIR = DATA_DIR / "comparison"
 class SourceConfig:
     """Configuration for external data sources"""
     # GeneGraph (Gene Validity)
-    genegraph_url: str = "https://storage.googleapis.com/genegraph-public/gene-validity-jsonld-latest.tar.gz"
-    genegraph_download: Path = field(default_factory=lambda: DATA_DIR / "gene-validity-jsonld-latest.tar.gz")
+    genegraph_url: str = field(default_factory=lambda: os.getenv(
+        'GENEGRAPH_URL',
+        'https://storage.googleapis.com/genegraph-stage-public/clingen-gene-validity-json-latest.tar.gz'
+    ))
+    genegraph_download: Path = field(default_factory=lambda: DATA_DIR / "clingen-gene-validity-json-latest.tar.gz")
     genegraph_extract_dir: Path = field(default_factory=lambda: DATA_DIR / "gene_validity_extracted")
     genegraph_output: Path = field(default_factory=lambda: DATA_DIR / "gene_validity_processed.tsv")
 
