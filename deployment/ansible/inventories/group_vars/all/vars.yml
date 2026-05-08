@@ -31,6 +31,9 @@ gencc_container_db_host: 10.0.2.2
 # TLS
 gencc_enable_letsencrypt: true
 gencc_letsencrypt_email: gencc-tech@broadinstitute.org
+gencc_certbot_valid_min_seconds: 0
+gencc_certbot_retries: 5
+gencc_certbot_retry_delay: 60
 
 # Hostname redirects (301 → canonical). Override per-environment as needed.
 gencc_submit_hostname_redirects: []
