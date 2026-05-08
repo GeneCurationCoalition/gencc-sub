@@ -305,9 +305,15 @@ class AdminController extends Controller
         ]);
 
         $submitter->name = $validated['name'];
-        $submitter->description = $validated['description'] ?? null;
-        $submitter->website = $validated['website'] ?? null;
-        $submitter->assertion = $validated['assertion'] ?? null;
+        if ($request->has('description')) {
+            $submitter->description = $validated['description'] ?? null;
+        }
+        if ($request->has('website')) {
+            $submitter->website = $validated['website'] ?? null;
+        }
+        if ($request->has('assertion')) {
+            $submitter->assertion = $validated['assertion'] ?? null;
+        }
 
         if (isset($validated['status'])) {
             $submitter->status = $validated['status'];
