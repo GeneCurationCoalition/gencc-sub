@@ -119,6 +119,31 @@
     - gencc_le_cert.stat.exists
   notify: reload nginx
 
+- name: Validate nginx config syntax
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Render nginx config for hardening validation
+  ansible.builtin.command: nginx -T
+  register: gencc_nginx_rendered_config
+  changed_when: false
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists
+
+- name: Assert hardened HTTPS nginx config is rendered
+  ansible.builtin.assert:
+    that:
+      - "'access_log /var/log/nginx/access.log gencc' in gencc_nginx_rendered_config.stdout"
+      - "'limit_req zone=general' in gencc_nginx_rendered_config.stdout"
+      - "'limit_req zone=search' in gencc_nginx_rendered_config.stdout"
+      - "'limit_conn conn_per_ip 30' in gencc_nginx_rendered_config.stdout"
+      - "'location ^~ /api/pubmed' in gencc_nginx_rendered_config.stdout"
+    fail_msg: "Rendered nginx config is missing expected GenCC hardening directives."
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists
+
 - name: Enable certbot renewal timer
   ansible.builtin.service:
     name: certbot.timer
