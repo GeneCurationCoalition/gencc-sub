@@ -58,6 +58,26 @@
     path: /etc/nginx/sites-enabled/default
     state: absent
 
+- name: Check if Let's Encrypt certificate exists (pre-issuance)
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem"
+  register: gencc_le_cert_before
+  when:
+    - gencc_enable_letsencrypt | bool
+
+- name: Check if existing Let's Encrypt certificate is still valid
+  ansible.builtin.command: >
+    openssl x509
+    -checkend {{ gencc_certbot_valid_min_seconds }}
+    -noout
+    -in /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem
+  register: gencc_le_cert_validity
+  changed_when: false
+  failed_when: false
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert_before.stat.exists | default(false)
+
 - name: Install temporary HTTP-only nginx config (pre-certificate)
   ansible.builtin.template:
     src: gencc-http.conf.j2
@@ -66,6 +86,8 @@
     group: root
     mode: "0644"
   notify: reload nginx
+  when:
+    - not (gencc_enable_letsencrypt | bool) or not (gencc_le_cert_before.stat.exists | default(false))
 
 - name: Enable GenCC nginx site
   ansible.builtin.file:
@@ -98,9 +120,16 @@
     {% for d in gencc_letsencrypt_domains %}-d {{ d }} {% endfor %}
     --deploy-hook "systemctl reload nginx"
   register: gencc_certbot_result
-  changed_when: "'no action taken' not in (gencc_certbot_result.stdout | default(''))"
+  changed_when:
+    - gencc_certbot_result.rc == 0
+    - "'no action taken' not in (gencc_certbot_result.stdout | default(''))"
+  failed_when: gencc_certbot_result.rc != 0
+  retries: "{{ gencc_certbot_retries }}"
+  delay: "{{ gencc_certbot_retry_delay }}"
+  until: gencc_certbot_result.rc == 0
   when:
     - gencc_enable_letsencrypt | bool
+    - not (gencc_le_cert_before.stat.exists | default(false)) or (gencc_le_cert_validity.rc | default(1)) != 0
 
 - name: Check if Let's Encrypt certificate exists (post-issuance)
   ansible.builtin.stat:
@@ -140,6 +169,14 @@
       - "'limit_conn conn_per_ip 30' in gencc_nginx_rendered_config.stdout"
       - "'location ^~ /api/pubmed' in gencc_nginx_rendered_config.stdout"
     fail_msg: "Rendered nginx config is missing expected GenCC hardening directives."
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert.stat.exists
+
+- name: Reload nginx with validated HTTPS config
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
   when:
     - gencc_enable_letsencrypt | bool
     - gencc_le_cert.stat.exists
