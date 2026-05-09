@@ -123,7 +123,9 @@ class GeneGraphProcessor:
             pubmed_ids = ', '.join(pmids_sorted)
 
             # Extract gene, disease, MOI from proposition
-            proposition = data.get('proposition', {})
+            # The proposition may be inline (full object) or a JSON-LD reference
+            # (dict with only an 'id' key). Resolve references before extracting.
+            proposition = self._resolve_reference(data, data.get('proposition', {}))
             gene_id = self._transform_gene(proposition.get('subjectGene', ''))
             disease_id = self._transform_disease(proposition.get('objectCondition', ''))
             mode_of_inheritance = self._transform_moi(proposition.get('qualifierModeOfInheritance', ''))
@@ -272,6 +274,43 @@ class GeneGraphProcessor:
         elif isinstance(obj, list):
             for item in obj:
                 self._extract_pmids_recursive(item, pmids)
+
+    @staticmethod
+    def _resolve_reference(document: Dict, obj: Any) -> Dict:
+        """Resolve a JSON-LD reference to its full inline object.
+
+        In the GeneGraph JSON-LD data, a nested object (e.g. ``proposition``)
+        can appear in two forms:
+
+        * **Inline** — a dict containing the full set of fields.
+        * **Reference** — a dict whose only key is ``id``, pointing to an
+          object defined elsewhere in the document.
+
+        When ``obj`` is a reference, this method searches ``dc:isVersionOf``
+        for an object whose ``id`` matches and returns it.  If no match is
+        found (or ``obj`` is already inline), the original ``obj`` is returned
+        unchanged.
+        """
+        if not isinstance(obj, dict):
+            return obj if isinstance(obj, dict) else {}
+
+        # Already inline — has more than just 'id'
+        if set(obj.keys()) != {'id'}:
+            return obj
+
+        ref_id = obj['id']
+
+        # Search dc:isVersionOf for the matching object
+        version_of = document.get('dc:isVersionOf')
+        if version_of is None:
+            return obj
+
+        candidates = version_of if isinstance(version_of, list) else [version_of]
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get('id') == ref_id:
+                return candidate
+
+        return obj
 
     def _to_str(self, value: Any) -> str:
         """Coerce a value that may be a list to a semicolon-separated string."""
