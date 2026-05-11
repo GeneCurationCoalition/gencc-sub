@@ -49,6 +49,12 @@ variable "gencc_data_bucket_location" {
   default     = "us-east1"
 }
 
+variable "stage_restore_reader_service_account_email" {
+  type        = string
+  description = "Optional staging VM service account email allowed to read production backup objects."
+  default     = ""
+}
+
 variable "subnet_cidr" {
   type        = string
   description = "CIDR for the subnet."
