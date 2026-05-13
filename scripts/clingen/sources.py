@@ -292,7 +292,7 @@ class GeneGraphProcessor:
         unchanged.
         """
         if not isinstance(obj, dict):
-            return obj if isinstance(obj, dict) else {}
+            return {}
 
         # Already inline — has more than just 'id'
         if set(obj.keys()) != {'id'}:
