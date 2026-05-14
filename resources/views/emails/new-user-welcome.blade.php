@@ -26,5 +26,5 @@ Click <a href="{{ config('app.url') }}">here</a> to log into the GenCC Submissio
 	The Gene Curation Coalition (GenCC) is a global effort to harmonize gene-level resources and to facilitate
 	the consistent assessment of genes that have been reported in association with disease.
 <br/><br/>
-To learn more about GenCC, visit <a href="https://thegencc.org">thegencc.org</a>
+To learn more about GenCC, visit <a href="{{ config('app.gencc_search_url') }}">thegencc.org</a>
 @endsection

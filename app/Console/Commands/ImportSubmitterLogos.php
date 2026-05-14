@@ -14,7 +14,7 @@ class ImportSubmitterLogos extends Command
      * @var string
      */
     protected $signature = 'import:submitter-logos
-                            {--base-url=https://search.thegencc.org/brand/submitters : Base URL to download logos from}
+                            {--base-url= : Base URL to download logos from (defaults to GENCC_SEARCH_URL/brand/submitters)}
                             {--dry-run : Show what would be imported without making changes}
                             {--force : Re-import logos even if already stored in database}';
 
@@ -30,7 +30,9 @@ class ImportSubmitterLogos extends Command
      */
     public function handle()
     {
-        $baseUrl = rtrim($this->option('base-url'), '/');
+        $baseUrl = $this->option('base-url')
+            ?: config('app.gencc_search_url') . '/brand/submitters';
+        $baseUrl = rtrim($baseUrl, '/');
         $dryRun = $this->option('dry-run');
         $force = $this->option('force');
 

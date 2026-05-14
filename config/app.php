@@ -32,6 +32,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | GenCC Search Site URL
+    |--------------------------------------------------------------------------
+    |
+    | The public-facing URL of the GenCC Search site. Used for links in the
+    | UI and email templates. Varies per environment (local, staging, prod).
+    |
+    */
+
+    'gencc_search_url' => env('GENCC_SEARCH_URL', 'https://thegencc.org'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Environment
     |--------------------------------------------------------------------------
     |

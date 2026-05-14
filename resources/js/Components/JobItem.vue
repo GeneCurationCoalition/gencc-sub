@@ -1315,12 +1315,9 @@ const formatDate = (dateString) => {
                             <p class="text-sm text-yellow-700">
                                 <i class="pi pi-info-circle mr-2"></i>
                                 Please review and correct the errors below. For detailed guidance on submission requirements, refer to
-                                <a href="https://thegencc.org/submission-directions"
-                                   target="_blank"
-                                   rel="noopener noreferrer"
+                                <a href="/help"
                                    class="text-yellow-700 hover:text-yellow-900 underline font-medium">
                                     GenCC Submission Directions
-                                    <i class="pi pi-external-link text-xs ml-1"></i>
                                 </a>.
                             </p>
                         </div>

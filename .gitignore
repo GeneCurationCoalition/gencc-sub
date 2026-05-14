@@ -2,6 +2,7 @@
 .env
 php81.sh
 .envrc
+.venv/
 
 # PHP dependencies
 /vendor

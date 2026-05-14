@@ -1,9 +1,11 @@
 <script setup>
-import { router } from '@inertiajs/vue3';
+import { router, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/GuestLayout.vue';
 import Dialog from 'primevue/dialog';
 import Message from 'primevue/message';
-import { ref } from "vue";
+import { ref, computed } from "vue";
+
+const genccSearchUrl = computed(() => usePage().props.genccSearchUrl || 'https://thegencc.org');
 
 const visible = ref(false);
 const fpvisible = ref(false);
@@ -148,13 +150,13 @@ async function showLogin() {
                 </a>
             </div>
             <div class="text-center m-auto text-4xl col-span-1">
-                <a href="https://thegencc.org">
+                <a :href="genccSearchUrl">
                     <i class="pi pi-home"></i>
                     <div class="text-2xl">GenCC<br>Home</div>
                 </a>
             </div>
             <div class="text-center m-auto text-4xl col-span-1">
-                <a href="https://search.thegencc.org">
+                <a :href="genccSearchUrl">
                     <i class="pi pi-database"></i>
                     <div class="text-2xl">GenCC<br>Database</div>
                 </a>
@@ -193,7 +195,7 @@ async function showLogin() {
         <!--Copyright section-->
         <div class="w-full bg-black/10 p-4 text-center">
             © 2024 
-            <a href="https://thegencc.org/">The GenCC - All rights reserved</a>
+            <a :href="genccSearchUrl">The GenCC - All rights reserved</a>
         </div>
     </footer>
 

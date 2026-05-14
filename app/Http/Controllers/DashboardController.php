@@ -396,45 +396,42 @@ class DashboardController extends Controller
         $release_repair_reason = null;
 
         if ($is_admin && $submitter_id === null) {
-            // Check for conditions that indicate a failed/incomplete release:
-            // 1. Jobs released today but no Release record for today
-            // 2. Last run_publish failed
-            // 3. AdminProgressTracker shows stale "running" state
+            // Check for conditions that indicate a failed/incomplete release.
+            // Skip all checks while a publish operation is actively running —
+            // intermediate state (jobs released, no release record yet) is
+            // expected during normal processing and should not trigger repair.
+            $progress = \App\Services\AdminProgressTracker::get('run_publish');
+            $publishIsRunning = $progress && $progress['status'] === 'running';
 
-            $today = Carbon::today();
+            if (!$publishIsRunning) {
+                $today = Carbon::today();
 
-            // Check for jobs released today
-            $jobsReleasedToday = Job::whereDate('released_at', $today->toDateString())
-                ->where('status', Job::STATUS_RELEASED)
-                ->count();
+                // 1. Jobs released today but no Release record for today
+                $jobsReleasedToday = Job::whereDate('released_at', $today->toDateString())
+                    ->where('status', Job::STATUS_RELEASED)
+                    ->count();
 
-            // Check for Release record today
-            $releaseToday = Release::whereDate('released_at', $today->toDateString())->first();
+                $releaseToday = Release::whereDate('released_at', $today->toDateString())->first();
 
-            if ($jobsReleasedToday > 0 && !$releaseToday) {
-                $needs_release_repair = true;
-                $release_repair_reason = "Jobs were released today but no release record exists";
-            }
-
-            // Check if last run_publish failed
-            if (!$needs_release_repair && isset($admin_logs['run_publish'])) {
-                $lastRunPublish = $admin_logs['run_publish'];
-                if (!$lastRunPublish['success']) {
+                if ($jobsReleasedToday > 0 && !$releaseToday) {
                     $needs_release_repair = true;
-                    $release_repair_reason = "Last publish operation failed";
+                    $release_repair_reason = "Jobs were released today but no release record exists";
                 }
-            }
 
-            // Check for stale "running" state in AdminProgressTracker
-            if (!$needs_release_repair) {
-                $progress = \App\Services\AdminProgressTracker::get('run_publish');
-                if ($progress && $progress['status'] === 'running') {
-                    // Check if it's been running for more than 30 minutes (likely stuck)
-                    $startedAt = Carbon::parse($progress['started_at']);
-                    if ($startedAt->diffInMinutes(Carbon::now()) > 30) {
+                // 2. Last run_publish failed
+                if (!$needs_release_repair && isset($admin_logs['run_publish'])) {
+                    $lastRunPublish = $admin_logs['run_publish'];
+                    if (!$lastRunPublish['success']) {
                         $needs_release_repair = true;
-                        $release_repair_reason = "Publish operation appears stuck (running > 30 minutes)";
+                        $release_repair_reason = "Last publish operation failed";
                     }
+                }
+            } elseif ($progress) {
+                // Publish is running — only flag if stuck (> 30 minutes without updates)
+                $startedAt = Carbon::parse($progress['started_at']);
+                if ($startedAt->diffInMinutes(Carbon::now()) > 30) {
+                    $needs_release_repair = true;
+                    $release_repair_reason = "Publish operation appears stuck (running > 30 minutes)";
                 }
             }
         }

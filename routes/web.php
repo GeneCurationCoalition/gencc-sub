@@ -56,7 +56,7 @@ Route::get('/-/healthz', function () {
         }
 
         // Fallback to external URL
-        return redirect('https://search.thegencc.org/download/gene-curations-template');
+        return redirect(config('app.gencc_search_url') . '/download/gene-curations-template');
     })->name('download.template');
 
     // Download User Guide PDF (with proper cache validation)

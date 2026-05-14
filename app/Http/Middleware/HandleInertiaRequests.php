@@ -41,6 +41,9 @@ class HandleInertiaRequests extends Middleware
             // Application version (from config/app.php)
             'appVersion' => config('app.version'),
 
+            // GenCC Search site URL (environment-aware)
+            'genccSearchUrl' => config('app.gencc_search_url'),
+
             // Session idle timeout in milliseconds (for AutoLogout component)
             'sessionIdleTimeout' => (int) config('session.idle_timeout', 900000),
 

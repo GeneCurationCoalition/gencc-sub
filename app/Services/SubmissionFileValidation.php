@@ -320,7 +320,7 @@ class SubmissionFileValidation
             'date' => 'Must be a valid date in format YYYY-MM-DD or MM/DD/YYYY.',
         ];
 
-        return $guidance[$column_name] ?? 'Please check the value and refer to https://thegencc.org/submission-directions';
+        return $guidance[$column_name] ?? 'Please check the value and refer to the Help page for submission directions.';
     }
 
     /**
