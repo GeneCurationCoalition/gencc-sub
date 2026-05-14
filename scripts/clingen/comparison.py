@@ -259,6 +259,10 @@ def compare_submissions(
 
             result.matched_by_id[local_id] = target_sub
 
+            # Flag republishes (previously unpublished, now back in target)
+            if local_id in unpublished_ids:
+                result.republished.add(local_id)
+
             # Check if there are changes
             if has_changes(target_sub, db_sub):
                 result.matched_by_id_changed.add(local_id)
@@ -268,13 +272,19 @@ def compare_submissions(
 
     log_info(f"  Matched by ID: {len(result.matched_by_id)}")
     log_info(f"  With changes: {len(result.matched_by_id_changed)}")
+    if result.republished:
+        log_info(f"  Republished: {len(result.republished)}")
 
     # Phase 2: Match remaining by GDM
     log_info("Phase 2: Matching by gene+disease+MOI...")
 
-    # Build GDM index for database
+    # Build GDM index for database — only published records
+    # Unpublished DB records should not be GDM-matched; they will be
+    # handled as already_unpublished in Phase 4 instead.
     db_gdm_index: Dict[str, Submission] = {}
     for local_id in unmatched_database:
+        if local_id in unpublished_ids:
+            continue
         sub = database[local_id]
         gdm_key = sub.gdm_key()
         if gdm_key not in db_gdm_index:
@@ -295,6 +305,7 @@ def compare_submissions(
             result.matched_by_gdm.append(match)
             result.gdm_id_mapping[local_id] = db_sub.local_id
             result.sgc_mapping[local_id] = db_sub.sgc_id
+            result.republished.add(local_id)
 
             unmatched_target.discard(local_id)
             unmatched_database.discard(db_sub.local_id)
@@ -304,30 +315,85 @@ def compare_submissions(
 
     log_info(f"  Matched by GDM: {len(result.matched_by_gdm)}")
 
-    # Phase 3: Remaining target = new submissions (or republish if previously unpublished)
+    # Phase 3: Remaining target = new submissions
     log_info("Phase 3: Identifying new submissions...")
 
     for local_id in unmatched_target:
         target_sub = target[local_id]
-
-        if local_id in unpublished_ids:
-            # This is a republish - was previously unpublished
-            log_info(f"  Republish detected: {local_id}")
-
         result.new_submissions[local_id] = target_sub
 
     log_info(f"  New submissions: {len(result.new_submissions)}")
 
     # Phase 4: Remaining database = deleted submissions
+    # Skip records that are already unpublished — no action needed
     log_info("Phase 4: Identifying deleted submissions...")
 
     for local_id in unmatched_database:
         db_sub = database[local_id]
-        result.deleted_submissions[local_id] = db_sub
+        if local_id in unpublished_ids:
+            result.already_unpublished[local_id] = db_sub
+        else:
+            result.deleted_submissions[local_id] = db_sub
 
     log_info(f"  Deleted submissions: {len(result.deleted_submissions)}")
+    if result.already_unpublished:
+        log_info(
+            f"  Already unpublished (skipped): "
+            f"{len(result.already_unpublished)}"
+        )
+
+    # Phase 5: Warn about GDM overlaps between new/deleted/unpublished
+    # These are cases where the admin could republish an existing SGC
+    # instead of creating a new one.
+    _warn_gdm_overlaps(result)
 
     return result
+
+
+def _warn_gdm_overlaps(result: ComparisonResult) -> None:
+    """
+    Warn about GDM overlaps between new submissions and
+    deleted/already-unpublished DB records.
+
+    These are cases where the submitter could choose to republish
+    the existing SGC instead of creating a new one.
+    """
+    # Build GDM index of new submissions
+    new_gdm: Dict[str, Submission] = {}
+    for local_id, sub in result.new_submissions.items():
+        gdm_key = sub.gdm_key()
+        new_gdm[gdm_key] = sub
+
+    if not new_gdm:
+        return
+
+    # Check against already-unpublished DB records
+    for local_id, db_sub in result.already_unpublished.items():
+        gdm_key = db_sub.gdm_key()
+        if gdm_key in new_gdm:
+            new_sub = new_gdm[gdm_key]
+            log_warn(
+                f"GDM overlap: new submission {new_sub.local_id} "
+                f"shares GDM ({gdm_key}) with unpublished "
+                f"{db_sub.sgc_id} (local_id: {db_sub.local_id}). "
+                f"A new SGC will be created. To republish the "
+                f"existing SGC, use the original local_id."
+            )
+
+    # Check against deleted (being unpublished) DB records
+    for local_id, db_sub in result.deleted_submissions.items():
+        gdm_key = db_sub.gdm_key()
+        if gdm_key in new_gdm:
+            new_sub = new_gdm[gdm_key]
+            log_warn(
+                f"GDM overlap: new submission {new_sub.local_id} "
+                f"and unpublish of {db_sub.sgc_id} "
+                f"(local_id: {db_sub.local_id}) share the same "
+                f"GDM ({gdm_key}). Net effect: old SGC will be "
+                f"unpublished and a new SGC created. To republish "
+                f"the existing SGC instead, use the original "
+                f"local_id."
+            )
 
 
 def write_comparison_reports(
@@ -364,8 +430,11 @@ def write_comparison_reports(
         f.write(f"    - With changes: {summary['matched_by_id_changed']}\n")
         f.write(f"    - Unchanged: {summary['matched_by_id_unchanged']}\n")
         f.write(f"  Matched by GDM: {summary['matched_by_gdm']}\n")
+        f.write(f"  Republished: {summary['republished']}\n")
         f.write(f"  New submissions: {summary['new_submissions']}\n")
         f.write(f"  Deleted submissions: {summary['deleted_submissions']}\n")
+        f.write(f"  Already unpublished (skipped): "
+                f"{summary['already_unpublished']}\n")
 
     log_success(f"Summary written: {output_config.comparison_summary}")
 
@@ -456,9 +525,13 @@ def run_comparison(output_config: OutputConfig = None) -> ComparisonResult:
     # Print summary
     summary = result.summary()
     log_section("Comparison Summary")
-    log_info(f"Matched by local_id: {summary['matched_by_id']} ({summary['matched_by_id_changed']} with changes)")
+    log_info(f"Matched by local_id: {summary['matched_by_id']} "
+             f"({summary['matched_by_id_changed']} with changes)")
     log_info(f"Matched by GDM: {summary['matched_by_gdm']}")
+    log_info(f"Republished: {summary['republished']}")
     log_info(f"New submissions: {summary['new_submissions']}")
     log_info(f"Deleted submissions: {summary['deleted_submissions']}")
+    log_info(f"Already unpublished (skipped): "
+             f"{summary['already_unpublished']}")
 
     return result

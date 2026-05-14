@@ -102,11 +102,16 @@ def generate_csv_outputs(
     log_success(f"All current submissions: {output_config.all_current_csv}")
     log_info(f"  Total records: {len(all_records)}")
 
-    # Generate changed submissions (those with actual differences + new)
+    # Generate changed submissions (changes + republishes + new)
     changed_records = []
 
-    # Add records matched by ID with changes
-    for local_id in result.matched_by_id_changed:
+    # Add records matched by ID with changes or being republished.
+    # Exclude GDM-matched records — they are handled in the GDM loop below.
+    gdm_matched_ids = {m.target_submission.local_id for m in result.matched_by_gdm}
+    changed_or_republished = (
+        (result.matched_by_id_changed | result.republished) - gdm_matched_ids
+    )
+    for local_id in changed_or_republished:
         if local_id in target:
             sub = target[local_id]
             sgc_id = result.sgc_mapping.get(local_id, '')
@@ -154,7 +159,13 @@ def generate_csv_outputs(
     for local_id, sub in result.new_submissions.items():
         changed_records.append(sub.to_download_row('N'))
 
-    # Write changed submissions
+    # Add deleted submissions (action = U) into the changed file
+    deleted_count = 0
+    for local_id, sub in result.deleted_submissions.items():
+        changed_records.append(sub.to_download_row('U'))
+        deleted_count += 1
+
+    # Write changed submissions (includes modifications, republishes, new, and deletes)
     with open(output_config.changed_csv, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(DOWNLOAD_COLUMNS)
@@ -162,23 +173,11 @@ def generate_csv_outputs(
 
     log_success(f"Changed submissions: {output_config.changed_csv}")
     log_info(f"  Total records: {len(changed_records)}")
-    log_info(f"    - Modified: {len(result.matched_by_id_changed) + len(result.matched_by_gdm)}")
+    log_info(f"    - Modified: {len(result.matched_by_id_changed)}")
+    log_info(f"    - Republished: {len(result.republished)}")
+    log_info(f"    - GDM matched: {len(result.matched_by_gdm)}")
     log_info(f"    - New: {len(result.new_submissions)}")
-
-    # Generate deleted submissions (action = U)
-    deleted_records = []
-
-    for local_id, sub in result.deleted_submissions.items():
-        deleted_records.append(sub.to_download_row('U'))
-
-    # Write deleted submissions
-    with open(output_config.deleted_csv, 'w', encoding='utf-8-sig', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(DOWNLOAD_COLUMNS)
-        writer.writerows(deleted_records)
-
-    log_success(f"Deleted submissions: {output_config.deleted_csv}")
-    log_info(f"  Total records: {len(deleted_records)}")
+    log_info(f"    - Deleted: {deleted_count}")
 
 
 def csv_to_excel(
@@ -295,19 +294,11 @@ def generate_excel_outputs(output_config: OutputConfig = None) -> bool:
     ):
         success = False
 
-    # Changed submissions
+    # Changed submissions (includes modifications, republishes, new, and deletes)
     if not csv_to_excel(
         output_config.changed_csv,
         output_config.changed_xlsx,
         "Changed Submissions"
-    ):
-        success = False
-
-    # Deleted submissions
-    if not csv_to_excel(
-        output_config.deleted_csv,
-        output_config.deleted_xlsx,
-        "Deleted Submissions"
     ):
         success = False
 
