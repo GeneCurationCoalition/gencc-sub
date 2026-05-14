@@ -204,8 +204,6 @@ class ClinGenPipeline:
         print(f"  5. All Current (XLSX):  {self.output_config.all_current_xlsx}")
         print(f"  6. Changed (CSV):       {self.output_config.changed_csv}")
         print(f"  7. Changed (XLSX):      {self.output_config.changed_xlsx}")
-        print(f"  8. Deleted (CSV):       {self.output_config.deleted_csv}")
-        print(f"  9. Deleted (XLSX):      {self.output_config.deleted_xlsx}")
 
 
 def run_pipeline(

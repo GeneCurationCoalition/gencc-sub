@@ -169,9 +169,15 @@ class ComparisonResult:
     # Matched by GDM
     matched_by_gdm: List[GDMMatch] = field(default_factory=list)
 
+    # Republished (previously unpublished, now back in target data)
+    republished: Set[str] = field(default_factory=set)
+
     # New and deleted
     new_submissions: Dict[str, Submission] = field(default_factory=dict)
     deleted_submissions: Dict[str, Submission] = field(default_factory=dict)
+
+    # Already unpublished (in DB as unpublished, not in target — no action needed)
+    already_unpublished: Dict[str, Submission] = field(default_factory=dict)
 
     # SGC ID mapping (local_id -> sgc_id)
     sgc_mapping: Dict[str, str] = field(default_factory=dict)
@@ -194,8 +200,10 @@ class ComparisonResult:
             'matched_by_id_changed': len(self.matched_by_id_changed),
             'matched_by_id_unchanged': len(self.matched_by_id) - len(self.matched_by_id_changed),
             'matched_by_gdm': len(self.matched_by_gdm),
+            'republished': len(self.republished),
             'new_submissions': len(self.new_submissions),
             'deleted_submissions': len(self.deleted_submissions),
+            'already_unpublished': len(self.already_unpublished),
             'total_target': len(self.matched_by_id) + len(self.matched_by_gdm) + len(self.new_submissions),
-            'total_database': len(self.matched_by_id) + len(self.matched_by_gdm) + len(self.deleted_submissions)
+            'total_database': len(self.matched_by_id) + len(self.matched_by_gdm) + len(self.deleted_submissions) + len(self.already_unpublished)
         }
