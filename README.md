@@ -363,7 +363,7 @@ See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed production deployment instr
 ### Quick Deploy
 ```bash
 # Pull latest changes
-git pull origin master
+git pull origin main
 
 # Install dependencies
 composer install --no-dev --optimize-autoloader

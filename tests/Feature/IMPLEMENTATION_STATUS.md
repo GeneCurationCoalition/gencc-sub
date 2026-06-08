@@ -22,7 +22,7 @@ I've successfully created comprehensive Feature tests for file validation with d
 3. **GitHub Actions Workflow Created**: [.github/workflows/tests.yml](../../.github/workflows/tests.yml)
    - Tests on PHP 8.1 and 8.2
    - Uses SQLite :memory: (no MySQL container needed)
-   - Runs on push to main/master/develop/feature branches
+   - Runs on push to main/develop/feature branches
    - Runs on pull requests
    - Caches Composer dependencies for speed
 

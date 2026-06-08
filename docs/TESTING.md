@@ -222,7 +222,7 @@ php artisan test tests/Feature/SubmissionApiTest.php
 ## CI/CD Testing
 
 GitHub Actions automatically runs tests on:
-- Push to `main`, `master`, `develop`, `feature/*` branches
+- Push to `main`, `develop`, `feature/*` branches
 - Pull requests
 
 Configuration: `.github/workflows/tests.yml`

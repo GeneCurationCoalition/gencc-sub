@@ -561,7 +561,7 @@ The bootstrap creates a baseline that all future releases build upon.
 
 ```bash
 # Pull latest changes
-git pull origin master
+git pull origin main
 
 # Update dependencies
 composer install --no-dev --optimize-autoloader
