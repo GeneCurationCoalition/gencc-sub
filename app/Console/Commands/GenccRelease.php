@@ -1366,8 +1366,9 @@ class GenccRelease extends Command
     {
         $this->info("Updating submitter curation counts...");
 
-        // Query live submissions grouped by submitter and classification
-        $counts = Submission::where('is_live', true)
+        // Query live, published submissions grouped by submitter and classification
+        $counts = Submission::where('submissions.is_live', true)
+            ->where('submissions.status', Submission::STATUS_PUBLISHED)
             ->join('submitters', 'submissions.submitter_id', '=', 'submitters.id')
             ->join('classifications', 'submissions.classification_id', '=', 'classifications.id')
             ->select(
@@ -1379,8 +1380,9 @@ class GenccRelease extends Command
             ->groupBy('submissions.submitter_id', 'classifications.name', 'classifications.abbreviation')
             ->get();
 
-        // Also get total live count per submitter
+        // Also get total live, published count per submitter
         $totals = Submission::where('is_live', true)
+            ->where('status', Submission::STATUS_PUBLISHED)
             ->select('submitter_id', DB::raw('count(*) as total'))
             ->groupBy('submitter_id')
             ->pluck('total', 'submitter_id');
@@ -1409,7 +1411,7 @@ class GenccRelease extends Command
             $updated++;
         }
 
-        // Also clear counts for submitters with no live submissions
+        // Also clear counts for submitters with no live, published submissions
         $submittersWithCounts = array_keys($submitterCounts);
         if (!empty($submittersWithCounts)) {
             $cleared = Submitter::whereNotIn('id', $submittersWithCounts)
