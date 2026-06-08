@@ -2,22 +2,18 @@
 
 namespace Tests\Unit;
 
-use App\Console\Commands\GenccRelease;
 use App\Models\Classification;
 use App\Models\Disease;
 use App\Models\Gene;
 use App\Models\Job;
 use App\Models\Submission;
 use App\Models\Submitter;
-use Illuminate\Console\OutputStyle;
+use App\Services\CountsUpdater;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use ReflectionClass;
-use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\TestCase;
 
 /**
- * Tests for GenccRelease::updateSubmitterCounts() to verify that
+ * Tests for CountsUpdater::updateSubmitterCounts() to verify that
  * submitter curation counts are computed correctly.
  *
  * Key scenarios:
@@ -31,34 +27,6 @@ use Tests\TestCase;
 class UpdateSubmitterCountsTest extends TestCase
 {
     use RefreshDatabase;
-
-    protected GenccRelease $command;
-    protected ReflectionClass $reflection;
-    protected BufferedOutput $buffer;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        $this->command = new GenccRelease();
-        $this->reflection = new ReflectionClass($this->command);
-
-        // Set up console output for methods that use $this->info()
-        $this->buffer = new BufferedOutput();
-        $input = new ArrayInput([]);
-        $output = new OutputStyle($input, $this->buffer);
-        $this->command->setOutput($output);
-    }
-
-    /**
-     * Call a protected method on the command.
-     */
-    protected function callMethod(string $methodName, array $args = [])
-    {
-        $method = $this->reflection->getMethod($methodName);
-        $method->setAccessible(true);
-        return $method->invokeArgs($this->command, $args);
-    }
 
     /**
      * Create a submission with specific status and is_live values.
@@ -87,6 +55,16 @@ class UpdateSubmitterCountsTest extends TestCase
         ]);
     }
 
+    /**
+     * Decode the raw counts JSON from a submitter.
+     */
+    protected function getCounts(Submitter $submitter): ?array
+    {
+        $submitter->refresh();
+        $raw = $submitter->getRawOriginal('counts');
+        return ($raw === '[]') ? null : json_decode($raw, true);
+    }
+
     // =========================================================================
     // Core Filtering Tests
     // =========================================================================
@@ -100,10 +78,9 @@ class UpdateSubmitterCountsTest extends TestCase
         $this->createSubmission($submitter, $classification, Submission::STATUS_PUBLISHED, true);
         $this->createSubmission($submitter, $classification, Submission::STATUS_PUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
+        $counts = $this->getCounts($submitter);
 
         $this->assertEquals(2, $counts['total']);
         $this->assertEquals(2, $counts['by_classification'][$classification->name]['count']);
@@ -119,10 +96,9 @@ class UpdateSubmitterCountsTest extends TestCase
         $this->createSubmission($submitter, $classification, Submission::STATUS_PUBLISHED, true);
         $this->createSubmission($submitter, $classification, Submission::STATUS_UNPUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
+        $counts = $this->getCounts($submitter);
 
         $this->assertEquals(1, $counts['total']);
         $this->assertEquals(1, $counts['by_classification'][$classification->name]['count']);
@@ -137,13 +113,9 @@ class UpdateSubmitterCountsTest extends TestCase
         // Published but not is_live (superseded by a newer version)
         $this->createSubmission($submitter, $classification, Submission::STATUS_PUBLISHED, false);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
-
-        // Should have no counts — the submission is not live
-        $this->assertEquals('[]', $submitter->getRawOriginal('counts'));
+        $this->assertNull($this->getCounts($submitter));
     }
 
     /** @test */
@@ -155,10 +127,9 @@ class UpdateSubmitterCountsTest extends TestCase
         $this->createSubmission($submitter, $classification, Submission::STATUS_DRAFT_NEW, true);
         $this->createSubmission($submitter, $classification, Submission::STATUS_SUBMITTED_NEW, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $this->assertEquals('[]', $submitter->getRawOriginal('counts'));
+        $this->assertNull($this->getCounts($submitter));
     }
 
     // =========================================================================
@@ -176,10 +147,9 @@ class UpdateSubmitterCountsTest extends TestCase
         $this->createSubmission($submitter, $definitive, Submission::STATUS_PUBLISHED, true);
         $this->createSubmission($submitter, $strong, Submission::STATUS_PUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
+        $counts = $this->getCounts($submitter);
 
         $this->assertEquals(3, $counts['total']);
         $this->assertEquals(2, $counts['by_classification']['Definitive']['count']);
@@ -199,13 +169,10 @@ class UpdateSubmitterCountsTest extends TestCase
         $this->createSubmission($submitterA, $classification, Submission::STATUS_PUBLISHED, true);
         $this->createSubmission($submitterB, $classification, Submission::STATUS_PUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitterA->refresh();
-        $submitterB->refresh();
-
-        $countsA = json_decode($submitterA->getRawOriginal('counts'), true);
-        $countsB = json_decode($submitterB->getRawOriginal('counts'), true);
+        $countsA = $this->getCounts($submitterA);
+        $countsB = $this->getCounts($submitterB);
 
         $this->assertEquals(2, $countsA['total']);
         $this->assertEquals(1, $countsB['total']);
@@ -227,16 +194,14 @@ class UpdateSubmitterCountsTest extends TestCase
         $classification = Classification::factory()->create();
         $this->createSubmission($submitterWithData, $classification, Submission::STATUS_PUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitterWithout->refresh();
-        $this->assertEquals('[]', $submitterWithout->getRawOriginal('counts'));
+        $this->assertNull($this->getCounts($submitterWithout));
     }
 
     /** @test */
     public function it_clears_counts_when_all_submissions_become_unpublished()
     {
-        // First, create a submitter with a real published submission so it gets real counts
         $submitter = Submitter::factory()->create();
         $classification = Classification::factory()->create();
         $gene = Gene::factory()->create();
@@ -245,9 +210,8 @@ class UpdateSubmitterCountsTest extends TestCase
         // Create a published+live submission so the submitter gets counts
         $pub = $this->createSubmission($submitter, $classification, Submission::STATUS_PUBLISHED, true, $gene, $disease);
 
-        $this->callMethod('updateSubmitterCounts');
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
+        CountsUpdater::updateSubmitterCounts();
+        $counts = $this->getCounts($submitter);
         $this->assertEquals(1, $counts['total'], 'Precondition: submitter should have counts');
 
         // Now unpublish it (simulate the real workflow)
@@ -257,10 +221,9 @@ class UpdateSubmitterCountsTest extends TestCase
         $otherSubmitter = Submitter::factory()->create();
         $this->createSubmission($otherSubmitter, $classification, Submission::STATUS_PUBLISHED, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $this->assertEquals('[]', $submitter->getRawOriginal('counts'));
+        $this->assertNull($this->getCounts($submitter));
     }
 
     // =========================================================================
@@ -286,10 +249,9 @@ class UpdateSubmitterCountsTest extends TestCase
         // Should NOT count: draft + is_live
         $this->createSubmission($submitter, $classification, Submission::STATUS_DRAFT_NEW, true);
 
-        $this->callMethod('updateSubmitterCounts');
+        CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        $counts = json_decode($submitter->getRawOriginal('counts'), true);
+        $counts = $this->getCounts($submitter);
 
         $this->assertEquals(2, $counts['total']);
         $this->assertEquals(2, $counts['by_classification'][$classification->name]['count']);
@@ -301,10 +263,8 @@ class UpdateSubmitterCountsTest extends TestCase
         $submitter = Submitter::factory()->create();
 
         // Should not throw — just a no-op
-        $this->callMethod('updateSubmitterCounts');
+        $updated = CountsUpdater::updateSubmitterCounts();
 
-        $submitter->refresh();
-        // Submitter keeps its default counts (no qualifying submissions, no clearing branch)
-        $this->assertNotNull($submitter);
+        $this->assertEquals(0, $updated);
     }
 }
