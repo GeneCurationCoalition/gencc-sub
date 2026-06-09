@@ -244,5 +244,4 @@ class SubmissionsTemplateExport
 
         $sheet->removeRow($firstDataRow, $highestRow - $firstDataRow + 1);
     }
-    }
 }
