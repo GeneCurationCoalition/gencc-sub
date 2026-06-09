@@ -22,7 +22,7 @@ class TemplateDownloadController extends Controller
 
         $spreadsheet = IOFactory::load($templatePath);
 
-        SubmissionsTemplateExport::populateSubmitterSheet($spreadsheet);
+        SubmissionsTemplateExport::populateHelpSheets($spreadsheet);
 
         $filename = 'GenCC Submission Spreadsheet.xlsx';
 

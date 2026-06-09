@@ -2,6 +2,8 @@
 
 namespace App\Exports;
 
+use App\Models\Classification;
+use App\Models\Inheritance;
 use App\Models\Submitter;
 use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -37,8 +39,8 @@ class SubmissionsTemplateExport
         $spreadsheet = IOFactory::load($templatePath);
         Log::info('Template loaded successfully');
 
-        // Populate the submitter IDs help sheet with current data
-        self::populateSubmitterSheet($spreadsheet);
+        // Populate help sheets with current data from the database
+        self::populateHelpSheets($spreadsheet);
 
         $worksheet = $spreadsheet->getActiveSheet();
 
@@ -136,40 +138,107 @@ class SubmissionsTemplateExport
     }
 
     /**
+     * Populate all help sheets with current data from the database.
+     */
+    public static function populateHelpSheets(Spreadsheet $spreadsheet): void
+    {
+        self::populateSubmitterSheet($spreadsheet);
+        self::populateClassificationSheet($spreadsheet);
+        self::populateMoiSheet($spreadsheet);
+    }
+
+    /**
      * Populate the "HELP - Submitters" sheet with current submitter data.
      *
      * Clears existing data rows and writes active submitters from the database.
-     * Used by both template download and submission export flows.
      */
     public static function populateSubmitterSheet(Spreadsheet $spreadsheet): void
     {
-        $sheetName = 'HELP - Submitters';
-        $sheet = $spreadsheet->getSheetByName($sheetName);
+        $sheet = $spreadsheet->getSheetByName('HELP - Submitters');
 
         if ($sheet === null) {
-            Log::warning("Template sheet '{$sheetName}' not found, skipping submitter population");
+            Log::warning("Template sheet 'HELP - Submitters' not found, skipping");
 
             return;
         }
 
-        // Clear existing data rows (row 4 onwards), preserving header rows 1-3
-        $highestRow = $sheet->getHighestRow();
-        for ($row = 4; $row <= $highestRow; $row++) {
-            $sheet->removeRow(4);
-        }
+        self::clearDataRows($sheet, 4);
 
-        // Fetch active submitters that allow submissions, ordered by curie
         $submitters = Submitter::where('status', Submitter::STATUS_ACTIVE)
             ->where('allow_submissions', true)
             ->orderBy('curie')
             ->get(['curie', 'name']);
 
-        // Write submitter data starting at row 4
         $row = 4;
         foreach ($submitters as $submitter) {
             $sheet->setCellValue("A{$row}", $submitter->curie);
             $sheet->setCellValue("B{$row}", $submitter->name);
             $row++;
+        }
+    }
+
+    /**
+     * Populate the "HELP - Classifications" sheet with current classification data.
+     */
+    public static function populateClassificationSheet(Spreadsheet $spreadsheet): void
+    {
+        $sheet = $spreadsheet->getSheetByName('HELP - Classifications');
+
+        if ($sheet === null) {
+            Log::warning("Template sheet 'HELP - Classifications' not found, skipping");
+
+            return;
+        }
+
+        self::clearDataRows($sheet, 4);
+
+        $classifications = Classification::where('status', Classification::STATUS_ACTIVE)
+            ->orderBy('order')
+            ->get(['curie', 'name']);
+
+        $row = 4;
+        foreach ($classifications as $classification) {
+            $sheet->setCellValue("A{$row}", $classification->curie);
+            $sheet->setCellValue("B{$row}", $classification->name);
+            $row++;
+        }
+    }
+
+    /**
+     * Populate the "HELP - MOI" sheet with current mode of inheritance data.
+     */
+    public static function populateMoiSheet(Spreadsheet $spreadsheet): void
+    {
+        $sheet = $spreadsheet->getSheetByName('HELP - MOI');
+
+        if ($sheet === null) {
+            Log::warning("Template sheet 'HELP - MOI' not found, skipping");
+
+            return;
+        }
+
+        self::clearDataRows($sheet, 4);
+
+        $inheritances = Inheritance::where('status', Inheritance::STATUS_ACTIVE)
+            ->orderBy('curie')
+            ->get(['curie', 'name']);
+
+        $row = 4;
+        foreach ($inheritances as $inheritance) {
+            $sheet->setCellValue("A{$row}", $inheritance->curie);
+            $sheet->setCellValue("B{$row}", $inheritance->name);
+            $row++;
+        }
+    }
+
+    /**
+     * Clear data rows from a sheet, preserving header rows.
+     */
+    private static function clearDataRows($sheet, int $firstDataRow): void
+    {
+        $highestRow = $sheet->getHighestRow();
+        for ($row = $firstDataRow; $row <= $highestRow; $row++) {
+            $sheet->removeRow($firstDataRow);
         }
     }
 }
