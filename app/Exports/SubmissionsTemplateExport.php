@@ -2,10 +2,12 @@
 
 namespace App\Exports;
 
+use App\Models\Classification;
+use App\Models\Inheritance;
+use App\Models\Submitter;
+use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Log;
 
 class SubmissionsTemplateExport
 {
@@ -21,21 +23,25 @@ class SubmissionsTemplateExport
      */
     public function generate(): Spreadsheet
     {
-        Log::info('SubmissionsTemplateExport::generate called with ' . count($this->submissions) . ' submissions');
+        Log::info('SubmissionsTemplateExport::generate called with '.count($this->submissions).' submissions');
 
         // Load the template file
         $templatePath = public_path('documents/GenCC Submission Spreadsheet.xlsx');
 
-        Log::info('Template path: ' . $templatePath);
+        Log::info('Template path: '.$templatePath);
 
-        if (!file_exists($templatePath)) {
-            Log::error('Template file not found at: ' . $templatePath);
+        if (! file_exists($templatePath)) {
+            Log::error('Template file not found at: '.$templatePath);
             throw new \Exception('Template file not found');
         }
 
         Log::info('Loading template...');
         $spreadsheet = IOFactory::load($templatePath);
         Log::info('Template loaded successfully');
+
+        // Populate help sheets with current data from the database
+        self::populateHelpSheets($spreadsheet);
+
         $worksheet = $spreadsheet->getActiveSheet();
 
         // Start writing data at row 13
@@ -55,14 +61,14 @@ class SubmissionsTemplateExport
 
             // Column D: HGNC ID
             $hgncId = $submission['submission_data']['gene']['id'] ?? null;
-            if (!$hgncId || $hgncId === '-') {
+            if (! $hgncId || $hgncId === '-') {
                 $hgncId = $submission['gene']['hgnc_id'] ?? '';
             }
             $worksheet->setCellValue("D{$rowNum}", $hgncId);
 
             // Column E: Gene Symbol
             $geneSymbol = $submission['submission_data']['gene']['symbol'] ?? null;
-            if (!$geneSymbol || $geneSymbol === '-') {
+            if (! $geneSymbol || $geneSymbol === '-') {
                 $geneSymbol = $submission['gene']['symbol'] ?? '';
             }
             $worksheet->setCellValue("E{$rowNum}", $geneSymbol);
@@ -129,5 +135,113 @@ class SubmissionsTemplateExport
         }
 
         return $spreadsheet;
+    }
+
+    /**
+     * Populate all help sheets with current data from the database.
+     */
+    public static function populateHelpSheets(Spreadsheet $spreadsheet): void
+    {
+        self::populateSubmitterSheet($spreadsheet);
+        self::populateClassificationSheet($spreadsheet);
+        self::populateMoiSheet($spreadsheet);
+    }
+
+    /**
+     * Populate the "HELP - Submitters" sheet with current submitter data.
+     *
+     * Clears existing data rows and writes active submitters from the database.
+     */
+    public static function populateSubmitterSheet(Spreadsheet $spreadsheet): void
+    {
+        $sheet = $spreadsheet->getSheetByName('HELP - Submitters');
+
+        if ($sheet === null) {
+            Log::warning("Template sheet 'HELP - Submitters' not found, skipping");
+
+            return;
+        }
+
+        self::clearDataRows($sheet, 4);
+
+        $submitters = Submitter::where('status', Submitter::STATUS_ACTIVE)
+            ->where('allow_submissions', true)
+            ->orderBy('curie')
+            ->get(['curie', 'name']);
+
+        $row = 4;
+        foreach ($submitters as $submitter) {
+            $sheet->setCellValue("A{$row}", $submitter->curie);
+            $sheet->setCellValue("B{$row}", $submitter->name);
+            $row++;
+        }
+    }
+
+    /**
+     * Populate the "HELP - Classifications" sheet with current classification data.
+     */
+    public static function populateClassificationSheet(Spreadsheet $spreadsheet): void
+    {
+        $sheet = $spreadsheet->getSheetByName('HELP - Classifications');
+
+        if ($sheet === null) {
+            Log::warning("Template sheet 'HELP - Classifications' not found, skipping");
+
+            return;
+        }
+
+        self::clearDataRows($sheet, 4);
+
+        $classifications = Classification::where('status', Classification::STATUS_ACTIVE)
+            ->orderBy('order')
+            ->get(['curie', 'name']);
+
+        $row = 4;
+        foreach ($classifications as $classification) {
+            $sheet->setCellValue("A{$row}", $classification->curie);
+            $sheet->setCellValue("B{$row}", $classification->name);
+            $row++;
+        }
+    }
+
+    /**
+     * Populate the "HELP - MOI" sheet with current mode of inheritance data.
+     */
+    public static function populateMoiSheet(Spreadsheet $spreadsheet): void
+    {
+        $sheet = $spreadsheet->getSheetByName('HELP - MOI');
+
+        if ($sheet === null) {
+            Log::warning("Template sheet 'HELP - MOI' not found, skipping");
+
+            return;
+        }
+
+        self::clearDataRows($sheet, 4);
+
+        $inheritances = Inheritance::where('status', Inheritance::STATUS_ACTIVE)
+            ->whereHas('submissions')
+            ->orderBy('curie')
+            ->get(['id', 'curie', 'name']);
+
+        $row = 4;
+        foreach ($inheritances as $inheritance) {
+            $sheet->setCellValue("A{$row}", $inheritance->curie);
+            $sheet->setCellValue("B{$row}", $inheritance->name);
+            $row++;
+        }
+    }
+
+    /**
+     * Clear data rows from a sheet, preserving header rows.
+     */
+    private static function clearDataRows($sheet, int $firstDataRow): void
+    {
+        $highestRow = $sheet->getHighestRow();
+        if ($highestRow < $firstDataRow) {
+            return;
+        }
+
+        $sheet->removeRow($firstDataRow, $highestRow - $firstDataRow + 1);
     }
 }
