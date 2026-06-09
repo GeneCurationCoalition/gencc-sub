@@ -119,13 +119,13 @@ class UpdateSubmitterCountsTest extends TestCase
     }
 
     /** @test */
-    public function it_excludes_draft_and_processing_submissions()
+    public function it_excludes_non_published_submissions()
     {
         $submitter = Submitter::factory()->create();
         $classification = Classification::factory()->create();
 
-        $this->createSubmission($submitter, $classification, Submission::STATUS_DRAFT_NEW, true);
-        $this->createSubmission($submitter, $classification, Submission::STATUS_SUBMITTED_NEW, true);
+        $this->createSubmission($submitter, $classification, Submission::STATUS_NEW, true);
+        $this->createSubmission($submitter, $classification, Submission::STATUS_REPUBLISH, true);
 
         CountsUpdater::updateSubmitterCounts();
 
