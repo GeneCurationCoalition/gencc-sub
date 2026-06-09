@@ -4,8 +4,8 @@ namespace App\Console\Commands;
 
 use App\Models\Disease;
 use App\Models\Gene;
-use App\Models\Submitter;
 use App\Models\Submission;
+use App\Services\CountsUpdater;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -163,90 +163,16 @@ class UpdateCounts extends Command
     }
 
     /**
-     * Update submitter counts using SQL aggregation, stored in the JSON counts column.
+     * Update submitter counts using shared service.
+     * Delegates to CountsUpdater (single source of truth for the schema expected by gencc-search).
      */
     protected function updateSubmitterCounts(): void
     {
         $this->line('Updating Submitter Counts...');
 
-        $extraKeys = ['count_submissions', 'count_unique_genes', 'count_unique_diseases'];
+        $updated = CountsUpdater::updateSubmitterCounts();
 
-        // Get classification counts per submitter
-        $classificationCounts = DB::table('submissions')
-            ->join('classifications', 'submissions.classification_id', '=', 'classifications.id')
-            ->select(
-                'submissions.submitter_id',
-                'classifications.slug',
-                DB::raw('COUNT(*) as count')
-            )
-            ->where('submissions.is_live', true)
-            ->where('submissions.status', Submission::STATUS_PUBLISHED)
-            ->groupBy('submissions.submitter_id', 'classifications.slug')
-            ->get();
-
-        $submitterData = [];
-        foreach ($classificationCounts as $row) {
-            if (!isset($submitterData[$row->submitter_id])) {
-                $submitterData[$row->submitter_id] = $this->emptyCounts($extraKeys);
-            }
-            if (isset($this->classificationKeys[$row->slug])) {
-                $submitterData[$row->submitter_id][$this->classificationKeys[$row->slug]] = $row->count;
-            }
-        }
-
-        // Total submissions per submitter
-        $submissionCounts = DB::table('submissions')
-            ->select('submitter_id', DB::raw('COUNT(*) as count'))
-            ->where('is_live', true)
-            ->where('status', Submission::STATUS_PUBLISHED)
-            ->groupBy('submitter_id')
-            ->get();
-
-        foreach ($submissionCounts as $row) {
-            if (!isset($submitterData[$row->submitter_id])) {
-                $submitterData[$row->submitter_id] = $this->emptyCounts($extraKeys);
-            }
-            $submitterData[$row->submitter_id]['count_submissions'] = $row->count;
-        }
-
-        // Unique genes per submitter
-        $uniqueGenes = DB::table('submissions')
-            ->select('submitter_id', DB::raw('COUNT(DISTINCT gene_id) as count'))
-            ->where('is_live', true)
-            ->where('status', Submission::STATUS_PUBLISHED)
-            ->groupBy('submitter_id')
-            ->get();
-
-        foreach ($uniqueGenes as $row) {
-            if (!isset($submitterData[$row->submitter_id])) {
-                $submitterData[$row->submitter_id] = $this->emptyCounts($extraKeys);
-            }
-            $submitterData[$row->submitter_id]['count_unique_genes'] = $row->count;
-        }
-
-        // Unique diseases per submitter
-        $uniqueDiseases = DB::table('submissions')
-            ->select('submitter_id', DB::raw('COUNT(DISTINCT disease_id) as count'))
-            ->where('is_live', true)
-            ->where('status', Submission::STATUS_PUBLISHED)
-            ->groupBy('submitter_id')
-            ->get();
-
-        foreach ($uniqueDiseases as $row) {
-            if (!isset($submitterData[$row->submitter_id])) {
-                $submitterData[$row->submitter_id] = $this->emptyCounts($extraKeys);
-            }
-            $submitterData[$row->submitter_id]['count_unique_diseases'] = $row->count;
-        }
-
-        // Reset all, then update
-        Submitter::query()->update(['counts' => json_encode($this->emptyCounts($extraKeys))]);
-
-        foreach ($submitterData as $submitterId => $counts) {
-            Submitter::where('id', $submitterId)->update(['counts' => json_encode($counts)]);
-        }
-
-        $this->line('Submitter Counts Completed (' . count($submitterData) . ' submitters updated)');
+        $this->line('Submitter Counts Completed (' . $updated . ' submitters updated)');
     }
 
     /**
