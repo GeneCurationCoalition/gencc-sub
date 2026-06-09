@@ -220,8 +220,9 @@ class SubmissionsTemplateExport
         self::clearDataRows($sheet, 4);
 
         $inheritances = Inheritance::where('status', Inheritance::STATUS_ACTIVE)
+            ->whereHas('submissions')
             ->orderBy('curie')
-            ->get(['curie', 'name']);
+            ->get(['id', 'curie', 'name']);
 
         $row = 4;
         foreach ($inheritances as $inheritance) {

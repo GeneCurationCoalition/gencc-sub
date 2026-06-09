@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Exports\SubmissionsTemplateExport;
 use App\Models\Classification;
 use App\Models\Inheritance;
+use App\Models\Submission;
 use App\Models\Submitter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -116,16 +117,16 @@ class TemplateDownloadTest extends TestCase
         $spreadsheet->disconnectWorksheets();
     }
 
-    public function test_moi_sheet_populated_from_database(): void
+    public function test_moi_sheet_only_includes_used_inheritances(): void
     {
-        Inheritance::factory()->create([
+        $used = Inheritance::factory()->create([
             'curie' => 'HP:0000006',
             'name' => 'Autosomal dominant',
             'status' => Inheritance::STATUS_ACTIVE,
         ]);
         Inheritance::factory()->create([
             'curie' => 'HP:0000007',
-            'name' => 'Autosomal recessive',
+            'name' => 'Autosomal recessive (unused)',
             'status' => Inheritance::STATUS_ACTIVE,
         ]);
         Inheritance::factory()->create([
@@ -134,6 +135,9 @@ class TemplateDownloadTest extends TestCase
             'status' => Inheritance::STATUS_REMOVED,
         ]);
 
+        // Create a submission linked to the "used" inheritance
+        Submission::factory()->create(['inheritance_id' => $used->id]);
+
         $spreadsheet = $this->loadAndPopulate();
         $sheet = $spreadsheet->getSheetByName('HELP - MOI');
 
@@ -141,14 +145,12 @@ class TemplateDownloadTest extends TestCase
         $this->assertEquals('moi_id', $sheet->getCell('A3')->getValue());
         $this->assertEquals('moi_name', $sheet->getCell('B3')->getValue());
 
-        // Active MOIs present, ordered by curie
+        // Only the used MOI appears
         $this->assertEquals('HP:0000006', $sheet->getCell('A4')->getValue());
         $this->assertEquals('Autosomal dominant', $sheet->getCell('B4')->getValue());
-        $this->assertEquals('HP:0000007', $sheet->getCell('A5')->getValue());
-        $this->assertEquals('Autosomal recessive', $sheet->getCell('B5')->getValue());
 
-        // Removed MOI excluded
-        $this->assertNull($sheet->getCell('A6')->getValue());
+        // Unused and removed MOIs excluded
+        $this->assertNull($sheet->getCell('A5')->getValue());
 
         $spreadsheet->disconnectWorksheets();
     }
