@@ -238,8 +238,11 @@ class SubmissionsTemplateExport
     private static function clearDataRows($sheet, int $firstDataRow): void
     {
         $highestRow = $sheet->getHighestRow();
-        for ($row = $firstDataRow; $row <= $highestRow; $row++) {
-            $sheet->removeRow($firstDataRow);
+        if ($highestRow < $firstDataRow) {
+            return;
         }
+
+        $sheet->removeRow($firstDataRow, $highestRow - $firstDataRow + 1);
+    }
     }
 }
