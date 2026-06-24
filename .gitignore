@@ -81,3 +81,5 @@ data/mane_summary.txt
 data/uniprot_sprot_human.dat
 deployment/ansible/gencc-prod-ansible-vault-passphrase.txt
 storage/.gcloud-credentials.json
+tmp/
+
