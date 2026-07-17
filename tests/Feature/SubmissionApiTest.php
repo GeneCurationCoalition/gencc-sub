@@ -11,6 +11,7 @@ use App\Models\Disease;
 use App\Models\Classification;
 use App\Models\Inheritance;
 use App\Models\Mechanism;
+use App\Models\Pubmed;
 use App\Models\Submitter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -247,6 +248,31 @@ class SubmissionApiTest extends TestCase
         $this->submission->refresh();
         $this->assertEquals('New public note', $this->submission->submission_data->notes->display);
         $this->assertEquals('New private note', $this->submission->submission_data->notes->private);
+    }
+
+    public function test_can_update_submission_evidence_and_live_json(): void
+    {
+        Pubmed::create([
+            'pmid' => '12345678',
+            'uid' => '12345678',
+            'status' => Pubmed::STATUS_ACTIVE,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/' . $this->submission->sid, [
+                'type' => 'evidence',
+                'evidence' => ['PMID:12345678'],
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['status_code' => 200]);
+
+        $this->submission->refresh();
+        $this->assertSame('12345678', $this->submission->normalized_pmids);
+        $this->assertSame('12345678', $this->submission->submission_data->evidence[0]->pmid);
+        $this->assertDatabaseHas('pubmed_submission', [
+            'submission_id' => $this->submission->id,
+        ]);
     }
 
     /**

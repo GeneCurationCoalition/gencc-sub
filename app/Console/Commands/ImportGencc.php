@@ -185,7 +185,7 @@ class ImportGencc extends Command
                         "evidence" => $evidence,
                         "contributors" => ["primary" => ["id" => "", "name" => ""]],
                         "classification" => ["id" => $row['submitted_as_classification_id'], "name" => $row['submitted_as_classification_name']],
-                        "mechanism" => ["id" => "", "name" => "", "comment" => ""],
+                        "mechanism" => ["id" => "", "name" => "", "comments" => ""],
                         "additional_information" => ['submitter_curie' => $row['submitter_curie'], 'submitter_title' => $row['submitter_title'],
                             'submitted_as_submission_id' => $row['submitted_as_submission_id']]
                     ];
@@ -205,7 +205,7 @@ class ImportGencc extends Command
                         "evidence" => $evidence,
                         "contributors" => ["primary" => ["id" => "", "name" => ""]],
                         "classification" => ["id" => $row['classification_curie'], "name" => $row['classification_title']],
-                        "mechanism" => ["id" => "", "name" => "", "comment" => ""],
+                        "mechanism" => ["id" => "", "name" => "", "comments" => ""],
                         "additional_information" => ['submitter_curie' => $row['submitter_curie'], 'submitter_title' => $row['submitter_title'],
                             'submitted_as_submission_id' => $row['submitted_as_submission_id']],
                         "search_row_id" => $row['rowid'] ?? null,

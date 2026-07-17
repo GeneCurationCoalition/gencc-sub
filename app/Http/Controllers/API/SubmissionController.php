@@ -426,7 +426,7 @@ class SubmissionController extends Controller
                 }
 
                 // Store normalized PMID data
-                $allPmids = implode(',', $pmids);
+                $allPmids = implode(',', $subevidence);
                 $normResult = \App\Services\PmidNormalizer::normalize($allPmids);
                 $submission->normalized_pmids = !empty($normResult['pmids']) ? implode(',', $normResult['pmids']) : null;
                 $submission->pmid_issues = !empty($normResult['issues']) ? $normResult['issues'] : null;
@@ -1590,6 +1590,8 @@ class SubmissionController extends Controller
                 return [
                     'sid' => $submission->sid,
                     'local_key' => $submission->local_key,
+                    'report_date' => $submission->report_date,
+                    'report_url' => $submission->report_url,
                     'submission_data' => $submissionData,
                     'gene' => [
                         'hgnc_id' => $submission->gene?->hgnc_id,

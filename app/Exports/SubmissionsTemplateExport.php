@@ -60,17 +60,11 @@ class SubmissionsTemplateExport
             $worksheet->setCellValue("C{$rowNum}", $submission['local_key'] ?? '');
 
             // Column D: HGNC ID
-            $hgncId = $submission['submission_data']['gene']['id'] ?? null;
-            if (! $hgncId || $hgncId === '-') {
-                $hgncId = $submission['gene']['hgnc_id'] ?? '';
-            }
+            $hgncId = $submission['gene']['hgnc_id'] ?? '';
             $worksheet->setCellValue("D{$rowNum}", $hgncId);
 
             // Column E: Gene Symbol
-            $geneSymbol = $submission['submission_data']['gene']['symbol'] ?? null;
-            if (! $geneSymbol || $geneSymbol === '-') {
-                $geneSymbol = $submission['gene']['symbol'] ?? '';
-            }
+            $geneSymbol = $submission['gene']['symbol'] ?? '';
             $worksheet->setCellValue("E{$rowNum}", $geneSymbol);
 
             // Column F: Disease ID
@@ -82,31 +76,31 @@ class SubmissionsTemplateExport
             $worksheet->setCellValue("G{$rowNum}", $diseaseName);
 
             // Column H: MOI ID
-            $moiId = $submission['submission_data']['moi']['id'] ?? ($submission['inheritance']['curie'] ?? '');
+            $moiId = $submission['inheritance']['curie'] ?? '';
             $worksheet->setCellValue("H{$rowNum}", $moiId);
 
             // Column I: MOI Name
-            $moiName = $submission['submission_data']['moi']['name'] ?? ($submission['inheritance']['name'] ?? '');
+            $moiName = $submission['inheritance']['name'] ?? '';
             $worksheet->setCellValue("I{$rowNum}", $moiName);
 
             // Column J: Submitter ID
-            $submitterId = $submission['submitter']['curie'] ?? ($submission['submission_data']['additional_information']['submitter_curie'] ?? '');
+            $submitterId = $submission['submitter']['curie'] ?? '';
             $worksheet->setCellValue("J{$rowNum}", $submitterId);
 
             // Column K: Submitter Name
-            $submitterName = $submission['submitter']['name'] ?? ($submission['submission_data']['additional_information']['submitter_title'] ?? '');
+            $submitterName = $submission['submitter']['name'] ?? '';
             $worksheet->setCellValue("K{$rowNum}", $submitterName);
 
             // Column L: Classification ID
-            $classificationId = $submission['submission_data']['classification']['id'] ?? ($submission['classification']['curie'] ?? '');
+            $classificationId = $submission['classification']['curie'] ?? '';
             $worksheet->setCellValue("L{$rowNum}", $classificationId);
 
             // Column M: Classification Name
-            $classificationName = $submission['submission_data']['classification']['name'] ?? ($submission['classification']['name'] ?? '');
+            $classificationName = $submission['classification']['name'] ?? '';
             $worksheet->setCellValue("M{$rowNum}", $classificationName);
 
             // Column N: Report Date (ISO8601)
-            $reportDate = $submission['submission_data']['report']['display_date'] ?? '';
+            $reportDate = $submission['report_date'] ?? '';
             if ($reportDate) {
                 try {
                     $date = new \DateTime($reportDate);
@@ -118,7 +112,7 @@ class SubmissionsTemplateExport
             $worksheet->setCellValue("N{$rowNum}", $reportDate);
 
             // Column O: Report URL
-            $reportUrl = $submission['submission_data']['report']['ext_url'] ?? '';
+            $reportUrl = $submission['report_url'] ?? '';
             $worksheet->setCellValue("O{$rowNum}", $reportUrl);
 
             // Column P: Notes (preserves whitespace)

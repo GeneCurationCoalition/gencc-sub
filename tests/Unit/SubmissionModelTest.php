@@ -332,12 +332,13 @@ class SubmissionModelTest extends TestCase
 
         // submission_data is cast as object, so check properties exist
         $this->assertNotNull($data);
-        $this->assertTrue(property_exists($data, 'moi') || isset($data->moi));
-        $this->assertTrue(property_exists($data, 'gene') || isset($data->gene));
         $this->assertTrue(property_exists($data, 'disease') || isset($data->disease));
-        $this->assertTrue(property_exists($data, 'classification') || isset($data->classification));
         $this->assertTrue(property_exists($data, 'report') || isset($data->report));
         $this->assertTrue(property_exists($data, 'evidence') || isset($data->evidence));
+        $this->assertFalse(property_exists($data, 'gene'));
+        $this->assertFalse(property_exists($data, 'moi'));
+        $this->assertFalse(property_exists($data, 'classification'));
+        $this->assertFalse(property_exists($data, 'additional_information'));
         $this->assertEquals('SGC-100001', $data->submission_id);
         $this->assertEquals('TEST-KEY', $data->local_key);
     }

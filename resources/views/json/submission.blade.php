@@ -36,7 +36,7 @@
 		"mechanism": {
 			"id": "{{ $d->gencc_mechanism_id }}",
 			"name": "{{ $d->gencc_mechanism_name }}",
-			"comment": "{{ $d->gencc_mechanism_comment }}"
+			"comments": "{{ $d->gencc_mechanism_comment }}"
 		},
 		"criteria": {
 			"name": "{{ $d->criteria_name }}",
@@ -74,8 +74,7 @@
 				"id":  "{{ $d->primary_contributor_id }}",
 				"name": "{{ $d->primary_contributor_group_name }}"
 			}
-		},
-		"additional_information": [{ "key": "values" }]
+		}
 	}
 	@if (!$loop->last)
 	,

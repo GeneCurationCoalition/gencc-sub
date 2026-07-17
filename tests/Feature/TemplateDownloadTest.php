@@ -155,6 +155,48 @@ class TemplateDownloadTest extends TestCase
         $spreadsheet->disconnectWorksheets();
     }
 
+    public function test_submission_export_uses_relations_instead_of_blank_live_json_mirrors(): void
+    {
+        $export = new SubmissionsTemplateExport([[
+            'sid' => 'SGC-100001',
+            'local_key' => 'LOCAL-1',
+            'report_date' => '2026-07-14',
+            'report_url' => 'https://example.org/report',
+            'submission_data' => [
+                'gene' => ['id' => '', 'symbol' => ''],
+                'disease' => ['id' => 'OMIM:123456', 'name' => 'Historical disease label'],
+                'moi' => ['id' => '', 'name' => ''],
+                'classification' => ['id' => '', 'name' => ''],
+                'additional_information' => [['key' => 'values']],
+                'notes' => ['display' => 'Public note'],
+                'criteria' => ['url' => 'https://example.org/criteria'],
+            ],
+            'gene' => ['hgnc_id' => 'HGNC:5', 'symbol' => 'A1BG'],
+            'disease' => ['curie' => 'MONDO:0000001', 'name' => 'Current normalized disease'],
+            'inheritance' => ['curie' => 'HP:0000006', 'name' => 'Autosomal dominant'],
+            'classification' => ['curie' => 'GENCC:100001', 'name' => 'Definitive'],
+            'submitter' => ['curie' => 'GENCC:000102', 'name' => 'ClinGen'],
+            'evidence' => ['12345678'],
+        ]]);
+
+        $spreadsheet = $export->generate();
+        $sheet = $spreadsheet->getActiveSheet();
+
+        $this->assertSame('HGNC:5', $sheet->getCell('D13')->getValue());
+        $this->assertSame('A1BG', $sheet->getCell('E13')->getValue());
+        $this->assertSame('OMIM:123456', $sheet->getCell('F13')->getValue());
+        $this->assertSame('Historical disease label', $sheet->getCell('G13')->getValue());
+        $this->assertSame('HP:0000006', $sheet->getCell('H13')->getValue());
+        $this->assertSame('Autosomal dominant', $sheet->getCell('I13')->getValue());
+        $this->assertSame('GENCC:000102', $sheet->getCell('J13')->getValue());
+        $this->assertSame('ClinGen', $sheet->getCell('K13')->getValue());
+        $this->assertSame('GENCC:100001', $sheet->getCell('L13')->getValue());
+        $this->assertSame('Definitive', $sheet->getCell('M13')->getValue());
+        $this->assertSame('https://example.org/report', $sheet->getCell('O13')->getValue());
+
+        $spreadsheet->disconnectWorksheets();
+    }
+
     /**
      * Load the template and populate all help sheets.
      */

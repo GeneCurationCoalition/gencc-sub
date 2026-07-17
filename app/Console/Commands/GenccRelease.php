@@ -885,6 +885,57 @@ class GenccRelease extends Command
     }
 
     /**
+     * Build the frozen "submitted_as" snapshot for a submission at release time.
+     *
+     * The public export (ReleaseSubmissionExport) reads submitted_as_* from the frozen
+     * original_submission_data. Live submission_data intentionally does not duplicate the
+     * authoritative gene/moi/classification/submitter fields, while older rows may contain empty
+     * placeholders for them. Release is the true "submitted as"
+     * capture point, so we (re)derive those four sub-objects from the row's authoritative FK
+     * columns/relations here. We deep-clone submission_data and overwrite only those keys - the
+     * live submission_data is left untouched (the immutability guard forbids changing it on a
+     * publishing row, and display views read the relations directly).
+     *
+     * disease/report/notes/criteria are intentionally not touched (they are populated by their
+     * own write paths and were never the source of blank exports).
+     */
+    protected function frozenSnapshotFor(Submission $submission): object
+    {
+        $snapshot = json_decode(json_encode($submission->submission_data));
+        if (!is_object($snapshot)) {
+            $snapshot = new \stdClass();
+        }
+
+        if ($submission->gene) {
+            $snapshot->gene = (object) [
+                'id' => $submission->gene->hgnc_id,
+                'symbol' => $submission->gene->symbol,
+            ];
+        }
+        if ($submission->inheritance) {
+            $snapshot->moi = (object) [
+                'id' => $submission->inheritance->curie,
+                'name' => $submission->inheritance->name,
+            ];
+        }
+        if ($submission->classification) {
+            $snapshot->classification = (object) [
+                'id' => $submission->classification->curie,
+                'name' => $submission->classification->name,
+            ];
+        }
+        if ($submission->submitter) {
+            $snapshot->additional_information = (object) [
+                'submitter_curie' => $submission->submitter->curie,
+                'submitter_title' => $submission->submitter->name,
+                'submitted_as_submission_id' => $submission->local_key ?? '',
+            ];
+        }
+
+        return $snapshot;
+    }
+
+    /**
      * Release a single job's submissions within a transaction.
      */
     protected function releaseJob(Job $job): int
@@ -932,7 +983,7 @@ class GenccRelease extends Command
 
                     if ($targetState === Submission::STATUS_PUBLISHED) {
                         $submission->released_at = Carbon::now();
-                        $submission->original_submission_data = $submission->submission_data;
+                        $submission->original_submission_data = $this->frozenSnapshotFor($submission);
                     }
 
                     if ($targetState === Submission::STATUS_UNPUBLISHED) {
@@ -943,7 +994,7 @@ class GenccRelease extends Command
                 } else {
                     $submission->update([
                         'released_at' => Carbon::now(),
-                        'original_submission_data' => $submission->submission_data
+                        'original_submission_data' => $this->frozenSnapshotFor($submission)
                     ]);
                 }
 

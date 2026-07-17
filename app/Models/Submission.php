@@ -1059,16 +1059,15 @@ class Submission extends Model
 
     /**
      * Initialize the submission_data structure for a blank submission
-     * Uses empty placeholders when foreign keys are null
+     * with fields edited or displayed directly from the JSON document.
+     * Authoritative relation fields are added to the frozen snapshot at release.
      */
     public function initialize_submission_data()
     {
         $this->submission_data = [
-                    "moi" => ["id" => "", "name" => ""],
                     "submission_id" => $this->sid,
                     "local_key" => $this->local_key,
                     "submission_label" => $this->friendly,
-                    "gene" => ["id" => "", "symbol" => ""],
                     "type" => "Reserved",
                     "notes" => ["display" => "", "private" => ""],
                     "report" => ["ext_url" => "", "display_date" => ""],
@@ -1078,9 +1077,7 @@ class Submission extends Model
                     "evidence" => [["pmid" => ""]],
                     //"lumpsplit" => [["key" => "value"]],
                     "contributors"=> ["primary" => ["id" => "", "name" => ""]],
-                    "classification" => ["id" => "", "name" => ""],
-                    "mechanism" => ["id" => "", "name" => "", "comment" => ""],
-                    "additional_information" => [["key" => "values"]]
+                    "mechanism" => ["id" => "", "name" => "", "comments" => ""],
                 ];
     }
 
