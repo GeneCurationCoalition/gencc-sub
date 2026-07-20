@@ -170,7 +170,7 @@ class ImportGencc extends Command
                     // Fix dates in display strings too
                     $display_date = $this->fix_date_string($row['submitted_as_date']);
 
-                    $submission->original_submission_data = [
+                    $submission->released_submission_data = [
                         "moi" => ["id" => $row['submitted_as_moi_id'], "name" => $row['submitted_as_moi_name']],
                         "submission_id" => $row['submitted_as_submission_id'],
                         "submission_label" => '',

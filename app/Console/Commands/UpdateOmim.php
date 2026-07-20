@@ -233,7 +233,7 @@ class UpdateOmim extends Command
 
                         ]);
 
-                        $submission->original_submission_data = [
+                        $submission->released_submission_data = [
                             "moi" => ["id" => $inheritance->curie, "name" => $phenotype['moi']],
                             "submission_id" => '',
                             "submission_label" => '',
@@ -252,7 +252,7 @@ class UpdateOmim extends Command
                                                         'submitted_as_submission_id' => $submitter->curie]
                         ];
 
-                        $submission->submission_data = $submission->original_submission_data;
+                        $submission->submission_data = $submission->released_submission_data;
 
                         /*
                         $stat = Mim::updateOrCreate(  ['mim' => $phenotype['mim']],

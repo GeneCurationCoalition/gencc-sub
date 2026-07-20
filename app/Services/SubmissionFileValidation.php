@@ -1356,8 +1356,8 @@ class SubmissionFileValidation
             $currentState = $submission->status;
 
             // Get the existing gene HGNC ID from the submission
-            // Use the gene relationship's hgnc_id as authoritative source (original_submission_data may be null for legacy records)
-            $existingGeneHgncId = $submission->gene?->hgnc_id ?? $submission->original_submission_data?->gene?->id;
+            // Use the gene relationship's hgnc_id as authoritative source (released_submission_data may be null for legacy records)
+            $existingGeneHgncId = $submission->gene?->hgnc_id ?? $submission->released_submission_data?->gene?->id;
 
             foreach ($row_actions as $row_action) {
                 $row = $row_action['row'];

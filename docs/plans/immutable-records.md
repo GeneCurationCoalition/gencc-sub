@@ -28,7 +28,7 @@ Add an `updating` event in the `booted()` method that:
    - `status` is `published` or `unpublished`, OR
    - The submission's job has `status = submitted`
 2. If immutable, only allow changes to a whitelist of fields:
-   - **Release process fields**: `status`, `released_at`, `unpublished_at`, `is_most_recent`, `is_live`, `original_submission_data`, `job_id` (for failed publish → draft move)
+   - **Release process fields**: `status`, `released_at`, `unpublished_at`, `is_most_recent`, `is_live`, `released_submission_data`, `job_id` (for failed publish → draft move)
    - **System fields**: `submission_errors` (for publish error recording)
 3. If any non-whitelisted field is dirty, throw an `\RuntimeException` with a descriptive message
 4. Add a bypass mechanism for the release process: a static flag `$bypassImmutability = false` that can be temporarily set to `true` by trusted system processes
@@ -56,7 +56,7 @@ static::updating(function (Submission $submission) {
     $allowedFields = [
         'status', 'released_at', 'unpublished_at',
         'is_most_recent', 'is_live',
-        'original_submission_data',
+        'released_submission_data',
         'job_id',              // failed publish moves submission to draft job
         'submission_errors',   // publish error recording
     ];

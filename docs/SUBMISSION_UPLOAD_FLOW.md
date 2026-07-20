@@ -169,7 +169,7 @@ $submission = $submitter->submissions()
     ->first();
 
 // Verify gene hasn't changed (not allowed)
-if ($submission->original_submission_data->gene->id != $row['hgnc_id']) {
+if ($submission->released_submission_data->gene->id != $row['hgnc_id']) {
     // Log error and skip row
 }
 
@@ -323,8 +323,7 @@ if ($this->report_date !== null) {
 
 g. **JSON Storage**:
 ```php
-$this->original_submission_data = $obj; // Original from template
-$this->submission_data = $obj; // Working copy
+$this->submission_data = $obj; // Editable data from template; release creates the frozen snapshot
 ```
 
 **Return Value**:
@@ -545,7 +544,7 @@ return true;
 
 1. **submissions**
    - INSERT (new submission) or UPDATE (republish/unpublish)
-   - Fields populated: `gene_id`, `disease_id`, `inheritance_id`, `classification_id`, `mechanism_id`, `report_date`, `report_url`, `submission_data` (JSON), `original_submission_data` (JSON), `submission_errors` (JSON), `status`, `user_id`, `job_id`, `submitter_id`, `origin_job_id`, `sid` (auto-generated for new)
+   - Fields populated: `gene_id`, `disease_id`, `inheritance_id`, `classification_id`, `mechanism_id`, `report_date`, `report_url`, `submission_data` (JSON), `submission_errors` (JSON), `status`, `user_id`, `job_id`, `submitter_id`, `origin_job_id`, `sid` (auto-generated for new). `released_submission_data` is created only at release.
 
 2. **pubmed_submission** (pivot table)
    - DELETE existing associations

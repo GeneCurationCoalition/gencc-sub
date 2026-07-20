@@ -980,6 +980,9 @@ class SubmissionApiTest extends TestCase
      */
     public function test_republish_transitions_to_draft_republish(): void
     {
+        $this->submission->released_submission_data = ['notes' => ['display' => 'prior release']];
+        $this->submission->save();
+
         // First make the submission published and live
         $this->submission->update([
             'status' => Submission::STATUS_PUBLISHED,
@@ -1007,6 +1010,7 @@ class SubmissionApiTest extends TestCase
             ->first();
         $this->assertNotNull($draftVersion);
         $this->assertNotEquals($this->submission->id, $draftVersion->id);
+        $this->assertNull($draftVersion->released_submission_data);
     }
 
     /**

@@ -888,7 +888,7 @@ class GenccRelease extends Command
      * Build the frozen "submitted_as" snapshot for a submission at release time.
      *
      * The public export (ReleaseSubmissionExport) reads submitted_as_* from the frozen
-     * original_submission_data. Live submission_data intentionally does not duplicate the
+     * released_submission_data. Live submission_data intentionally does not duplicate the
      * authoritative gene/moi/classification/submitter fields, while older rows may contain empty
      * placeholders for them. Release is the true "submitted as"
      * capture point, so we (re)derive those four sub-objects from the row's authoritative FK
@@ -983,7 +983,7 @@ class GenccRelease extends Command
 
                     if ($targetState === Submission::STATUS_PUBLISHED) {
                         $submission->released_at = Carbon::now();
-                        $submission->original_submission_data = $this->frozenSnapshotFor($submission);
+                        $submission->released_submission_data = $this->frozenSnapshotFor($submission);
                     }
 
                     if ($targetState === Submission::STATUS_UNPUBLISHED) {
@@ -994,7 +994,7 @@ class GenccRelease extends Command
                 } else {
                     $submission->update([
                         'released_at' => Carbon::now(),
-                        'original_submission_data' => $this->frozenSnapshotFor($submission)
+                        'released_submission_data' => $this->frozenSnapshotFor($submission)
                     ]);
                 }
 

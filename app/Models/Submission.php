@@ -48,7 +48,7 @@ class Submission extends Model
      */
     protected $casts = [
         'submission_data' => 'object',
-        'original_submission_data' => 'object',
+        'released_submission_data' => 'object',
         'submission_errors' => 'object',
         'evidence' => 'object',
         'normalized_pmids' => 'string',
@@ -70,7 +70,7 @@ class Submission extends Model
      */
 	protected $fillable = [	'ident', 'type', 'gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'friendly',
                             'classification_id', 'submitter_id', 'publish_date', 'report_date', 'report_url',
-                            'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'original_submission_data',
+                            'uuid', 'sid', 'version_number', 'is_most_recent', 'is_live', 'job_id', 'user_id', 'evidence', 'released_submission_data',
                             'submission_data', 'submission_errors', 'normalized_pmids', 'pmid_issues', 'history', 'tags',
                             'status', 'action', 'origin_state', 'local_key', 'last_edited_by',
                             'document_id', 'submitted_at', 'released_at', 'unpublished_at'];
@@ -250,7 +250,7 @@ class Submission extends Model
                     $allowedFields = [
                         'status', 'released_at', 'unpublished_at',
                         'is_most_recent', 'is_live',
-                        'original_submission_data',
+                        'released_submission_data',
                         'job_id',              // failed publish moves submission to draft job
                         'submission_errors',   // publish error recording
                         'sid',                 // set by created event via raw DB update
@@ -538,7 +538,7 @@ class Submission extends Model
                               'version_number', 'is_most_recent', 'is_live', // Required for display_id accessor and historical/archived version styling
                               'local_key', 'friendly', 'created_at', 'submitted_at', 'released_at', 'unpublished_at', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
-                              // Removed: 'original_submission_data', 'evidence' - too large for listing
+                              // Removed: 'released_submission_data', 'evidence' - too large for listing
                               'submission_data', 'submission_errors', 'status', 'origin_state')
                      ->with('gene:id,hgnc_id,symbol')
                      ->with('disease:id,curie,name,deprecated_name,status')
@@ -919,13 +919,8 @@ class Submission extends Model
         }
 
         /**
-         * We save the entire submission packet, unmodified, for future use.
-         * Clone to prevent subsequent modifications to submission_data from affecting original.
-         */
-        $this->original_submission_data = json_decode(json_encode($obj));
-
-        /**
-         * We also save a copy which can be edited by the user
+         * Save the editable submission packet. The release process captures the immutable
+         * released_submission_data snapshot only after portal edits are complete.
          */
         $this->submission_data = $obj;
 

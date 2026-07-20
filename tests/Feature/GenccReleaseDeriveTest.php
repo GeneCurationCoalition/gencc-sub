@@ -11,15 +11,17 @@ use App\Models\Inheritance;
 use App\Models\Classification;
 use App\Models\Submitter;
 use App\Console\Commands\GenccRelease;
+use App\Exports\ReleaseSubmissionExport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Console\OutputStyle;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\NullOutput;
 
 /**
  * Release-time derive fix for issue #114.
  *
- * The public export reads submitted_as_* from the frozen original_submission_data. The manual-entry
+ * The public export reads submitted_as_* from the frozen released_submission_data. The manual-entry
  * form only sets the FK columns and leaves submission_data's gene/moi/classification/
  * additional_information as empty placeholders, which the release freeze used to capture as blanks.
  * GenccRelease::frozenSnapshotFor() now re-derives those four sub-objects from the row's FK
@@ -101,7 +103,7 @@ class GenccReleaseDeriveTest extends TestCase
             'classification_id' => $this->classification->id,
             'local_key' => 'LOCAL-114',
             'submission_data' => $submissionData,
-            'original_submission_data' => null,
+            'released_submission_data' => null,
         ], $overrides));
     }
 
@@ -113,7 +115,7 @@ class GenccReleaseDeriveTest extends TestCase
 
         $this->assertEquals(Submission::STATUS_PUBLISHED, $submission->status);
 
-        $frozen = $submission->original_submission_data;
+        $frozen = $submission->released_submission_data;
         // the four FK-derived sub-objects are now the resolved values, not the blank placeholders
         $this->assertSame($this->gene->hgnc_id, $frozen->gene->id);
         $this->assertSame($this->gene->symbol, $frozen->gene->symbol);
@@ -132,7 +134,7 @@ class GenccReleaseDeriveTest extends TestCase
         $this->invokeReleaseJob($submission->job);
         $submission->refresh();
 
-        $frozen = $submission->original_submission_data;
+        $frozen = $submission->released_submission_data;
         // disease/notes/criteria are NOT re-derived - they come straight from submission_data
         $this->assertSame('Test Disease', $frozen->disease->name);
         $this->assertSame('kept-notes', $frozen->notes->display);
@@ -148,10 +150,10 @@ class GenccReleaseDeriveTest extends TestCase
         $this->invokeReleaseJob($submission->job);
         $submission->refresh();
 
-        $this->assertSame('', $submission->original_submission_data->gene->id);
-        $this->assertSame('', $submission->original_submission_data->gene->symbol);
+        $this->assertSame('', $submission->released_submission_data->gene->id);
+        $this->assertSame('', $submission->released_submission_data->gene->symbol);
         // the other FKs are still present, so they still derive
-        $this->assertSame($this->classification->curie, $submission->original_submission_data->classification->id);
+        $this->assertSame($this->classification->curie, $submission->released_submission_data->classification->id);
     }
 
     /** submission_data itself is left untouched (immutability guard); only the frozen copy is derived. */
@@ -162,6 +164,62 @@ class GenccReleaseDeriveTest extends TestCase
         $submission->refresh();
 
         $this->assertSame('', $submission->submission_data->gene->id);
-        $this->assertSame($this->gene->hgnc_id, $submission->original_submission_data->gene->id);
+        $this->assertSame($this->gene->hgnc_id, $submission->released_submission_data->gene->id);
+    }
+
+    public function test_file_and_api_loader_leaves_release_snapshot_null_until_release(): void
+    {
+        $submission = new Submission();
+        $packet = (object) [
+            'gene' => (object) ['id' => $this->gene->hgnc_id, 'symbol' => $this->gene->symbol],
+            'disease' => (object) ['id' => $this->disease->curie, 'name' => $this->disease->name],
+            'moi' => (object) ['id' => $this->inheritance->curie, 'name' => $this->inheritance->name],
+            'classification' => (object) ['id' => $this->classification->curie, 'name' => $this->classification->name],
+            'report' => (object) ['display_date' => '2026-07-20', 'ext_url' => 'https://example.org/report'],
+            'notes' => (object) ['display' => 'uploaded notes'],
+        ];
+
+        $this->assertTrue($submission->load_from_json($packet));
+        $this->assertNull($submission->released_submission_data);
+        $this->assertSame('uploaded notes', $submission->submission_data->notes->display);
+    }
+
+    public function test_release_export_reads_submitted_as_notes_from_frozen_snapshot(): void
+    {
+        $submission = $this->makePendingSubmission($this->placeholderData());
+        $this->invokeReleaseJob($submission->job);
+        $submission->refresh()->load(['gene', 'disease', 'originalDisease', 'classification', 'inheritance', 'submitter']);
+
+        // Do not save this mutation: a published row is immutable. It proves map() does not
+        // accidentally read the live JSON field when exporting the frozen release.
+        $submission->submission_data = (object) ['notes' => (object) ['display' => 'live value must not export']];
+
+        $export = new ReleaseSubmissionExport();
+        $row = array_combine($export->headings(), $export->map($submission));
+
+        $this->assertSame('kept-notes', $row['submitted_as_notes']);
+    }
+
+    public function test_unpublish_retains_its_copied_release_snapshot(): void
+    {
+        // TODO T1 tracks the missing schema migration for this production column.
+        if (!Schema::hasColumn('submissions', 'unpublished_at')) {
+            Schema::table('submissions', function ($table) {
+                $table->timestamp('unpublished_at')->nullable();
+            });
+        }
+
+        $job = Job::factory()->create(['status' => Job::STATUS_SUBMITTED, 'submitter_id' => $this->submitter->id]);
+        $submission = Submission::factory()->create([
+            'job_id' => $job->id,
+            'status' => Submission::STATUS_UNPUBLISH,
+            'released_submission_data' => ['notes' => ['display' => 'copied release']],
+        ]);
+
+        $this->invokeReleaseJob($job);
+        $submission->refresh();
+
+        $this->assertSame(Submission::STATUS_UNPUBLISHED, $submission->status);
+        $this->assertSame('copied release', $submission->released_submission_data->notes->display);
     }
 }

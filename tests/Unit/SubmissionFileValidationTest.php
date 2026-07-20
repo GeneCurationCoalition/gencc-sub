@@ -594,7 +594,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => json_encode(['test' => 'data']),
-            'original_submission_data' => json_encode(['test' => 'data']),
+            'released_submission_data' => json_encode(['test' => 'data']),
         ]);
 
         $worksheet = $this->createValidSpreadsheet([
@@ -635,7 +635,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => json_encode(['test' => 'data']),
-            'original_submission_data' => json_encode(['test' => 'data']),
+            'released_submission_data' => json_encode(['test' => 'data']),
         ]);
 
         $worksheet = $this->createValidSpreadsheet([
@@ -679,7 +679,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => json_encode(['test' => 'data']),
-            'original_submission_data' => json_encode(['test' => 'data']),
+            'released_submission_data' => json_encode(['test' => 'data']),
         ]);
 
         $worksheet = $this->createValidSpreadsheet([
@@ -705,11 +705,11 @@ class SubmissionFileValidationTest extends TestCase
      * Test: Republish fails when gene relationship is null (gene_id = null)
      *
      * When the submission has no gene relationship, we should still detect gene changes
-     * by falling back to original_submission_data.
+     * by falling back to released_submission_data.
      */
     public function test_republish_with_null_gene_relationship_uses_fallback(): void
     {
-        // Create a published submission with null gene_id but original_submission_data has the gene
+        // Create a published submission with null gene_id but released_submission_data has the gene
         // Note: Don't use json_encode() - the 'object' cast handles serialization
         $submission = Submission::create([
             'sid' => 'SGC-100004',
@@ -724,7 +724,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => (object)['test' => 'data'],
-            'original_submission_data' => (object)[
+            'released_submission_data' => (object)[
                 'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
             ],
         ]);
@@ -746,15 +746,15 @@ class SubmissionFileValidationTest extends TestCase
             return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
         });
 
-        $this->assertNotEmpty($geneChangeErrors, 'Should detect gene change when using original_submission_data fallback');
+        $this->assertNotEmpty($geneChangeErrors, 'Should detect gene change when using released_submission_data fallback');
     }
 
     /**
-     * Test: Republish with null gene relationship and matching gene in original_submission_data
+     * Test: Republish with null gene relationship and matching gene in released_submission_data
      */
     public function test_republish_with_null_gene_relationship_same_gene_passes(): void
     {
-        // Create a published submission with null gene_id but original_submission_data has the gene
+        // Create a published submission with null gene_id but released_submission_data has the gene
         // Note: Don't use json_encode() - the 'object' cast handles serialization
         $submission = Submission::create([
             'sid' => 'SGC-100005',
@@ -769,7 +769,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => (object)['test' => 'data'],
-            'original_submission_data' => (object)[
+            'released_submission_data' => (object)[
                 'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
             ],
         ]);
@@ -779,7 +779,7 @@ class SubmissionFileValidationTest extends TestCase
             $this->createValidDataRow([
                 'action' => 'R',
                 'sgc_id' => 'SGC-100005',
-                'hgnc_id' => 'HGNC:5' // Same gene as in original_submission_data
+                'hgnc_id' => 'HGNC:5' // Same gene as in released_submission_data
             ])
         ]);
 
@@ -791,11 +791,11 @@ class SubmissionFileValidationTest extends TestCase
             return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
         });
 
-        $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when original_submission_data gene matches');
+        $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when released_submission_data gene matches');
     }
 
     /**
-     * Test: Republish with both gene relationship and original_submission_data, gene relationship takes priority
+     * Test: Republish with both gene relationship and released_submission_data, gene relationship takes priority
      */
     public function test_republish_gene_relationship_takes_priority_over_original_data(): void
     {
@@ -812,7 +812,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         // Create a published submission with gene_id pointing to HGNC:5
-        // but original_submission_data has a DIFFERENT gene
+        // but released_submission_data has a DIFFERENT gene
         $submission = Submission::create([
             'sid' => 'SGC-100006',
             'gene_id' => 1, // HGNC:5 gene
@@ -826,12 +826,12 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => (object)['test' => 'data'],
-            'original_submission_data' => (object)[
+            'released_submission_data' => (object)[
                 'gene' => (object)['id' => 'HGNC:9999', 'symbol' => 'OTHERGENE'] // Different from gene_id
             ],
         ]);
 
-        // Try to republish with HGNC:5 (matching gene_id, not original_submission_data)
+        // Try to republish with HGNC:5 (matching gene_id, not released_submission_data)
         $worksheet = $this->createValidSpreadsheet([
             $this->createValidDataRow([
                 'action' => 'R',
@@ -848,7 +848,7 @@ class SubmissionFileValidationTest extends TestCase
             return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
         });
 
-        $this->assertEmpty($geneChangeErrors, 'Gene relationship should take priority over original_submission_data');
+        $this->assertEmpty($geneChangeErrors, 'Gene relationship should take priority over released_submission_data');
     }
 
     /**
@@ -870,7 +870,7 @@ class SubmissionFileValidationTest extends TestCase
             'status' => 'published',
             'is_live' => true,
             'submission_data' => json_encode(['test' => 'data']),
-            'original_submission_data' => json_encode(['test' => 'data']),
+            'released_submission_data' => json_encode(['test' => 'data']),
         ]);
 
         // Use lowercase hgnc: prefix

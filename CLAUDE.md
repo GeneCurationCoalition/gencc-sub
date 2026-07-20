@@ -135,7 +135,7 @@ php artisan debug:document-processor  # Debug document processing
 - `belongsTo` Gene, Disease, Classification, Inheritance, Mechanism
 - `belongsToMany` Pubmed
 - Auto-generates sid as `SGC-1XXXXX` format
-- JSON fields: `submission_data`, `original_submission_data`, `submission_errors`, `evidence`, `history`
+- JSON fields: `submission_data`, `released_submission_data`, `submission_errors`, `evidence`, `history`
 - Status workflow: Initializing → New → Processing → Errors/Published → Removed
 
 **Gene** - HGNC gene data

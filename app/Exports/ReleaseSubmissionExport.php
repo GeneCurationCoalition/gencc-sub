@@ -79,25 +79,24 @@ class ReleaseSubmissionExport implements FromQuery, WithHeadings, WithMapping, W
      */
     public function map($submission): array
     {
-        // Extract submitted_as fields from original_submission_data JSON
-        $originalData = $submission->original_submission_data;
+        // Extract submitted_as fields from the frozen release snapshot.
+        $releasedData = $submission->released_submission_data;
 
-        $submittedAsHgncId = $this->getNestedValue($originalData, ['gene', 'id']);
-        $submittedAsHgncSymbol = $this->getNestedValue($originalData, ['gene', 'symbol']);
-        $submittedAsDiseaseId = $this->getNestedValue($originalData, ['disease', 'id']);
-        $submittedAsDiseaseName = $this->getNestedValue($originalData, ['disease', 'name']);
-        $submittedAsMoiId = $this->getNestedValue($originalData, ['moi', 'id']);
-        $submittedAsMoiName = $this->getNestedValue($originalData, ['moi', 'name']);
-        $submittedAsSubmitterId = $this->getNestedValue($originalData, ['additional_information', 'submitter_curie']);
-        $submittedAsSubmitterName = $this->getNestedValue($originalData, ['additional_information', 'submitter_title']);
-        $submittedAsClassificationId = $this->getNestedValue($originalData, ['classification', 'id']);
-        $submittedAsClassificationName = $this->getNestedValue($originalData, ['classification', 'name']);
-        $submittedAsDate = $this->getNestedValue($originalData, ['report', 'display_date']);
-        $submittedAsReportUrl = $this->getNestedValue($originalData, ['report', 'ext_url']);
-        // Notes come from submission_data (current/editable) rather than original_submission_data
-        $submittedAsNotes = $this->getNestedValue($submission->submission_data, ['notes', 'display']);
-        $submittedAsCriteriaUrl = $this->getNestedValue($originalData, ['criteria', 'url']);
-        $submittedAsSubmissionId = $this->getNestedValue($originalData, ['additional_information', 'submitted_as_submission_id']);
+        $submittedAsHgncId = $this->getNestedValue($releasedData, ['gene', 'id']);
+        $submittedAsHgncSymbol = $this->getNestedValue($releasedData, ['gene', 'symbol']);
+        $submittedAsDiseaseId = $this->getNestedValue($releasedData, ['disease', 'id']);
+        $submittedAsDiseaseName = $this->getNestedValue($releasedData, ['disease', 'name']);
+        $submittedAsMoiId = $this->getNestedValue($releasedData, ['moi', 'id']);
+        $submittedAsMoiName = $this->getNestedValue($releasedData, ['moi', 'name']);
+        $submittedAsSubmitterId = $this->getNestedValue($releasedData, ['additional_information', 'submitter_curie']);
+        $submittedAsSubmitterName = $this->getNestedValue($releasedData, ['additional_information', 'submitter_title']);
+        $submittedAsClassificationId = $this->getNestedValue($releasedData, ['classification', 'id']);
+        $submittedAsClassificationName = $this->getNestedValue($releasedData, ['classification', 'name']);
+        $submittedAsDate = $this->getNestedValue($releasedData, ['report', 'display_date']);
+        $submittedAsReportUrl = $this->getNestedValue($releasedData, ['report', 'ext_url']);
+        $submittedAsNotes = $this->getNestedValue($releasedData, ['notes', 'display']);
+        $submittedAsCriteriaUrl = $this->getNestedValue($releasedData, ['criteria', 'url']);
+        $submittedAsSubmissionId = $this->getNestedValue($releasedData, ['additional_information', 'submitted_as_submission_id']);
 
         // PMIDs - add space after commas for readability
         $pmids = $submission->normalized_pmids

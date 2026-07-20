@@ -41,7 +41,7 @@ class SubmissionFactory extends Factory
             // created_at is auto-set by Laravel
             'status' => Submission::STATUS_DRAFT_NEW,
             'submission_data' => [],
-            'original_submission_data' => [],
+            'released_submission_data' => [],
             'submission_errors' => null,
             'history' => null,
             'evidence' => null,

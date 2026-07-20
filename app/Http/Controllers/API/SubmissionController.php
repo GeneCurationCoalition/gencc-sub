@@ -899,6 +899,7 @@ class SubmissionController extends Controller
             $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString(); // Generate new unique ident
             $newSubmission->version_number = $newVersionNumber;
             $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
+            $newSubmission->released_submission_data = null;
             $newSubmission->job_id = $job->id;
             $newSubmission->released_at = null; // New version not yet released
 
@@ -1442,6 +1443,7 @@ class SubmissionController extends Controller
         $newSubmission->ident = \Illuminate\Support\Str::uuid()->toString();
         $newSubmission->version_number = $newVersionNumber;
         $newSubmission->status = Submission::STATUS_DRAFT_REPUBLISH;
+        $newSubmission->released_submission_data = null;
         $newSubmission->job_id = $job->id;
         $newSubmission->released_at = null;
         $newSubmission->save();

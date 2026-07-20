@@ -948,6 +948,7 @@ class DocumentController extends Controller
                         $submission->ident = \Illuminate\Support\Str::uuid()->toString();
                         $submission->version_number = $newVersionNumber;
                         $submission->released_at = null;
+                        $submission->released_submission_data = null;
                         \Log::info("DocumentController@parser: Created new version {$newVersionNumber} for republish of {$row['sgc_id']}");
                     }
                 } else {
@@ -1018,7 +1019,7 @@ class DocumentController extends Controller
             $data->notes_display = $row['notes'];
             $data->notes_private = "File " . $document->file_name . " Row " . $rownum;
 
-            // Capture submitter info for original_submission_data
+            // Capture submitter info for the eventual release snapshot.
             $data->submitter_curie = $document->submitter->curie ?? '';
             $data->submitter_title = $document->submitter->name ?? '';
 
