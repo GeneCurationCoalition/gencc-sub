@@ -128,7 +128,11 @@ class GeneGraphProcessor:
             proposition = self._resolve_reference(data, data.get('proposition', {}))
             gene_id = self._transform_gene(proposition.get('subjectGene', ''))
             disease_id = self._transform_disease(proposition.get('objectCondition', ''))
-            mode_of_inheritance = self._transform_moi(proposition.get('qualifierModeOfInheritance', ''))
+            # GeneGraph renamed this key from 'qualifierModeOfInheritance' to
+            # 'modeOfInheritanceQualifier'; accept both for backward compatibility.
+            moi_raw = proposition.get('modeOfInheritanceQualifier',
+                                      proposition.get('qualifierModeOfInheritance', ''))
+            mode_of_inheritance = self._transform_moi(moi_raw)
 
             # SOP version and classification
             sop_version = data.get('specifiedBy', '')
@@ -321,25 +325,46 @@ class GeneGraphProcessor:
         return str(value)
 
     def _transform_gene(self, gene: Any) -> str:
-        """Transform gene ID from hgnc:5036 to HGNC:5036."""
+        """Transform gene ID to HGNC:5036.
+
+        Handles both the CURIE form (hgnc:5036) and the full IRI GeneGraph now
+        emits (https://identifiers.org/hgnc:5036).
+        """
         gene = self._to_str(gene)
         if not gene:
             return ''
+        match = re.search(r'(?i)hgnc[:_](\d+)', gene)
+        if match:
+            return f'HGNC:{match.group(1)}'
         return gene.upper()
 
     def _transform_disease(self, disease: Any) -> str:
-        """Transform disease ID from obo:MONDO_999999 to MONDO:999999."""
+        """Transform disease ID to MONDO:999999.
+
+        Handles the CURIE form (obo:MONDO_999999) and the full OBO IRI GeneGraph
+        now emits (http://purl.obolibrary.org/obo/MONDO_0015452).
+        """
         disease = self._to_str(disease)
         if not disease:
             return ''
-        return re.sub(r'(?i)obo:MONDO_', 'MONDO:', disease).upper()
+        match = re.search(r'(?i)(MONDO|OMIM|ORPHA)[:_](\d+)', disease)
+        if match:
+            return f'{match.group(1).upper()}:{match.group(2)}'
+        return disease.upper()
 
     def _transform_moi(self, moi: Any) -> str:
-        """Transform MOI from obo:HP_999999 to HP:999999."""
+        """Transform MOI to HP:999999.
+
+        Handles the CURIE form (obo:HP_999999) and the full OBO IRI GeneGraph
+        now emits (http://purl.obolibrary.org/obo/HP_0000006).
+        """
         moi = self._to_str(moi)
         if not moi:
             return ''
-        return re.sub(r'(?i)obo:HP_', 'HP:', moi).upper()
+        match = re.search(r'(?i)HP[:_](\d+)', moi)
+        if match:
+            return f'HP:{match.group(1)}'
+        return moi.upper()
 
     def _clean_notes(self, notes: Any) -> str:
         """Clean and normalize notes field."""

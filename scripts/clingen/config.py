@@ -127,6 +127,7 @@ SOP_VERSION_URL_MAP: Dict[str, str] = {
     'GeneValidityCriteria9': 'https://clinicalgenome.org/docs/gene-disease-validity-standard-operating-procedure-version-9/',
     'GeneValidityCriteria10': 'https://clinicalgenome.org/docs/gene-disease-validity-standard-operating-procedures-version-10/',
     'GeneValidityCriteria11': 'https://clinicalgenome.org/docs/gene-disease-validity-standard-operating-procedures-version-11/',
+    'GeneValidityCriteria12': 'https://clinicalgenome.org/docs/gene-disease-validity-standard-operating-procedures-version-12/',
 }
 
 # Default SOP URL for unknown versions
@@ -198,8 +199,14 @@ def get_classification_id(classification: str) -> str:
 
 
 def get_assertion_criteria_url(sop_version: str) -> str:
-    """Get the assertion criteria URL based on SOP version"""
-    return SOP_VERSION_URL_MAP.get(sop_version, DEFAULT_SOP_URL)
+    """Get the assertion criteria URL based on SOP version.
+
+    GeneGraph now prefixes the version with a 'cg:' CURIE namespace
+    (e.g. 'cg:GeneValidityCriteria10'); strip any namespace prefix before lookup
+    so both the bare and prefixed forms resolve.
+    """
+    version = (sop_version or '').split(':')[-1].strip()
+    return SOP_VERSION_URL_MAP.get(version, DEFAULT_SOP_URL)
 
 
 def ensure_directories():
