@@ -38,7 +38,7 @@
 		"mechanism": {
 			"id": "{{ $submission->mechanism->curie ?? null }}",
 			"name": "{{ $submission->mechanism->name ?? null }}"
-			"comments": "{{ $submission->submission_data->mechanism->comments ?? '' }}"
+			"comment": "{{ $submission->submission_data->mechanism->comment ?? '' }}"
 		}
 		"report": {
 			"display_date": "{{ $submission->report_date }}",
@@ -68,8 +68,8 @@
 			"display": "{{ $submission->submission_data->version->display }}",
 			"internal": "{{ $submission->submission_data->version->internal }}",
 			"reasons": [
-				@if (isset($submission->submission_data->version->reasons))
-				@forelse($submission->submission_data->version->reasons as $reason_code)
+				@if (isset($submission->submission_data->reason_codes))
+				@forelse($submission->submission_data->reason_codes as $reason_code)
 					"{{ $reason_code }}"
 					@if (!$loop->last)
 					,

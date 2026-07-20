@@ -779,7 +779,7 @@ class SubmissionApiTest extends TestCase
             ->postJson('/api/submissions/' . $this->submission->sid, [
                 'type' => 'mechanism_of_disease',
                 'curie' => 'INVALID:MECH',
-                'comment' => ''
+                'comments' => ''
             ]);
 
         $response->assertStatus(200);
@@ -788,6 +788,24 @@ class SubmissionApiTest extends TestCase
             'status_code' => 3001,
             'message' => 'Mechanism not found'
         ]);
+    }
+
+    public function test_mechanism_comments_are_persisted_under_the_canonical_key(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->postJson('/api/submissions/' . $this->submission->sid, [
+                'type' => 'mechanism_of_disease',
+                'curie' => 'MECH:001',
+                'comments' => 'Mechanism evidence summary',
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => 'true', 'status_code' => 200]);
+
+        $this->submission->refresh();
+        $this->assertSame('MECH:001', $this->submission->submission_data->mechanism->id);
+        $this->assertSame('Mechanism evidence summary', $this->submission->submission_data->mechanism->comments);
+        $this->assertFalse(property_exists($this->submission->submission_data->mechanism, 'comment'));
     }
 
     /**

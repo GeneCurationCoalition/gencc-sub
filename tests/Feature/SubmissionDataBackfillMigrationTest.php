@@ -109,13 +109,18 @@ class SubmissionDataBackfillMigrationTest extends TestCase
 
     public function test_moves_legacy_mechanism_comment_to_comments(): void
     {
-        $s = $this->seedSubmission($this->gapData(['id' => '', 'name' => '', 'comment' => 'legacy text']));
+        $s = $this->seedSubmission(
+            $this->gapData(['id' => '', 'name' => '', 'comment' => 'legacy text']),
+            $this->gapData(['id' => '', 'name' => '', 'comment' => 'frozen legacy text'])
+        );
         $this->runMigration();
         $s->refresh();
 
         $mech = $s->submission_data->mechanism;
         $this->assertSame('legacy text', $mech->comments);
         $this->assertFalse(property_exists($mech, 'comment'), 'singular comment key should be removed');
+        $this->assertSame('frozen legacy text', $s->original_submission_data->mechanism->comments);
+        $this->assertFalse(property_exists($s->original_submission_data->mechanism, 'comment'));
     }
 
     public function test_does_not_clobber_real_values_or_existing_comments(): void
@@ -145,5 +150,47 @@ class SubmissionDataBackfillMigrationTest extends TestCase
         $after = json_encode($s->fresh()->original_submission_data);
         $this->runMigration();
         $this->assertSame($after, json_encode($s->fresh()->original_submission_data), 'second run must be a no-op');
+    }
+
+    public function test_only_live_published_portal_snapshots_are_backfilled(): void
+    {
+        $notPortal = $this->seedSubmission($this->gapData(), $this->gapData(), ['type' => Submission::TYPE_FILE_SUBMISSION]);
+        $notPublished = $this->seedSubmission($this->gapData(), $this->gapData(), ['status' => Submission::STATUS_NEW]);
+        $notLive = $this->seedSubmission($this->gapData(), $this->gapData(), ['is_live' => false]);
+
+        $this->runMigration();
+
+        foreach ([$notPortal, $notPublished, $notLive] as $submission) {
+            $frozen = $submission->fresh()->original_submission_data;
+            $this->assertSame('', $frozen->gene->id);
+            $this->assertSame('', $frozen->moi->id);
+            $this->assertSame('', $frozen->classification->id);
+            $this->assertIsArray($frozen->additional_information);
+        }
+    }
+
+    public function test_backfill_processes_rows_beyond_the_first_chunk(): void
+    {
+        $overrides = [
+            'status' => Submission::STATUS_PUBLISHED,
+            'type' => Submission::TYPE_PORTAL_SUBMISSION,
+            'is_live' => true,
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $this->gene->id,
+            'inheritance_id' => $this->inheritance->id,
+            'classification_id' => $this->classification->id,
+            'submission_data' => $this->gapData(),
+            'original_submission_data' => $this->gapData(),
+        ];
+
+        $submissions = Submission::factory()->count(501)->create($overrides);
+        $lastSubmission = $submissions->last();
+
+        $this->runMigration();
+
+        $frozen = $lastSubmission->fresh()->original_submission_data;
+        $this->assertSame($this->gene->hgnc_id, $frozen->gene->id);
+        $this->assertSame($this->inheritance->curie, $frozen->moi->id);
+        $this->assertSame($this->classification->curie, $frozen->classification->id);
     }
 }
