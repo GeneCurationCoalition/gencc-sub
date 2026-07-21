@@ -449,7 +449,7 @@
             const response = await axios.post('/api/submissions/' + props.submission.ident, {
                 type: 'mechanism_of_disease',
                 curie: obj.curie,
-                comments: obj.comments
+                comment: obj.comment
             }, {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'

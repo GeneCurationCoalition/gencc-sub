@@ -393,7 +393,7 @@ GEN-API-KEY: your-api-token
 | `contributors.primary.id` | string | No | Primary contributor identifier |
 | `local_key` | string | No | Your internal tracking identifier |
 | `mechanism.id` | string | No | Mechanism of disease (e.g., `"GENCC:200001"`) |
-| `mechanism.comments` | string | No | Comments on mechanism |
+| `mechanism.comment` | string | No | Comment on mechanism |
 
 ### Required Fields
 

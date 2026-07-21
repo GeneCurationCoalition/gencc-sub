@@ -36,7 +36,7 @@
 		"mechanism": {
 			"id": "{{ $d->gencc_mechanism_id }}",
 			"name": "{{ $d->gencc_mechanism_name }}",
-			"comments": "{{ $d->gencc_mechanism_comment }}"
+			"comment": "{{ $d->gencc_mechanism_comment }}"
 		},
 		"criteria": {
 			"name": "{{ $d->criteria_name }}",

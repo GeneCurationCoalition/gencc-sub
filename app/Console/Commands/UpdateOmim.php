@@ -247,7 +247,7 @@ class UpdateOmim extends Command
                             "evidence" => [],
                             "contributors"=> ["primary" => ["id" => "", "name" => ""]],
                             "classification" => ["id" => $classification->curie, "name" => $classification->name],
-                            "mechanism" => ["id" => "", "name" => "", "comments" => ""],
+                            "mechanism" => ["id" => "", "name" => "", "comment" => ""],
                             "additional_information" => ['submitter_curie' => $submitter->curie, 'submitter_title' => $submitter->name,
                                                         'submitted_as_submission_id' => $submitter->curie]
                         ];

@@ -341,7 +341,7 @@ class SubmissionController extends Controller
                 break;
             case 'mechanism_of_disease':
                 $curie = $request->input('curie');
-                $comments = $request->input('comments');
+                $comment = $request->input('comment');
 
                 $submission_data = $submission->submission_data;
                 $mod = $submission_data->mechanism ?? null;
@@ -370,8 +370,8 @@ class SubmissionController extends Controller
                     $mod->name = $mechanism->name;
                 }
 
-                // Always update comments (can be updated independently of mechanism)
-                $mod->comments = $comments ?? '';
+                // Always update comment (can be updated independently of mechanism)
+                $mod->comments = $comment ?? '';
                 $submission_data->mechanism = $mod;
                 $submission->submission_data = $submission_data;
                 $bags = ['mech_of_disease'];

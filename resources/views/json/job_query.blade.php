@@ -38,7 +38,7 @@
 		"mechanism": {
 			"id": "{{ $submission->mechanism->curie ?? null }}",
 			"name": "{{ $submission->mechanism->name ?? null }}"
-			"comments": "{{ $submission->submission_data->mechanism->comments ?? '' }}"
+			"comment": "{{ $submission->submission_data->mechanism->comment ?? '' }}"
 		}
 		"report": {
 			"display_date": "{{ $submission->report_date }}",
