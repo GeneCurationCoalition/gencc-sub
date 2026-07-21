@@ -769,6 +769,11 @@ class SubmissionApiTest extends TestCase
      */
     public function test_update_gene_with_valid_id_succeeds(): void
     {
+        $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
+        $submissionData['gene'] = ['id' => 'HGNC:OLD', 'symbol' => 'OLD'];
+        $this->submission->submission_data = $submissionData;
+        $this->submission->save();
+
         $response = $this->actingAs($this->user)
             ->postJson('/api/submissions/' . $this->submission->sid, [
                 'type' => 'gene',
@@ -781,6 +786,10 @@ class SubmissionApiTest extends TestCase
             'status_code' => 200,
             'message' => 'Submission Updated'
         ]);
+
+        $this->submission->refresh();
+        $this->assertSame('HGNC:5', $this->submission->submission_data->gene->id);
+        $this->assertNull($this->submission->submission_data->gene->symbol);
     }
 
     /**
@@ -788,6 +797,11 @@ class SubmissionApiTest extends TestCase
      */
     public function test_update_inheritance_with_valid_id_succeeds(): void
     {
+        $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
+        $submissionData['moi'] = ['id' => 'HP:OLD', 'name' => 'Old label'];
+        $this->submission->submission_data = $submissionData;
+        $this->submission->save();
+
         $response = $this->actingAs($this->user)
             ->postJson('/api/submissions/' . $this->submission->sid, [
                 'type' => 'inheritance',
@@ -800,6 +814,10 @@ class SubmissionApiTest extends TestCase
             'status_code' => 200,
             'message' => 'Submission Updated'
         ]);
+
+        $this->submission->refresh();
+        $this->assertSame('HP:0000006', $this->submission->submission_data->moi->id);
+        $this->assertNull($this->submission->submission_data->moi->name);
     }
 
     /**
@@ -807,6 +825,11 @@ class SubmissionApiTest extends TestCase
      */
     public function test_update_classification_with_valid_id_succeeds(): void
     {
+        $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
+        $submissionData['classification'] = ['id' => 'GENCC:OLD', 'name' => 'Old label'];
+        $this->submission->submission_data = $submissionData;
+        $this->submission->save();
+
         $response = $this->actingAs($this->user)
             ->postJson('/api/submissions/' . $this->submission->sid, [
                 'type' => 'classification',
@@ -819,6 +842,33 @@ class SubmissionApiTest extends TestCase
             'status_code' => 200,
             'message' => 'Submission Updated'
         ]);
+
+        $this->submission->refresh();
+        $this->assertSame('GENCC:100001', $this->submission->submission_data->classification->id);
+        $this->assertNull($this->submission->submission_data->classification->name);
+    }
+
+    public function test_update_disease_records_only_the_explicit_identifier(): void
+    {
+        $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
+        $submissionData['disease'] = ['id' => 'MONDO:OLD', 'name' => 'Old label'];
+        $this->submission->submission_data = $submissionData;
+        $this->submission->save();
+
+        $response = $this->actingAs($this->user)
+            ->postJson('/api/submissions/' . $this->submission->sid, [
+                'type' => 'disease',
+                'curie' => 'MONDO:0000001'
+            ]);
+
+        $response->assertOk()->assertJson([
+            'success' => 'true',
+            'status_code' => 200,
+        ]);
+
+        $this->submission->refresh();
+        $this->assertSame('MONDO:0000001', $this->submission->submission_data->disease->id);
+        $this->assertNull($this->submission->submission_data->disease->name);
     }
 
     /**

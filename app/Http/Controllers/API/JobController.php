@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Http\Requests\JobRequest;
+use Illuminate\Support\Facades\DB;
 
 use App\Models\Disease;
 use App\Models\Inheritance;
@@ -380,10 +381,11 @@ class JobController extends Controller
         }
 
         try {
-            // Use JobStateMachine to submit the job
-            // This will validate state, transition job to 'submitted', and transition all submissions
-            JobStateMachine::submit($job);
-            $job->save();
+            DB::transaction(function () use ($job) {
+                // Snapshot all editable submission data and transition the job atomically.
+                JobStateMachine::submit($job);
+                $job->save();
+            });
 
             return response()->json(['success' => 'true',
                     'status_code' => 200,

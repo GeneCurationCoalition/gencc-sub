@@ -204,6 +204,14 @@ class JobStateMachine
             }
         }
 
+        // The Submit click is the boundary between editable working data and the submitted-as
+        // snapshot. This applies to every ingestion type so portal edits to uploaded records are
+        // captured, while untouched uploaded labels remain exactly as supplied.
+        foreach ($job->submissions as $submission) {
+            $submission->original_submission_data = json_decode(json_encode($submission->submission_data));
+            $submission->save();
+        }
+
         // Transition job
         self::transition($job, Job::STATUS_SUBMITTED);
 

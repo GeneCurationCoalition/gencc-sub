@@ -83,7 +83,15 @@ class JobStateMachineTest extends TestCase
         $sub1 = Submission::factory()->create([
             'job_id' => $job->id,
             'status' => Submission::STATUS_NEW,
-            'submitted_at' => null
+            'submitted_at' => null,
+            'submission_data' => [
+                'gene' => ['id' => 'HGNC:5', 'symbol' => null],
+                'disease' => ['id' => 'OMIM:123456', 'name' => 'Uploaded disease label'],
+                'notes' => ['display' => 'Edited before submit', 'private' => 'Private note'],
+            ],
+            'original_submission_data' => [
+                'gene' => ['id' => 'HGNC:OLD', 'symbol' => 'OLD'],
+            ],
         ]);
 
         $sub2 = Submission::factory()->create([
@@ -119,6 +127,12 @@ class JobStateMachineTest extends TestCase
         $this->assertNotNull($sub1->submitted_at);
         $this->assertNotNull($sub2->submitted_at);
         $this->assertNotNull($sub3->submitted_at);
+
+        // Submit snapshots the complete edited document for every ingestion type. Explicit
+        // uploaded labels that were not edited remain unchanged.
+        $this->assertEquals($sub1->submission_data, $sub1->original_submission_data);
+        $this->assertSame('Uploaded disease label', $sub1->original_submission_data->disease->name);
+        $this->assertNull($sub1->original_submission_data->gene->symbol);
     }
 
     /**
