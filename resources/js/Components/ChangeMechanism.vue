@@ -9,7 +9,7 @@ const props = defineProps(['input', 'visible', 'title', 'label']);
 // component side validations (mechanism is optional to allow comment-only updates)
 const schema = yup.object({
   mechanism: yup.string().nullable().label('Mechanism of Disease'),
-  comment: yup.string().label('Comment')
+  comments: yup.string().label('Comment')
 });
 
 const {defineField, handleSubmit, resetForm, errors} = useForm({
@@ -17,7 +17,7 @@ const {defineField, handleSubmit, resetForm, errors} = useForm({
 });
 
 const [mechanism] = defineField('mechanism');
-const [comment] = defineField('comment');
+const [comments] = defineField('comments');
 
 const disabled = computed(() => {
   return Object.keys(errors.value).length !== 0
@@ -48,7 +48,7 @@ function closeCallback() {
   if (disabled.value === true)
     return;
 
-  emit('select_mechanism_item', {curie: mechanism.value, comment: comment.value});
+  emit('select_mechanism_item', {curie: mechanism.value, comments: comments.value});
   emit('select_dialog_close');
 
 }
@@ -66,22 +66,19 @@ function initializeInput() {
     // No mechanism object at all
     console.log('ChangeMechanism - No mechanism object, setting to null');
     mechanism.value = null;
-    comment.value = '';
+    comments.value = '';
   } else {
     // Mechanism object exists - extract values
     // Set mechanism to null if id is empty string or null
     const mechId = (props.input.id && props.input.id !== '') ? props.input.id : null;
     mechanism.value = mechId;
 
-    // Check both 'comments' (plural) and 'comment' (singular) for backwards compatibility
-    // Some older records use 'comment', newer ones use 'comments'
-    const commentValue = props.input.comments || props.input.comment || '';
-    comment.value = commentValue;
+    const commentValue = props.input.comments || '';
+    comments.value = commentValue;
 
     console.log('ChangeMechanism - Setting mechanism to:', mechId);
     console.log('ChangeMechanism - Setting comment to:', commentValue);
     console.log('ChangeMechanism - props.input.comments:', props.input.comments);
-    console.log('ChangeMechanism - props.input.comment:', props.input.comment);
   }
 }
 
@@ -116,13 +113,13 @@ function initializeInput() {
           <label for="newInput" class="flex items-center font-semibold w-6rem">Comments</label>
         </div>
         <div class="flex items-center col-span-3 gap-3 mt-3">
-          <Textarea v-model="comment" class="flex-auto" rows="10" cols="30" autocomplete="off"/>
+          <Textarea v-model="comments" class="flex-auto" rows="10" cols="30" autocomplete="off"/>
         </div>
         <div class="flex items-center gap-3">
           &nbsp;
         </div>
         <div class="flex items-center col-span-3">
-          <small id="username-help" class="text-red-600">{{ errors.comment }}</small>
+          <small id="username-help" class="text-red-600">{{ errors.comments }}</small>
         </div>
       </div>
 

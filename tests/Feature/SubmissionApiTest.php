@@ -753,7 +753,7 @@ class SubmissionApiTest extends TestCase
             ->postJson('/api/submissions/' . $this->submission->sid, [
                 'type' => 'mechanism_of_disease',
                 'curie' => 'INVALID:MECH',
-                'comment' => ''
+                'comments' => ''
             ]);
 
         $response->assertStatus(200);
@@ -762,6 +762,31 @@ class SubmissionApiTest extends TestCase
             'status_code' => 3001,
             'message' => 'Mechanism not found'
         ]);
+    }
+
+    /**
+     * Test mechanism updates persist only the canonical plural comments key
+     */
+    public function test_update_mechanism_uses_plural_comments_key(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->postJson('/api/submissions/' . $this->submission->sid, [
+                'type' => 'mechanism_of_disease',
+                'curie' => 'MECH:001',
+                'comments' => 'Submitted mechanism comments'
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => 'true',
+            'status_code' => 200,
+            'message' => 'Submission Updated'
+        ]);
+
+        $this->submission->refresh();
+        $mechanism = Submission::normalizeJsonField($this->submission->submission_data)['mechanism'];
+        $this->assertSame('Submitted mechanism comments', $mechanism['comments']);
+        $this->assertArrayNotHasKey('comment', $mechanism);
     }
 
     /**

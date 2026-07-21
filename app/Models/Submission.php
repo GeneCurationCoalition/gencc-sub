@@ -1136,7 +1136,7 @@ class Submission extends Model
                     //"lumpsplit" => [["key" => "value"]],
                     "contributors"=> ["primary" => ["id" => "", "name" => ""]],
                     "classification" => ["id" => "", "name" => ""],
-                    "mechanism" => ["id" => "", "name" => "", "comment" => ""],
+                    "mechanism" => ["id" => "", "name" => "", "comments" => ""],
                     "additional_information" => [["key" => "values"]]
                 ];
     }
