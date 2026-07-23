@@ -561,6 +561,27 @@ class SubmissionApiTest extends TestCase
         $this->assertSame($this->submitter->name, $newSubmission->submission_data->additional_information->submitter_title);
     }
 
+    public function test_store_rejects_submitted_job_without_creating_submission(): void
+    {
+        $this->job->status = Job::STATUS_SUBMITTED;
+        $this->job->save();
+        $submissionCount = Submission::count();
+
+        $response = $this->actingAs($this->user)
+            ->withSession(['selected_submitter_id' => $this->submitter->id])
+            ->postJson('/api/submissions/create', [
+                'job' => $this->job->ident,
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => 'false',
+            'status_code' => 3011,
+            'message' => 'Submissions can only be added to draft jobs',
+        ]);
+        $this->assertSame($submissionCount, Submission::count());
+    }
+
     /**
      * Test new submission has initialized submission_data structure
      */

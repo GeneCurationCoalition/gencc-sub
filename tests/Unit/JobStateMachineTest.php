@@ -7,6 +7,7 @@ use App\Models\Job;
 use App\Models\Submission;
 use App\Services\JobStateMachine;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 class JobStateMachineTest extends TestCase
 {
@@ -108,7 +109,17 @@ class JobStateMachineTest extends TestCase
             'submitted_at' => null
         ]);
 
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
         JobStateMachine::submit($job);
+
+        $submissionUpdates = collect(DB::getQueryLog())
+            ->filter(fn (array $query) => str_starts_with(strtolower(ltrim($query['query'])), 'update')
+                && str_contains($query['query'], 'submissions'));
+        DB::disableQueryLog();
+
+        $this->assertCount(1, $submissionUpdates);
 
         // Job should be submitted
         $this->assertEquals(Job::STATUS_SUBMITTED, $job->status);

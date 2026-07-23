@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 use App\Models\Disease;
 use App\Models\Inheritance;
@@ -68,39 +69,59 @@ class SubmissionController extends Controller
                     'message' => 'Unauthorized'],
                     200);
 
-        $effectiveSubmitterId = $this->getEffectiveSubmitterId($request);
-
-        $submission = new Submission(
-            [
-                'user_id' => $user->id,
-                'type' => Submission::TYPE_PORTAL_SUBMISSION,
-                'sid' => null,
-                'job_id' => $job->id,
-                'gene_id' => null,
-                'disease_id' => null,
-                'original_disease_id' => null,
-                'inheritance_id' => null,
-                'classification_id' => null,
-                'submitter_id' => $effectiveSubmitterId,
-                // created_at is auto-set by Laravel
-                'submission_data' => [],
-                'status' => Submission::STATUS_DRAFT_NEW,
-                'submission_errors' => []
-             ]
-        );
-
-        // build a skeleton submission data structure
-        $submission->initialize_submission_data();
-
-        // build the skeleton error bag
-        $submission->initialize_submission_errors();
-
-        $submission->save();
-
-        // SID generation happens on the first save. Mirror it and the effective submitter pair.
         $effectiveSubmitter = $this->getEffectiveSubmitter($request);
-        $submission->syncSubmittedMetadata($effectiveSubmitter?->curie, $effectiveSubmitter?->name);
-        $submission->save();
+
+        try {
+            $submission = DB::transaction(function () use ($job, $user, $effectiveSubmitter) {
+                // Serialize creation with job submission and recheck editability while locked.
+                $job = Job::query()
+                    ->whereKey($job->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if ($job->status !== Job::STATUS_DRAFT) {
+                    throw new \RuntimeException('Submissions can only be added to draft jobs');
+                }
+
+                $submission = new Submission(
+                    [
+                        'user_id' => $user->id,
+                        'type' => Submission::TYPE_PORTAL_SUBMISSION,
+                        'sid' => null,
+                        'job_id' => $job->id,
+                        'gene_id' => null,
+                        'disease_id' => null,
+                        'original_disease_id' => null,
+                        'inheritance_id' => null,
+                        'classification_id' => null,
+                        'submitter_id' => $effectiveSubmitter?->id,
+                        // created_at is auto-set by Laravel
+                        'submission_data' => [],
+                        'status' => Submission::STATUS_DRAFT_NEW,
+                        'submission_errors' => [],
+                     ]
+                );
+
+                // build a skeleton submission data structure
+                $submission->initialize_submission_data();
+
+                // build the skeleton error bag
+                $submission->initialize_submission_errors();
+
+                $submission->save();
+
+                // SID generation happens on the first save. Mirror it and the effective submitter pair.
+                $submission->syncSubmittedMetadata($effectiveSubmitter?->curie, $effectiveSubmitter?->name);
+                $submission->save();
+
+                return $submission;
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => 'false',
+                    'status_code' => 3011,
+                    'message' => $e->getMessage()],
+                    200);
+        }
 
         // Job stays in draft status (new submissions don't change job status)
 

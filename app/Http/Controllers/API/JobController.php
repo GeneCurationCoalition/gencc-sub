@@ -358,7 +358,7 @@ class JobController extends Controller
     public function submit(Request $request, string $id)
     {
         // Find the job by slug
-        $job = Job::with('submissions')->where('slug', $id)->first();
+        $job = Job::where('slug', $id)->first();
 
         if ($job === null)
                 return response()->json(['success' => 'false',
@@ -382,6 +382,14 @@ class JobController extends Controller
 
         try {
             DB::transaction(function () use ($job) {
+                // Serialize job submission with portal record creation, then load the stable
+                // submission set only after holding the job row lock.
+                $job = Job::query()
+                    ->whereKey($job->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+                $job->load('submissions');
+
                 // Snapshot all editable submission data and transition the job atomically.
                 JobStateMachine::submit($job);
                 $job->save();
