@@ -1058,13 +1058,12 @@ class Submission extends Model
     }
 
     /**
-     * Record an identifier explicitly selected through the portal.
+     * Record a relationship selected through the portal.
      *
-     * Portal relationship controls submit only the identifier. Any label retained from an
-     * earlier API or spreadsheet submission therefore no longer describes what the user
-     * explicitly submitted and must be cleared when the identifier changes.
+     * Portal controls present a lookup label together with its identifier. When the user changes
+     * that relationship, both values replace any earlier API or spreadsheet submitted-as pair.
      */
-    public function recordSubmittedIdentifier(string $section, string $identifier): void
+    public function recordSubmittedRelationship(string $section, string $identifier, ?string $label): void
     {
         $labelFields = [
             'gene' => 'symbol',
@@ -1080,17 +1079,16 @@ class Submission extends Model
         $data = self::normalizeJsonField($this->submission_data);
         $data[$section] = [
             'id' => $identifier,
-            $labelFields[$section] => null,
+            $labelFields[$section] => $label,
         ];
         $this->submission_data = $data;
     }
 
     /**
      * Keep generated identifiers and explicitly entered portal metadata in submission_data.
-     * Existing uploaded submitter labels are preserved; the portal never submits a replacement
-     * submitter label of its own.
+     * Existing uploaded submitter values are preserved when unrelated portal fields are edited.
      */
-    public function syncSubmittedMetadata(?string $submitterCurie = null): void
+    public function syncSubmittedMetadata(?string $submitterCurie = null, ?string $submitterName = null): void
     {
         $data = self::normalizeJsonField($this->submission_data);
         $data['submission_id'] = $this->sid;
@@ -1106,7 +1104,7 @@ class Submission extends Model
             $additionalInformation['submitter_curie'] = $submitterCurie;
         }
         if (! array_key_exists('submitter_title', $additionalInformation)) {
-            $additionalInformation['submitter_title'] = null;
+            $additionalInformation['submitter_title'] = $submitterName;
         }
         $additionalInformation['submitted_as_submission_id'] = $this->local_key;
 

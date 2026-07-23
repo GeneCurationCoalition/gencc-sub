@@ -557,6 +557,8 @@ class SubmissionApiTest extends TestCase
         $this->assertNull($newSubmission->disease_id);
         $this->assertNull($newSubmission->classification_id);
         $this->assertNull($newSubmission->inheritance_id);
+        $this->assertSame($this->submitter->curie, $newSubmission->submission_data->additional_information->submitter_curie);
+        $this->assertSame($this->submitter->name, $newSubmission->submission_data->additional_information->submitter_title);
     }
 
     /**
@@ -789,7 +791,7 @@ class SubmissionApiTest extends TestCase
 
         $this->submission->refresh();
         $this->assertSame('HGNC:5', $this->submission->submission_data->gene->id);
-        $this->assertNull($this->submission->submission_data->gene->symbol);
+        $this->assertSame('A1BG', $this->submission->submission_data->gene->symbol);
     }
 
     /**
@@ -817,7 +819,7 @@ class SubmissionApiTest extends TestCase
 
         $this->submission->refresh();
         $this->assertSame('HP:0000006', $this->submission->submission_data->moi->id);
-        $this->assertNull($this->submission->submission_data->moi->name);
+        $this->assertSame('Autosomal dominant', $this->submission->submission_data->moi->name);
     }
 
     /**
@@ -845,10 +847,10 @@ class SubmissionApiTest extends TestCase
 
         $this->submission->refresh();
         $this->assertSame('GENCC:100001', $this->submission->submission_data->classification->id);
-        $this->assertNull($this->submission->submission_data->classification->name);
+        $this->assertSame('Definitive', $this->submission->submission_data->classification->name);
     }
 
-    public function test_update_disease_records_only_the_explicit_identifier(): void
+    public function test_update_disease_records_the_selected_identifier_and_label(): void
     {
         $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
         $submissionData['disease'] = ['id' => 'MONDO:OLD', 'name' => 'Old label'];
@@ -868,7 +870,36 @@ class SubmissionApiTest extends TestCase
 
         $this->submission->refresh();
         $this->assertSame('MONDO:0000001', $this->submission->submission_data->disease->id);
-        $this->assertNull($this->submission->submission_data->disease->name);
+        $this->assertSame('disease', $this->submission->submission_data->disease->name);
+    }
+
+    public function test_unrelated_portal_edit_preserves_uploaded_submitter_pair(): void
+    {
+        $submissionData = Submission::normalizeJsonField($this->submission->submission_data);
+        $submissionData['additional_information'] = [
+            'submitter_curie' => 'GENCC:UPLOADED',
+            'submitter_title' => 'Uploaded Submitter Label',
+            'submitted_as_submission_id' => 'UPLOADED-KEY',
+        ];
+        $this->submission->submission_data = $submissionData;
+        $this->submission->save();
+
+        $response = $this->actingAs($this->user)
+            ->postJson('/api/submissions/' . $this->submission->sid, [
+                'type' => 'friendly',
+                'curie' => 'Updated friendly label',
+            ]);
+
+        $response->assertOk()->assertJson([
+            'success' => 'true',
+            'status_code' => 200,
+        ]);
+
+        $this->submission->refresh();
+        $additionalInformation = $this->submission->submission_data->additional_information;
+        $this->assertSame('GENCC:UPLOADED', $additionalInformation->submitter_curie);
+        $this->assertSame('Uploaded Submitter Label', $additionalInformation->submitter_title);
+        $this->assertSame('TEST-001', $additionalInformation->submitted_as_submission_id);
     }
 
     /**

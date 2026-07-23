@@ -97,9 +97,9 @@ class SubmissionController extends Controller
 
         $submission->save();
 
-        // SID generation happens on the first save. Mirror it and the effective submitter ID
-        // afterward without fabricating a submitted-as submitter label.
-        $submission->syncSubmittedMetadata($this->getEffectiveSubmitter($request)?->curie);
+        // SID generation happens on the first save. Mirror it and the effective submitter pair.
+        $effectiveSubmitter = $this->getEffectiveSubmitter($request);
+        $submission->syncSubmittedMetadata($effectiveSubmitter?->curie, $effectiveSubmitter?->name);
         $submission->save();
 
         // Job stays in draft status (new submissions don't change job status)
@@ -192,7 +192,7 @@ class SubmissionController extends Controller
 
                 // update the submission inheritance
                 $submission->inheritance_id = $inheritance->id;
-                $submission->recordSubmittedIdentifier('moi', $inheritance->curie);
+                $submission->recordSubmittedRelationship('moi', $inheritance->curie, $inheritance->name);
 
                 // Include warning if unpublished duplicate exists (not blocking)
                 if ($duplicateCheck['has_unpublished_duplicate']) {
@@ -223,7 +223,7 @@ class SubmissionController extends Controller
 
                 // update the submission disease
                 $submission->classification_id = $classification->id;
-                $submission->recordSubmittedIdentifier('classification', $classification->curie);
+                $submission->recordSubmittedRelationship('classification', $classification->curie, $classification->name);
                 $bags = ['classification_curie_id'];
                 break;
             case 'disease':
@@ -268,9 +268,7 @@ class SubmissionController extends Controller
                 $submission->original_disease_id = $originalDisease->id;  // What was entered/uploaded
                 $submission->disease_id = $mondoDisease->id;              // Normalized to MONDO
 
-                // The portal submits only the CURIE. Do not manufacture a submitted-as label
-                // from the lookup relationship.
-                $submission->recordSubmittedIdentifier('disease', $uploadedCurie);
+                $submission->recordSubmittedRelationship('disease', $uploadedCurie, $originalDisease->name);
 
                 // Include warning if unpublished duplicate exists
                 $warnings = [];
@@ -325,7 +323,7 @@ class SubmissionController extends Controller
 
                 // update the submission gene
                 $submission->gene_id = $gene->id;
-                $submission->recordSubmittedIdentifier('gene', $gene->hgnc_id);
+                $submission->recordSubmittedRelationship('gene', $gene->hgnc_id, $gene->symbol);
 
                 // Include warning if unpublished duplicate exists
                 $warnings = [];
@@ -572,7 +570,7 @@ class SubmissionController extends Controller
                 $bags = [];
                 $bag = 'friendly';
                 $submission->friendly = $request->input('curie');
-                $submission->syncSubmittedMetadata($submission->submitter?->curie);
+                $submission->syncSubmittedMetadata($submission->submitter?->curie, $submission->submitter?->name);
                 break;
             case 'local_key':
                 // make sure local_key does not already exist for this submitter
@@ -591,7 +589,7 @@ class SubmissionController extends Controller
                 $bags = [];
                 $bag = 'local_key';
                 $submission->local_key = $request->input('local_key');
-                $submission->syncSubmittedMetadata($submission->submitter?->curie);
+                $submission->syncSubmittedMetadata($submission->submitter?->curie, $submission->submitter?->name);
                 break;
             case 'update_published':
                 // LEGACY: Replaced by V2 state model - use draft_republish state instead

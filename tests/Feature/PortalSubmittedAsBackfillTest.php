@@ -18,7 +18,7 @@ class PortalSubmittedAsBackfillTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_backfill_repairs_all_portal_placeholders_without_fabricating_labels(): void
+    public function test_backfill_repairs_portal_relationship_pairs_and_exports(): void
     {
         [$submission, $fileSubmission, $submitter] = $this->makeAffectedSubmissions();
         $migration = require database_path('migrations/2026_07_21_120000_backfill_portal_submitted_as_json.php');
@@ -29,25 +29,33 @@ class PortalSubmittedAsBackfillTest extends TestCase
         foreach (['submission_data', 'original_submission_data'] as $column) {
             $data = $submission->{$column};
             $this->assertSame('HGNC:5', $data->gene->id);
-            $this->assertNull($data->gene->symbol);
-            $this->assertSame('MONDO:0000001', $data->disease->id);
-            $this->assertNull($data->disease->name);
+            $this->assertSame('A1BG', $data->gene->symbol);
+            $this->assertSame('OMIM:123456', $data->disease->id);
+            $this->assertSame('original disease label', $data->disease->name);
             $this->assertSame('HP:0000006', $data->moi->id);
-            $this->assertNull($data->moi->name);
+            $this->assertSame('Autosomal dominant', $data->moi->name);
             $this->assertSame('GENCC:100001', $data->classification->id);
-            $this->assertNull($data->classification->name);
+            $this->assertSame('Definitive', $data->classification->name);
             $this->assertSame($submitter->curie, $data->additional_information->submitter_curie);
-            $this->assertNull($data->additional_information->submitter_title);
+            $this->assertSame('Test Submitter', $data->additional_information->submitter_title);
             $this->assertSame('LOCAL-1', $data->additional_information->submitted_as_submission_id);
             $this->assertSame($submission->sid, $data->submission_id);
+            $this->assertSame('Public note', $data->notes->display);
+            $this->assertSame('Private note', $data->notes->private);
         }
 
         $export = new ReleaseSubmissionExport;
         $exported = array_combine($export->headings(), $export->map($submission));
         $this->assertSame('HGNC:5', $exported['submitted_as_hgnc_id']);
-        $this->assertSame('', $exported['submitted_as_hgnc_symbol']);
+        $this->assertSame('A1BG', $exported['submitted_as_hgnc_symbol']);
+        $this->assertSame('OMIM:123456', $exported['submitted_as_disease_id']);
+        $this->assertSame('original disease label', $exported['submitted_as_disease_name']);
+        $this->assertSame('HP:0000006', $exported['submitted_as_moi_id']);
+        $this->assertSame('Autosomal dominant', $exported['submitted_as_moi_name']);
         $this->assertSame($submitter->curie, $exported['submitted_as_submitter_id']);
-        $this->assertSame('', $exported['submitted_as_submitter_name']);
+        $this->assertSame('Test Submitter', $exported['submitted_as_submitter_name']);
+        $this->assertSame('GENCC:100001', $exported['submitted_as_classification_id']);
+        $this->assertSame('Definitive', $exported['submitted_as_classification_name']);
 
         // A structurally identical file submission is outside this portal-only repair.
         $fileSubmission->refresh();
@@ -65,7 +73,25 @@ class PortalSubmittedAsBackfillTest extends TestCase
         ]));
     }
 
-    private function makeAffectedSubmissions(): array
+    public function test_backfill_reuses_live_portal_fingerprint_for_partially_populated_snapshot(): void
+    {
+        [$submission, , $submitter] = $this->makeAffectedSubmissions(true);
+        $migration = require database_path('migrations/2026_07_21_120000_backfill_portal_submitted_as_json.php');
+
+        $migration->up();
+
+        $submission->refresh();
+        $snapshot = $submission->original_submission_data;
+        $this->assertSame('HGNC:5', $snapshot->gene->id);
+        $this->assertSame('A1BG', $snapshot->gene->symbol);
+        $this->assertSame('Historic portal disease label', $snapshot->disease->name);
+        $this->assertSame('Autosomal dominant', $snapshot->moi->name);
+        $this->assertSame('Definitive', $snapshot->classification->name);
+        $this->assertSame($submitter->curie, $snapshot->additional_information->submitter_curie);
+        $this->assertSame('Test Submitter', $snapshot->additional_information->submitter_title);
+    }
+
+    private function makeAffectedSubmissions(bool $partiallyPopulatedSnapshot = false): array
     {
         $submitter = Submitter::create([
             'name' => 'Test Submitter',
@@ -93,6 +119,12 @@ class PortalSubmittedAsBackfillTest extends TestCase
             'name' => 'canonical disease label',
             'status' => Disease::STATUS_ACTIVE,
         ]);
+        $originalDisease = Disease::create([
+            'curie' => 'OMIM:123456',
+            'name' => 'original disease label',
+            'mondo_id' => $disease->id,
+            'status' => Disease::STATUS_ACTIVE,
+        ]);
         $inheritance = Inheritance::create([
             'curie' => 'HP:0000006',
             'name' => 'Autosomal dominant',
@@ -115,7 +147,7 @@ class PortalSubmittedAsBackfillTest extends TestCase
             'local_key' => null,
             'submission_label' => null,
             'gene' => ['id' => '', 'symbol' => ''],
-            'disease' => ['id' => 'MONDO:0000001', 'name' => 'canonical disease label'],
+            'disease' => ['id' => 'OMIM:123456', 'name' => 'original disease label'],
             'moi' => ['id' => '', 'name' => ''],
             'classification' => ['id' => '', 'name' => ''],
             'additional_information' => [['key' => 'values']],
@@ -128,7 +160,7 @@ class PortalSubmittedAsBackfillTest extends TestCase
             'submitter_id' => $submitter->id,
             'gene_id' => $gene->id,
             'disease_id' => $disease->id,
-            'original_disease_id' => $disease->id,
+            'original_disease_id' => $originalDisease->id,
             'inheritance_id' => $inheritance->id,
             'classification_id' => $classification->id,
             'status' => Submission::STATUS_PUBLISHED,
@@ -136,7 +168,17 @@ class PortalSubmittedAsBackfillTest extends TestCase
             'friendly' => 'Portal submission',
             'local_key' => 'LOCAL-1',
             'submission_data' => $placeholder,
-            'original_submission_data' => $placeholder,
+            'original_submission_data' => $partiallyPopulatedSnapshot ? array_merge($placeholder, [
+                'gene' => ['id' => 'HGNC:5', 'symbol' => null],
+                'disease' => ['id' => 'OMIM:123456', 'name' => 'Historic portal disease label'],
+                'moi' => ['id' => 'HP:0000006', 'name' => ''],
+                'classification' => ['id' => 'GENCC:100001', 'name' => null],
+                'additional_information' => [
+                    'submitter_curie' => $submitter->curie,
+                    'submitter_title' => null,
+                    'submitted_as_submission_id' => 'LOCAL-1',
+                ],
+            ]) : $placeholder,
         ];
 
         $submission = Submission::create(array_merge($attributes, [

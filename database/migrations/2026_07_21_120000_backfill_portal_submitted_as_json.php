@@ -7,20 +7,20 @@ use Illuminate\Support\Facades\Log;
 /**
  * Repair submitted-as JSON written by the portal's placeholder-based form path.
  *
- * Portal controls submit relationship identifiers, not relationship labels. Missing identifiers
- * can therefore be recovered from their authoritative foreign keys, while labels must remain null.
- * Existing non-placeholder API/spreadsheet values are not replaced.
+ * Portal controls present relationship identifiers together with their lookup labels. Missing
+ * values can therefore be recovered from authoritative relationships. Existing nonblank values
+ * are preserved, including literal API/spreadsheet values on records outside this portal repair.
  */
 return new class extends Migration
 {
     public function up(): void
     {
         $lookups = [
-            'genes' => DB::table('genes')->select('id', 'hgnc_id')->get()->keyBy('id'),
-            'diseases' => DB::table('diseases')->select('id', 'curie')->get()->keyBy('id'),
-            'inheritances' => DB::table('inheritances')->select('id', 'curie')->get()->keyBy('id'),
-            'classifications' => DB::table('classifications')->select('id', 'curie')->get()->keyBy('id'),
-            'submitters' => DB::table('submitters')->select('id', 'curie')->get()->keyBy('id'),
+            'genes' => DB::table('genes')->select('id', 'hgnc_id', 'symbol')->get()->keyBy('id'),
+            'diseases' => DB::table('diseases')->select('id', 'curie', 'name')->get()->keyBy('id'),
+            'inheritances' => DB::table('inheritances')->select('id', 'curie', 'name')->get()->keyBy('id'),
+            'classifications' => DB::table('classifications')->select('id', 'curie', 'name')->get()->keyBy('id'),
+            'submitters' => DB::table('submitters')->select('id', 'curie', 'name')->get()->keyBy('id'),
         ];
 
         $patchedRows = 0;
@@ -37,14 +37,22 @@ return new class extends Migration
                     $updates = [];
 
                     $submissionData = $this->decodeDocument($row->submission_data);
-                    if ($submissionData !== null && $this->repairDocument($submissionData, $row, $lookups)) {
+                    $originalData = $this->decodeDocument($row->original_submission_data);
+                    $portalPlaceholder = ($submissionData !== null && $this->isPortalPlaceholder($submissionData))
+                        || ($originalData !== null && $this->isPortalPlaceholder($originalData));
+
+                    if (! $portalPlaceholder) {
+                        continue;
+                    }
+
+                    if ($submissionData !== null
+                        && $this->repairDocument($submissionData, $row, $lookups, $portalPlaceholder)) {
                         $updates['submission_data'] = json_encode($submissionData);
                     }
 
-                    $originalData = $this->decodeDocument($row->original_submission_data);
                     if ($originalData !== null
                         && $originalData !== []
-                        && $this->repairDocument($originalData, $row, $lookups)) {
+                        && $this->repairDocument($originalData, $row, $lookups, $portalPlaceholder)) {
                         $updates['original_submission_data'] = json_encode($originalData);
                     }
 
@@ -71,66 +79,65 @@ return new class extends Migration
         return is_array($decoded) ? $decoded : null;
     }
 
-    private function repairDocument(array &$data, object $row, array $lookups): bool
+    private function repairDocument(array &$data, object $row, array $lookups, bool $portalPlaceholder): bool
     {
         $changed = false;
-        $portalPlaceholder = $this->identifierIsMissing($data, 'gene')
-            && $this->identifierIsMissing($data, 'moi')
-            && $this->identifierIsMissing($data, 'classification')
-            && $this->additionalInformationIsPlaceholder($data['additional_information'] ?? null);
 
-        $changed = $this->repairIdentifier(
+        $gene = $lookups['genes']->get($row->gene_id);
+        $changed = $this->repairRelationship(
             $data,
             'gene',
             'symbol',
-            $lookups['genes']->get($row->gene_id)?->hgnc_id,
+            $gene?->hgnc_id,
+            $gene?->symbol,
+            $portalPlaceholder,
         ) || $changed;
-        $changed = $this->repairIdentifier(
+
+        $inheritance = $lookups['inheritances']->get($row->inheritance_id);
+        $changed = $this->repairRelationship(
             $data,
             'moi',
             'name',
-            $lookups['inheritances']->get($row->inheritance_id)?->curie,
+            $inheritance?->curie,
+            $inheritance?->name,
+            $portalPlaceholder,
         ) || $changed;
-        $changed = $this->repairIdentifier(
+
+        $classification = $lookups['classifications']->get($row->classification_id);
+        $changed = $this->repairRelationship(
             $data,
             'classification',
             'name',
-            $lookups['classifications']->get($row->classification_id)?->curie,
+            $classification?->curie,
+            $classification?->name,
+            $portalPlaceholder,
         ) || $changed;
 
-        // The existing disease portal handler stored a lookup-derived name even though the form
-        // submitted only a CURIE. The full placeholder fingerprint proves this document came from
-        // that form path, so remove the fabricated label while preserving the selected identifier.
-        if ($portalPlaceholder) {
-            $diseaseCurie = $lookups['diseases']->get($row->original_disease_id)?->curie;
-            $disease = ['id' => $diseaseCurie, 'name' => null];
-            if (($data['disease'] ?? null) !== $disease) {
-                $data['disease'] = $disease;
-                $changed = true;
-            }
-        } else {
-            $changed = $this->repairIdentifier(
-                $data,
-                'disease',
-                'name',
-                $lookups['diseases']->get($row->original_disease_id)?->curie,
-            ) || $changed;
-        }
+        $disease = $lookups['diseases']->get($row->original_disease_id);
+        $changed = $this->repairRelationship(
+            $data,
+            'disease',
+            'name',
+            $disease?->curie,
+            $disease?->name,
+            $portalPlaceholder,
+        ) || $changed;
 
         $additionalInformation = $data['additional_information'] ?? [];
         if (! is_array($additionalInformation) || array_is_list($additionalInformation)) {
             $additionalInformation = [];
         }
 
-        $submitterCurie = $lookups['submitters']->get($row->submitter_id)?->curie;
+        $submitter = $lookups['submitters']->get($row->submitter_id);
+        $submitterCurie = $submitter?->curie;
         if (! array_key_exists('submitter_curie', $additionalInformation)
-            || $additionalInformation['submitter_curie'] === '') {
+            || $this->valueIsMissing($additionalInformation['submitter_curie'])) {
             $additionalInformation['submitter_curie'] = $submitterCurie;
-            $additionalInformation['submitter_title'] = null;
             $changed = true;
         }
-        if (! array_key_exists('submitter_title', $additionalInformation)) {
-            $additionalInformation['submitter_title'] = null;
+        if (! array_key_exists('submitter_title', $additionalInformation)
+            || $this->valueIsMissing($additionalInformation['submitter_title'])) {
+            $additionalInformation['submitter_title'] = $submitter?->name;
             $changed = true;
         }
         if (($additionalInformation['submitted_as_submission_id'] ?? null) !== $row->local_key) {
@@ -156,26 +163,56 @@ return new class extends Migration
         return $changed;
     }
 
-    private function repairIdentifier(array &$data, string $section, string $labelKey, ?string $identifier): bool
-    {
-        if (! $this->identifierIsMissing($data, $section)) {
+    private function repairRelationship(
+        array &$data,
+        string $section,
+        string $labelKey,
+        ?string $identifier,
+        ?string $label,
+        bool $portalPlaceholder,
+    ): bool {
+        if (! $portalPlaceholder) {
             return false;
         }
 
-        $replacement = ['id' => $identifier, $labelKey => null];
-        if (($data[$section] ?? null) === $replacement) {
+        $relationship = $data[$section] ?? [];
+        if (! is_array($relationship) || array_is_list($relationship)) {
+            $relationship = [];
+        }
+
+        if (! array_key_exists('id', $relationship) || $this->valueIsMissing($relationship['id'])) {
+            $relationship['id'] = $identifier;
+        }
+        if (! array_key_exists($labelKey, $relationship) || $this->valueIsMissing($relationship[$labelKey])) {
+            $relationship[$labelKey] = $label;
+        }
+
+        if (($data[$section] ?? null) === $relationship) {
             return false;
         }
 
-        $data[$section] = $replacement;
+        $data[$section] = $relationship;
 
         return true;
     }
 
-    private function identifierIsMissing(array $data, string $section): bool
+    private function isPortalPlaceholder(array $data): bool
+    {
+        return $this->relationshipIdentifierIsMissing($data, 'gene')
+            && $this->relationshipIdentifierIsMissing($data, 'moi')
+            && $this->relationshipIdentifierIsMissing($data, 'classification')
+            && $this->additionalInformationIsPlaceholder($data['additional_information'] ?? null);
+    }
+
+    private function relationshipIdentifierIsMissing(array $data, string $section): bool
     {
         return ! is_array($data[$section] ?? null)
-            || trim((string) ($data[$section]['id'] ?? '')) === '';
+            || $this->valueIsMissing($data[$section]['id'] ?? null);
+    }
+
+    private function valueIsMissing(mixed $value): bool
+    {
+        return $value === null || (is_string($value) && trim($value) === '');
     }
 
     private function additionalInformationIsPlaceholder(mixed $value): bool
@@ -188,7 +225,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        // The prior values were missing identifiers or lookup-derived labels, not recoverable
-        // submitted content. Reverting would intentionally recreate the data defect.
+        // The prior relationship values were missing and cannot be recovered after repair.
     }
 };
