@@ -15,14 +15,6 @@ return new class extends Migration
 {
     public function up(): void
     {
-        $lookups = [
-            'genes' => DB::table('genes')->select('id', 'hgnc_id', 'symbol')->get()->keyBy('id'),
-            'diseases' => DB::table('diseases')->select('id', 'curie', 'name')->get()->keyBy('id'),
-            'inheritances' => DB::table('inheritances')->select('id', 'curie', 'name')->get()->keyBy('id'),
-            'classifications' => DB::table('classifications')->select('id', 'curie', 'name')->get()->keyBy('id'),
-            'submitters' => DB::table('submitters')->select('id', 'curie', 'name')->get()->keyBy('id'),
-        ];
-
         $patchedRows = 0;
 
         DB::table('submissions')
@@ -32,7 +24,9 @@ return new class extends Migration
                 'inheritance_id', 'classification_id', 'submitter_id',
                 'submission_data', 'original_submission_data',
             ])
-            ->chunkById(500, function ($rows) use ($lookups, &$patchedRows) {
+            ->chunkById(500, function ($rows) use (&$patchedRows) {
+                $lookups = $this->lookupsForChunk($rows);
+
                 foreach ($rows as $row) {
                     $updates = [];
 
@@ -66,6 +60,53 @@ return new class extends Migration
             }, 'id');
 
         Log::info("Portal submitted-as JSON backfill repaired {$patchedRows} submission row(s).");
+    }
+
+    /**
+     * Build keyed lookup collections containing only the rows referenced by this chunk.
+     * Bounds peak memory to (chunk size) rows per table rather than the full tables.
+     */
+    private function lookupsForChunk($rows): array
+    {
+        $collectIds = fn (string $column) => $rows
+            ->pluck($column)
+            ->filter(fn ($id) => $id !== null)
+            ->unique()
+            ->values()
+            ->all();
+
+        $geneIds = $collectIds('gene_id');
+        $diseaseIds = $collectIds('original_disease_id');
+        $inheritanceIds = $collectIds('inheritance_id');
+        $classificationIds = $collectIds('classification_id');
+        $submitterIds = $collectIds('submitter_id');
+
+        return [
+            'genes' => empty($geneIds)
+                ? collect()
+                : DB::table('genes')->select('id', 'hgnc_id', 'symbol')
+                    ->whereIn('id', $geneIds)->get()->keyBy('id'),
+
+            'diseases' => empty($diseaseIds)
+                ? collect()
+                : DB::table('diseases')->select('id', 'curie', 'name')
+                    ->whereIn('id', $diseaseIds)->get()->keyBy('id'),
+
+            'inheritances' => empty($inheritanceIds)
+                ? collect()
+                : DB::table('inheritances')->select('id', 'curie', 'name')
+                    ->whereIn('id', $inheritanceIds)->get()->keyBy('id'),
+
+            'classifications' => empty($classificationIds)
+                ? collect()
+                : DB::table('classifications')->select('id', 'curie', 'name')
+                    ->whereIn('id', $classificationIds)->get()->keyBy('id'),
+
+            'submitters' => empty($submitterIds)
+                ? collect()
+                : DB::table('submitters')->select('id', 'curie', 'name')
+                    ->whereIn('id', $submitterIds)->get()->keyBy('id'),
+        ];
     }
 
     private function decodeDocument(?string $json): ?array
