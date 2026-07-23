@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\Job;
+use App\Models\Submission;
 use Exception;
+use Illuminate\Support\Facades\DB;
 
 /**
  * JobStateMachine
@@ -214,15 +216,20 @@ class JobStateMachine
         // We only need to set submitted_at timestamp on all pending submissions
         $now = now();
 
-        \App\Models\Submission::where('job_id', $job->id)
+        // The Submit click is the boundary between editable working data and the submitted-as
+        // snapshot. Copy every pending submission in one query so large uploads do not incur
+        // per-submission model saves and immutability relationship lookups.
+        DB::table('submissions')
+            ->where('job_id', $job->id)
             ->whereIn('status', [
-                \App\Models\Submission::STATUS_NEW,
-                \App\Models\Submission::STATUS_REPUBLISH,
-                \App\Models\Submission::STATUS_UNPUBLISH,
+                Submission::STATUS_NEW,
+                Submission::STATUS_REPUBLISH,
+                Submission::STATUS_UNPUBLISH,
             ])
             ->update([
+                'original_submission_data' => DB::raw('submission_data'),
                 'submitted_at' => $now,
-                'updated_at' => $now
+                'updated_at' => $now,
             ]);
 
         return $job;

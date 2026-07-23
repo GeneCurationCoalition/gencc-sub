@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 use App\Models\Disease;
 use App\Models\Inheritance;
@@ -68,34 +69,59 @@ class SubmissionController extends Controller
                     'message' => 'Unauthorized'],
                     200);
 
-        $effectiveSubmitterId = $this->getEffectiveSubmitterId($request);
+        $effectiveSubmitter = $this->getEffectiveSubmitter($request);
 
-        $submission = new Submission(
-            [
-                'user_id' => $user->id,
-                'type' => Submission::TYPE_PORTAL_SUBMISSION,
-                'sid' => null,
-                'job_id' => $job->id,
-                'gene_id' => null,
-                'disease_id' => null,
-                'original_disease_id' => null,
-                'inheritance_id' => null,
-                'classification_id' => null,
-                'submitter_id' => $effectiveSubmitterId,
-                // created_at is auto-set by Laravel
-                'submission_data' => [],
-                'status' => Submission::STATUS_DRAFT_NEW,
-                'submission_errors' => []
-             ]
-        );
+        try {
+            $submission = DB::transaction(function () use ($job, $user, $effectiveSubmitter) {
+                // Serialize creation with job submission and recheck editability while locked.
+                $job = Job::query()
+                    ->whereKey($job->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-        // build a skeleton submission data structure
-        $submission->initialize_submission_data();
+                if ($job->status !== Job::STATUS_DRAFT) {
+                    throw new \RuntimeException('Submissions can only be added to draft jobs');
+                }
 
-        // build the skeleton error bag
-        $submission->initialize_submission_errors();
+                $submission = new Submission(
+                    [
+                        'user_id' => $user->id,
+                        'type' => Submission::TYPE_PORTAL_SUBMISSION,
+                        'sid' => null,
+                        'job_id' => $job->id,
+                        'gene_id' => null,
+                        'disease_id' => null,
+                        'original_disease_id' => null,
+                        'inheritance_id' => null,
+                        'classification_id' => null,
+                        'submitter_id' => $effectiveSubmitter?->id,
+                        // created_at is auto-set by Laravel
+                        'submission_data' => [],
+                        'status' => Submission::STATUS_DRAFT_NEW,
+                        'submission_errors' => [],
+                     ]
+                );
 
-        $submission->save();
+                // build a skeleton submission data structure
+                $submission->initialize_submission_data();
+
+                // build the skeleton error bag
+                $submission->initialize_submission_errors();
+
+                $submission->save();
+
+                // SID generation happens on the first save. Mirror it and the effective submitter pair.
+                $submission->syncSubmittedMetadata($effectiveSubmitter?->curie, $effectiveSubmitter?->name);
+                $submission->save();
+
+                return $submission;
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => 'false',
+                    'status_code' => 3011,
+                    'message' => $e->getMessage()],
+                    200);
+        }
 
         // Job stays in draft status (new submissions don't change job status)
 
@@ -187,6 +213,7 @@ class SubmissionController extends Controller
 
                 // update the submission inheritance
                 $submission->inheritance_id = $inheritance->id;
+                $submission->recordSubmittedRelationship('moi', $inheritance->curie, $inheritance->name);
 
                 // Include warning if unpublished duplicate exists (not blocking)
                 if ($duplicateCheck['has_unpublished_duplicate']) {
@@ -217,6 +244,7 @@ class SubmissionController extends Controller
 
                 // update the submission disease
                 $submission->classification_id = $classification->id;
+                $submission->recordSubmittedRelationship('classification', $classification->curie, $classification->name);
                 $bags = ['classification_curie_id'];
                 break;
             case 'disease':
@@ -261,13 +289,7 @@ class SubmissionController extends Controller
                 $submission->original_disease_id = $originalDisease->id;  // What was entered/uploaded
                 $submission->disease_id = $mondoDisease->id;              // Normalized to MONDO
 
-                // Update submission_data to preserve the original CURIE
-                $submission_data = $submission->submission_data;
-                $subdisease = $submission_data->disease;
-                $subdisease->id = $uploadedCurie;
-                $subdisease->name = $originalDisease->name;
-                $submission_data->disease = $subdisease;
-                $submission->submission_data = $submission_data;
+                $submission->recordSubmittedRelationship('disease', $uploadedCurie, $originalDisease->name);
 
                 // Include warning if unpublished duplicate exists
                 $warnings = [];
@@ -322,6 +344,7 @@ class SubmissionController extends Controller
 
                 // update the submission gene
                 $submission->gene_id = $gene->id;
+                $submission->recordSubmittedRelationship('gene', $gene->hgnc_id, $gene->symbol);
 
                 // Include warning if unpublished duplicate exists
                 $warnings = [];
@@ -568,6 +591,7 @@ class SubmissionController extends Controller
                 $bags = [];
                 $bag = 'friendly';
                 $submission->friendly = $request->input('curie');
+                $submission->syncSubmittedMetadata($submission->submitter?->curie, $submission->submitter?->name);
                 break;
             case 'local_key':
                 // make sure local_key does not already exist for this submitter
@@ -586,6 +610,7 @@ class SubmissionController extends Controller
                 $bags = [];
                 $bag = 'local_key';
                 $submission->local_key = $request->input('local_key');
+                $submission->syncSubmittedMetadata($submission->submitter?->curie, $submission->submitter?->name);
                 break;
             case 'update_published':
                 // LEGACY: Replaced by V2 state model - use draft_republish state instead

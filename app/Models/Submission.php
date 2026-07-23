@@ -1058,6 +1058,61 @@ class Submission extends Model
     }
 
     /**
+     * Record a relationship selected through the portal.
+     *
+     * Portal controls present a lookup label together with its identifier. When the user changes
+     * that relationship, both values replace any earlier API or spreadsheet submitted-as pair.
+     */
+    public function recordSubmittedRelationship(string $section, string $identifier, ?string $label): void
+    {
+        $labelFields = [
+            'gene' => 'symbol',
+            'disease' => 'name',
+            'moi' => 'name',
+            'classification' => 'name',
+        ];
+
+        if (! isset($labelFields[$section])) {
+            throw new \InvalidArgumentException("Unsupported submitted identifier section: {$section}");
+        }
+
+        $data = self::normalizeJsonField($this->submission_data);
+        $data[$section] = [
+            'id' => $identifier,
+            $labelFields[$section] => $label,
+        ];
+        $this->submission_data = $data;
+    }
+
+    /**
+     * Keep generated identifiers and explicitly entered portal metadata in submission_data.
+     * Existing uploaded submitter values are preserved when unrelated portal fields are edited.
+     */
+    public function syncSubmittedMetadata(?string $submitterCurie = null, ?string $submitterName = null): void
+    {
+        $data = self::normalizeJsonField($this->submission_data);
+        $data['submission_id'] = $this->sid;
+        $data['local_key'] = $this->local_key;
+        $data['submission_label'] = $this->friendly;
+
+        $additionalInformation = $data['additional_information'] ?? [];
+        if (! is_array($additionalInformation) || array_is_list($additionalInformation)) {
+            $additionalInformation = [];
+        }
+
+        if (! array_key_exists('submitter_curie', $additionalInformation)) {
+            $additionalInformation['submitter_curie'] = $submitterCurie;
+        }
+        if (! array_key_exists('submitter_title', $additionalInformation)) {
+            $additionalInformation['submitter_title'] = $submitterName;
+        }
+        $additionalInformation['submitted_as_submission_id'] = $this->local_key;
+
+        $data['additional_information'] = $additionalInformation;
+        $this->submission_data = $data;
+    }
+
+    /**
      * Initialize the submission_data structure for a blank submission
      * Uses empty placeholders when foreign keys are null
      */
