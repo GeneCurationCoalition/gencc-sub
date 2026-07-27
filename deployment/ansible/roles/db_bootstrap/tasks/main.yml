@@ -116,3 +116,58 @@
   when:
     - gencc_db_bootstrap_mode == "restore_and_migrate"
     - gencc_release_bootstrap.stdout_lines is defined
+
+# ---------------------------------------------------------------------------
+# Refresh downloadable release exports after migrations.
+#
+# Run when migrations actually applied (data fixes may have changed exported
+# values) or on a restore_and_migrate deploy. Skipped on no-op deploys to avoid
+# the export render cost. If the cache-clear step is ever skipped, gencc-search's
+# 600s TTL still self-heals the website within <=10 min.
+# ---------------------------------------------------------------------------
+# Regenerate unless we can positively confirm the migrate run was a no-op.
+# Laravel prints "Nothing to migrate" only when no migrations ran; the match is
+# lowercased so formatting changes ("Nothing to migrate." vs "INFO  Nothing to
+# migrate") don't matter. Any other output -- migrations applied, an empty or
+# unrecognized string -- falls through to regenerate. That default is deliberate:
+# a wasted render is cheaper to recover from than silently serving stale exports.
+- name: Determine whether release exports should be regenerated
+  ansible.builtin.set_fact:
+    gencc_should_regenerate_exports: >-
+      {{
+        (gencc_regenerate_exports_on_deploy | default(true) | bool)
+        and (
+          (gencc_force_regenerate_exports | default(false) | bool)
+          or gencc_db_bootstrap_mode == "restore_and_migrate"
+          or ('nothing to migrate' not in (gencc_db_migrate_status.stdout | default('') | lower))
+        )
+      }}
+
+- name: Regenerate downloadable release exports from current DB state
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan gencc:release regenerate-exports --no-interaction'
+  args:
+    executable: /bin/bash
+  register: gencc_regenerate_exports
+  when: gencc_should_regenerate_exports | bool
+
+- name: Clear gencc-search release cache markers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-search php artisan releases:clear-cache'
+  args:
+    executable: /bin/bash
+  register: gencc_clear_release_cache
+  when: gencc_should_regenerate_exports | bool
+  # Non-fatal: this only deletes cache markers, and gencc-search's 600s TTL
+  # self-heals if it's skipped. A marker cleanup must not block nginx/timers
+  # convergence in the roles that run after db_bootstrap.
+  failed_when: false
+
+- name: Show export regeneration and cache-clear output
+  ansible.builtin.debug:
+    msg: "{{ (gencc_regenerate_exports.stdout_lines | default([])) + (gencc_clear_release_cache.stdout_lines | default([])) }}"
+  when:
+    - gencc_should_regenerate_exports | bool
+    - gencc_regenerate_exports.stdout_lines is defined

@@ -27,6 +27,11 @@ on:
         description: "Type RESTORE to allow destructive restore mode"
         required: false
         type: string
+      force_regenerate_exports:
+        description: "Force regenerate downloadable release exports even on a no-op deploy (no migrations applied)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -188,12 +193,14 @@ jobs:
             --arg db_mode "${{ steps.validate.outputs.db_mode }}" \
             --arg db_restore_source "${{ steps.validate.outputs.db_restore_source }}" \
             --arg db_restore_force "${{ steps.validate.outputs.db_restore_force }}" \
+            --arg force_regenerate_exports "${{ github.event.inputs.force_regenerate_exports }}" \
             '{
               gencc_sub_image: $sub_image,
               gencc_search_image: $search_image,
               gencc_db_bootstrap_mode: $db_mode,
               gencc_db_restore_source: $db_restore_source,
-              gencc_db_restore_force: ($db_restore_force == "true")
+              gencc_db_restore_force: ($db_restore_force == "true"),
+              gencc_force_regenerate_exports: ($force_regenerate_exports == "true")
             }' > "${RUNNER_TEMP}/extra-vars.json"
 
       - name: Run Ansible deploy playbook

@@ -43,7 +43,7 @@ class GenccRelease extends Command
      *
      * @var string
      */
-    protected $description = 'Release pending submissions (process|repair|bootstrap)';
+    protected $description = 'Release pending submissions (process|repair|bootstrap|regenerate-exports)';
 
     /**
      * Release statistics for tracking
@@ -74,6 +74,33 @@ class GenccRelease extends Command
     protected ?Carbon $releaseDate = null;
 
     /**
+     * Export formats that failed to generate during generateSubmissionsCsv().
+     * Each entry is ['format' => string, 'message' => string]. Populated by the
+     * per-format catch blocks; consulted by regenerateExports() to fail loudly
+     * on a partial-format failure. Secondary formats (xlsx/tsv/legacy) are
+     * tolerated by process/bootstrap/repair, but a current/csv failure -- the
+     * primary download referenced by the release record -- is always fatal
+     * (see the guard at the end of generateSubmissionsCsv()).
+     */
+    protected array $exportFailures = [];
+
+    /**
+     * Require configured GCS uploads to succeed. Local-only operation remains
+     * valid when no GCS bucket is configured.
+     */
+    protected bool $strictGcsUploads = false;
+
+    /**
+     * The most recent error encountered while initializing the GCS client.
+     */
+    protected ?string $gcsAvailabilityError = null;
+
+    /**
+     * Avoid repeating the unconfigured warning for every generated object.
+     */
+    protected bool $warnedGcsUnconfigured = false;
+
+    /**
      * GCS bucket instance (lazy-loaded).
      */
     protected $gcsBucket = null;
@@ -87,6 +114,10 @@ class GenccRelease extends Command
         if ($this->gcsBucket === null) {
             $bucketName = config('filesystems.disks.gcs.bucket');
             if (empty($bucketName)) {
+                if (!$this->warnedGcsUnconfigured) {
+                    $this->warn('GCS is not configured. Export files will be stored locally.');
+                    $this->warnedGcsUnconfigured = true;
+                }
                 return null;
             }
 
@@ -96,6 +127,7 @@ class GenccRelease extends Command
                 ]);
                 $this->gcsBucket = $storage->bucket($bucketName);
             } catch (\Exception $e) {
+                $this->gcsAvailabilityError = $e->getMessage();
                 $this->warn("GCS not available: {$e->getMessage()}. Files will be stored locally.");
                 return null;
             }
@@ -119,6 +151,7 @@ class GenccRelease extends Command
         $bucket = $this->getGcsBucket();
         $prefix = config('filesystems.disks.gcs.path_prefix', 'releases');
         $fullObjectName = $prefix ? "{$prefix}/{$objectName}" : $objectName;
+        $uploadError = $this->gcsAvailabilityError;
 
         if ($bucket) {
             try {
@@ -131,6 +164,7 @@ class GenccRelease extends Command
                 $this->info("  Uploaded to GCS: {$fullObjectName}");
                 return $objectName;
             } catch (\Exception $e) {
+                $uploadError = $e->getMessage();
                 $this->warn("  GCS upload failed: {$e->getMessage()}. Falling back to local storage.");
             }
         }
@@ -143,6 +177,12 @@ class GenccRelease extends Command
             }
             File::put($localFallbackPath, $content);
             $this->info("  Stored locally: {$localFallbackPath}");
+        }
+
+        if ($this->strictGcsUploads
+            && !empty(config('filesystems.disks.gcs.bucket'))
+            && $uploadError !== null) {
+            throw new \RuntimeException("GCS publish failed for {$fullObjectName}: {$uploadError}");
         }
 
         return $objectName;
@@ -226,10 +266,64 @@ class GenccRelease extends Command
             case 'bootstrap':
                 return $this->bootstrapRelease();
 
+            case 'regenerate-exports':
+                return $this->regenerateExports();
+
             default:
                 $this->error("Invalid argument: {$arg}");
                 return 1;
         }
+    }
+
+    /**
+     * Regenerate the downloadable release export files from the current
+     * published DB state and republish them to GCS when configured.
+     *
+     * This is a narrow, side-effect-free refresh: no release record is created,
+     * no pending jobs/actions are processed, and no submitter counts are written.
+     * The only writes are the intended export objects and local export files.
+     *
+     * Use this after a data fix (e.g. a backfill migration) corrects values that
+     * appear in the exports but no new release is being cut.
+     *
+     * @return int
+     */
+    protected function regenerateExports(): int
+    {
+        $this->releaseDate = Carbon::now();
+
+        $count = Submission::where('is_live', true)
+            ->where('status', Submission::STATUS_PUBLISHED)->count();
+
+        if ($count === 0) {
+            $this->warn('No live published submissions; writing empty export files.');
+        } else {
+            $this->info("Regenerating release export files from {$count} published submissions "
+                . "(no release record, no job processing)...");
+        }
+
+        $this->exportFailures = [];
+        $this->strictGcsUploads = true;
+
+        try {
+            $this->generateSubmissionsCsv();   // regenerates current + legacy csv/tsv/xlsx and uploads to GCS
+        } catch (\Exception $e) {
+            if (empty($this->exportFailures)) {
+                $this->exportFailures[] = ['format' => 'exports', 'message' => $e->getMessage()];
+            }
+        }
+
+        if (!empty($this->exportFailures)) {
+            $this->error('One or more export formats failed to generate; exports may be partially stale:');
+            foreach ($this->exportFailures as $failure) {
+                $this->error("  - {$failure['format']}: {$failure['message']}");
+            }
+            return 1;
+        }
+
+        $this->info('Done. Release export files refreshed.');
+
+        return 0;
     }
 
     /**
@@ -1411,17 +1505,22 @@ class GenccRelease extends Command
             ->count();
 
         // Generate CSV
-        $csvDir = $currentDir . '/csv';
-        $csvTimestamped = $csvDir . '/' . $timestampedBase . '.csv';
-        Excel::store($export, 'public/current/csv/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
-        $csvContent = File::get($csvTimestamped);
-        $this->uploadToGcs($csvContent, "current/csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
+        try {
+            $csvDir = $currentDir . '/csv';
+            $csvTimestamped = $csvDir . '/' . $timestampedBase . '.csv';
+            Excel::store($export, 'public/current/csv/' . $timestampedBase . '.csv', 'local', \Maatwebsite\Excel\Excel::CSV);
+            $csvContent = File::get($csvTimestamped);
+            $this->uploadToGcs($csvContent, "current/csv/{$timestampedBase}.csv", 'text/csv', $csvTimestamped);
 
-        $csvLatest = $csvDir . '/' . $latestBase . '.csv';
-        File::copy($csvTimestamped, $csvLatest);
-        $this->uploadToGcs($csvContent, "current/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
-        $this->info("  CSV: current/csv/{$timestampedBase}.csv");
-        $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
+            $csvLatest = $csvDir . '/' . $latestBase . '.csv';
+            File::copy($csvTimestamped, $csvLatest);
+            $this->uploadToGcs($csvContent, "current/csv/{$latestBase}.csv", 'text/csv', $csvLatest);
+            $this->info("  CSV: current/csv/{$timestampedBase}.csv");
+            $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
+        } catch (\Exception $e) {
+            $this->warn("  Failed to generate CSV: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'current/csv', 'message' => $e->getMessage()];
+        }
 
         // Generate XLSX
         try {
@@ -1440,6 +1539,7 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate XLSX: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'current/xlsx', 'message' => $e->getMessage()];
         }
 
         // Generate TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
@@ -1464,6 +1564,7 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("  Failed to generate TSV: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'current/tsv', 'message' => $e->getMessage()];
         }
 
         $this->submissionsCsvFile = $timestampedBase . '.csv';
@@ -1477,6 +1578,19 @@ class GenccRelease extends Command
             'latest_base' => $latestBase,
             'submission_count' => $submissionCount,
         ]);
+
+        // The primary current/csv is the download the release record points at.
+        // Secondary formats are collected in $exportFailures and tolerated by the
+        // callers that ignore it, but a missing primary CSV must never be recorded
+        // as a successful release -- fail loudly so process/bootstrap/repair abort
+        // before writing a release record, and regenerateExports() exits non-zero.
+        foreach ($this->exportFailures as $failure) {
+            if ($failure['format'] === 'current/csv') {
+                throw new \RuntimeException(
+                    "Primary submissions CSV (current/csv) failed to generate: {$failure['message']}"
+                );
+            }
+        }
     }
 
     /**
@@ -1515,6 +1629,7 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$csvTimestamped, $csvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy CSV: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'legacy/csv', 'message' => $e->getMessage()];
         }
 
         // Generate legacy XLSX
@@ -1534,6 +1649,7 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$xlsxTimestamped, $xlsxLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy XLSX: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'legacy/xlsx', 'message' => $e->getMessage()];
         }
 
         // Generate legacy TSV (Excel::TSV doesn't set tab delimiter automatically, so we pass it explicitly)
@@ -1558,6 +1674,7 @@ class GenccRelease extends Command
             $this->deleteLocalFilesAfterGcsUpload([$tsvTimestamped, $tsvLatest]);
         } catch (\Exception $e) {
             $this->warn("    Failed to generate legacy TSV: {$e->getMessage()}");
+            $this->exportFailures[] = ['format' => 'legacy/tsv', 'message' => $e->getMessage()];
         }
 
         $this->info("  Legacy format complete");
