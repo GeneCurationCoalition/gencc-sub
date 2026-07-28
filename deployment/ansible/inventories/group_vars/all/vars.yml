@@ -62,3 +62,20 @@ gencc_db_bootstrap_mode: migrate_only
 # gencc_db_restore_source: "gs://gencc-dev/application-private/backups/gencc_sub_baseline_20260205.sql.gz"
 # gencc_db_bootstrap_mode: restore_and_migrate
 # gencc_db_restore_force: true
+
+# -----------------------------------------------------------------------------
+# Downloadable release-export refresh
+# -----------------------------------------------------------------------------
+# When true, regenerate the downloadable release export files (CSV/TSV/XLSX,
+# current + legacy) from the current published DB state and clear the search
+# app's local release-cache markers after migrations. This keeps the public
+# download links in sync with data fixes applied by migrations. To avoid the
+# export render cost (~35k published rows x 3 formats x 2 folders), the step
+# only runs when migrations actually applied or on a restore_and_migrate deploy.
+gencc_regenerate_exports_on_deploy: true
+#
+# Force the refresh even on a no-op deploy (no migrations applied). Use for an
+# out-of-band data fix with no migration, or to recover a stale environment on
+# the first deploy without faking a migration. Still gated by the master switch
+# above. Exposed as the force_regenerate_exports GitHub Actions workflow input.
+gencc_force_regenerate_exports: false
