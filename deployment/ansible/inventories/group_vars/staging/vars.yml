@@ -3,7 +3,7 @@
 
 # Container images
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.1.6
-gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.1.6
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.1.7-rc2
 
 # Public routing / TLS
 gencc_submit_hostname: portal-stage.thegencc.org
