@@ -2,8 +2,8 @@
 # Production environment overrides.
 
 # Container images
-gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.1.4
-gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.1.5
+gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.1.6
+gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.1.6
 
 # Public routing / TLS
 gencc_submit_hostname: portal.thegencc.org
