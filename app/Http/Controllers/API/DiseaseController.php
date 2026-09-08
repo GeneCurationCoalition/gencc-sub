@@ -28,7 +28,7 @@ class DiseaseController extends Controller
      */
     public function show(string $id)
     {
-        $disease = Disease::rosetta($id);
+        $disease = Disease::resolver()->resolve($id)?->mondo;
 
         if ($disease === null)
             return response()->json(['success' => 'false',

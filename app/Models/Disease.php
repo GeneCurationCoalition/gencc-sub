@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\DiseaseResolver;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -207,274 +208,50 @@ class Disease extends Model
 
 
     /**
-     * Map various disease ontology references to the canonical MONDO disease record.
+     * Normalize a submitted disease identifier to the CURIE form stored in the
+     * diseases table.
      *
-     * This method now uses the mondo_id foreign key for fast equivalence lookups.
-     * Returns ACTIVE and DEPRECATED disease records (REMOVED diseases are excluded).
+     * Submitters use whatever prefix casing their source system emits, and the
+     * Orphanet ontology is referenced as both "ORPHA:" and "Orphanet:".  The
+     * curie column stores exactly one spelling per ontology, so every in-memory
+     * (case-sensitive) cache lookup has to go through here first.
      *
-     * For OMIM/Orphanet IDs:
-     * 1. First looks for a direct OMIM/Orphanet record with that curie
-     * 2. If found, returns its linked MONDO disease (via mondo_id)
-     * 3. If not found, looks for MONDO disease with this ID in xrefs (legacy fallback)
-     *
-     * @param string $id The disease identifier (with or without prefix)
-     * @return Disease|null The MONDO disease record (active or deprecated), or null if not found/removed
+     * @param string|null $id The submitted disease identifier
+     * @return string|null The canonical CURIE, or null if $id is not a CURIE
      */
-    public static function rosetta($id)
+    public static function normalizeCurie($id): ?string
     {
-        // Return null if id is not set
         if (empty($id))
             return null;
 
-        // Separate out prefix and identifier — requires CURIE format (PREFIX:ID)
+        // Preserve the existing identifier format: strip any path,
+        // then keep the first two colon-separated tokens and discard the rest,
+        // so "OMIM:123:456" is read as "OMIM:123"
         $parts = explode(':', basename(trim($id)));
 
-        // Reject bare values without a prefix — callers must supply a proper CURIE
         if (!isset($parts[1]))
-        {
             return null;
-        }
-        else
-        {
-            $id = $parts[1];
-            $curie = strtoupper($parts[0]) . ':' . $id;
 
-            switch (strtoupper($parts[0])) {
-                case 'OMIM':
-                case 'OMIMPS':
-                    $record = self::rosettaOmim($curie);
-                    break;
+        $prefix = strtoupper(trim($parts[0]));
+        $number = trim($parts[1]);
 
-                case 'ORPHANET':
-                case 'ORPHA':
-                    $curie = 'Orphanet:' . $id;  // Normalize to Orphanet prefix
-                    $record = self::rosettaOrphanet($curie);
-                    break;
+        // Orphanet is the only ontology with two accepted prefixes
+        if ($prefix === 'ORPHA' || $prefix === 'ORPHANET')
+            $prefix = 'Orphanet';
 
-                case 'MONDO':
-                    $record = self::rosettaMondo('MONDO:' . $id);
-                    break;
-
-                case 'DOID':
-                    // For non-MONDO/OMIM/Orphanet ontologies, search xrefs (exclude REMOVED)
-                    $record = self::where('type', self::TYPE_MONDO)
-                                  ->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_DEPRECATED])
-                                  ->where('xrefs->do_id', $id)
-                                  ->first();
-                    break;
-
-                case 'GARD':
-                    $record = self::where('type', self::TYPE_MONDO)
-                                  ->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_DEPRECATED])
-                                  ->where('xrefs->gard_id', $id)
-                                  ->first();
-                    break;
-
-                case 'MEDGEN':
-                    $record = self::where('type', self::TYPE_MONDO)
-                                  ->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_DEPRECATED])
-                                  ->where('xrefs->medgen_id', $id)
-                                  ->first();
-                    break;
-
-                case 'UMLS':
-                    $record = self::where('type', self::TYPE_MONDO)
-                                  ->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_DEPRECATED])
-                                  ->where('xrefs->umls_id', $id)
-                                  ->first();
-                    break;
-
-                default:
-                    $record = null;
-            }
-        }
-
-        return $record;
+        return $prefix . ':' . $number;
     }
 
 
     /**
-     * Stricter validation for submissions — ensures the MONDO mapping is
-     * discoverable via xrefs (the same path the Phase 2 processing cache uses).
+     * A fresh resolver for a one-off resolution in request handling.
      *
-     * For OMIM IDs, rosetta() may find a MONDO record via the mondo_id FK on the
-     * OMIM record, but if the MONDO record doesn't list that OMIM ID in its xrefs,
-     * the Phase 2 cache won't find it either.  This method rejects those cases so
-     * Phase 1 validation is consistent with Phase 2 processing.
-     *
-     * @param string $id The disease identifier in CURIE format (PREFIX:ID)
-     * @return Disease|null The MONDO disease record, or null if not resolvable via xrefs
+     * File validation and row processing build their own and thread it
+     * explicitly, so a resolver's memoized lookups never outlive one upload.
      */
-    public static function rosettaForSubmission($id): ?Disease
+    public static function resolver(): DiseaseResolver
     {
-        $result = self::rosetta($id);
-        if ($result === null) {
-            return null;
-        }
-
-        // Only OMIM IDs need the extra xref check — MONDO/Orphanet map directly
-        $normalized = trim($id);
-        $parts = explode(':', $normalized);
-        if (!isset($parts[1])) {
-            return null;
-        }
-        $prefix = strtoupper($parts[0]);
-        $number = $parts[1];
-
-        if (!in_array($prefix, ['OMIM', 'OMIMPS'])) {
-            return $result;
-        }
-
-        // Verify the MONDO record's xrefs contain this OMIM number
-        $xrefOmimIds = $result->xrefs->omim_id ?? null;
-        if ($xrefOmimIds === null) {
-            return null;
-        }
-        $xrefOmimIds = is_array($xrefOmimIds) ? $xrefOmimIds : [$xrefOmimIds];
-
-        return in_array($number, $xrefOmimIds) ? $result : null;
-    }
-
-
-    /**
-     * Resolve an OMIM ID to its canonical MONDO disease
-     *
-     * @param string $curie OMIM CURIE (e.g., "OMIM:615438")
-     * @return Disease|null The MONDO disease (active or deprecated), or null if not found/removed
-     */
-    protected static function rosettaOmim($curie)
-    {
-        // Strategy 1: Look for direct OMIM record with mondo_id
-        $omimDisease = self::omim($curie)->first();
-
-        if ($omimDisease && $omimDisease->mondo_id) {
-            // Prioritize ACTIVE MONDO disease over deprecated
-            $mondoDisease = self::where('id', $omimDisease->mondo_id)
-                ->where('status', self::STATUS_ACTIVE)
-                ->first();
-
-            if ($mondoDisease) {
-                return $mondoDisease;
-            }
-
-            // Fallback to deprecated if no active found
-            $mondoDisease = self::where('id', $omimDisease->mondo_id)
-                ->where('status', self::STATUS_DEPRECATED)
-                ->first();
-
-            if ($mondoDisease) {
-                return $mondoDisease;
-            }
-        }
-
-        // Strategy 2: Legacy fallback - search MONDO xrefs
-        $omimId = str_replace('OMIM:', '', $curie);
-
-        // Prioritize active MONDO terms
-        $mondoDisease = self::where('type', self::TYPE_MONDO)
-            ->where('status', self::STATUS_ACTIVE)
-            ->whereJsonContains('xrefs->omim_id', $omimId)
-            ->first();
-
-        if ($mondoDisease) {
-            return $mondoDisease;
-        }
-
-        // Fallback to deprecated MONDO terms
-        $mondoDisease = self::where('type', self::TYPE_MONDO)
-            ->where('status', self::STATUS_DEPRECATED)
-            ->whereJsonContains('xrefs->omim_id', $omimId)
-            ->first();
-
-        return $mondoDisease;
-    }
-
-
-    /**
-     * Resolve an Orphanet ID to its canonical MONDO disease, or the Orphanet record itself
-     *
-     * Resolution order:
-     * 1. Direct mondo_id on Orphanet record (set during UpdateDiseases)
-     * 2. MONDO disease with matching orpha_id in xrefs (legacy fallback)
-     * 3. Return the Orphanet record itself if no MONDO mapping exists
-     *
-     * @param string $curie Orphanet CURIE (e.g., "Orphanet:464724")
-     * @return Disease|null The MONDO disease (preferred), or the Orphanet record if no MONDO mapping exists
-     */
-    protected static function rosettaOrphanet($curie)
-    {
-        // Strategy 1: Look for direct Orphanet record with mondo_id
-        $orphanetDisease = self::where('type', self::TYPE_ORPHANET)
-            ->where('curie', $curie)
-            ->first();
-
-        if ($orphanetDisease && $orphanetDisease->mondo_id) {
-            // Prioritize ACTIVE MONDO disease over deprecated
-            $mondoDisease = self::where('id', $orphanetDisease->mondo_id)
-                ->where('status', self::STATUS_ACTIVE)
-                ->first();
-
-            if ($mondoDisease) {
-                return $mondoDisease;
-            }
-
-            // Fallback to deprecated if no active found
-            $mondoDisease = self::where('id', $orphanetDisease->mondo_id)
-                ->where('status', self::STATUS_DEPRECATED)
-                ->first();
-
-            if ($mondoDisease) {
-                return $mondoDisease;
-            }
-        }
-
-        // Strategy 2: Legacy fallback - search MONDO xrefs
-        $orphanetId = str_replace('Orphanet:', '', $curie);
-
-        // Prioritize active MONDO terms
-        $mondoDisease = self::where('type', self::TYPE_MONDO)
-            ->where('status', self::STATUS_ACTIVE)
-            ->where('xrefs->orpha_id', $orphanetId)
-            ->first();
-
-        if ($mondoDisease) {
-            return $mondoDisease;
-        }
-
-        // Fallback to deprecated MONDO terms
-        $mondoDisease = self::where('type', self::TYPE_MONDO)
-            ->where('status', self::STATUS_DEPRECATED)
-            ->where('xrefs->orpha_id', $orphanetId)
-            ->first();
-
-        if ($mondoDisease) {
-            return $mondoDisease;
-        }
-
-        // Strategy 3: Return the Orphanet record itself if no MONDO mapping exists
-        // This allows Orphanet diseases without MONDO equivalents to still be used
-        if ($orphanetDisease && $orphanetDisease->status === self::STATUS_ACTIVE) {
-            return $orphanetDisease;
-        }
-
-        return null;
-    }
-
-
-    /**
-     * Resolve a MONDO ID to its disease record
-     *
-     * @param string $curie MONDO CURIE (e.g., "MONDO:0000001")
-     * @return Disease|null The MONDO disease (active or deprecated), or null if not found/removed
-     */
-    protected static function rosettaMondo($curie)
-    {
-        // Return MONDO disease if active or deprecated (not removed)
-        $mondoDisease = self::curie($curie)
-            ->whereIn('status', [self::STATUS_ACTIVE, self::STATUS_DEPRECATED])
-            ->first();
-
-        return $mondoDisease;
+        return new DiseaseResolver();
     }
 
   

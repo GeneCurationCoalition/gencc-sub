@@ -112,10 +112,15 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         // Create test diseases
-        Disease::create([
+        $mondo = Disease::create([
             'curie' => 'MONDO:0000001',
             'name' => 'disease',
             'description' => 'Test disease',
+            'type' => Disease::TYPE_MONDO,
+            // mondo_id is an integer FK, and the resolver prefers it over xrefs;
+            // the xrefs also carry the equivalences MONDO asserts, which is what
+            // an OMIM identifier needs to be submittable
+            'xrefs' => ['omim_id' => ['123456'], 'orpha_id' => '700001'],
             'status' => Disease::STATUS_ACTIVE
         ]);
 
@@ -123,7 +128,29 @@ class SubmissionFileValidationTest extends TestCase
             'curie' => 'OMIM:123456',
             'name' => 'Test OMIM Disease',
             'description' => 'Test OMIM disease',
-            'mondo_id' => 'MONDO:0000001',
+            'type' => Disease::TYPE_OMIM,
+            'mondo_id' => $mondo->id,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        // An Orphanet term MONDO has ingested
+        Disease::create([
+            'curie' => 'Orphanet:700001',
+            'name' => 'Test Orphanet Disease',
+            'description' => 'Test Orphanet disease',
+            'type' => Disease::TYPE_ORPHANET,
+            'mondo_id' => $mondo->id,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        // An Orphanet term MONDO has no equivalent for.  Accepted, with a
+        // warning, and normalized to itself (issue 132).
+        Disease::create([
+            'curie' => 'Orphanet:723146',
+            'name' => 'Unmapped Orphanet Disease',
+            'description' => 'Orphanet term with no MONDO equivalent',
+            'type' => Disease::TYPE_ORPHANET,
+            'mondo_id' => null,
             'status' => Disease::STATUS_ACTIVE
         ]);
 
@@ -449,6 +476,126 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
+    }
+
+    /**
+     * Issue 132: an Orphanet identifier validates whichever accepted prefix the
+     * submitter wrote.  'ORPHA:' used to miss the exact-CURIE cache (which is
+     * keyed 'Orphanet:') and 'Orphanet:' used to miss the MONDO mapping cache
+     * (which was keyed 'ORPHA:'), so both spellings errored.
+     */
+    public function test_accepts_both_orpha_and_orphanet_prefixes(): void
+    {
+        foreach (['Orphanet:700001', 'ORPHANET:700001', 'ORPHA:700001', 'orpha:700001'] as $submitted) {
+            $worksheet = $this->createValidSpreadsheet([
+                $this->createValidDataRow(['disease_id' => $submitted])
+            ]);
+
+            SubmissionFileValidation::set_submitter_id($this->submitter->id);
+            $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+            $this->assertEmpty(
+                $errors,
+                "'{$submitted}' should validate cleanly, got: ".json_encode(array_column($errors, 'message'))
+            );
+        }
+    }
+
+    /**
+     * Issue 132: an Orphanet term MONDO has no equivalent for is accepted and
+     * reported as a warning, not an error.  Warnings do not block the upload —
+     * validateFile() only returns 422 for results whose severity is not
+     * 'warning'.
+     */
+    public function test_warns_but_does_not_error_for_orphanet_without_mondo(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'Orphanet:723146'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $blocking = array_filter($results, fn ($r) => ($r['severity'] ?? 'error') !== SubmissionFileValidation::SEVERITY_WARNING);
+        $this->assertEmpty(
+            $blocking,
+            'An unmapped Orphanet term must not block the upload, got: '.json_encode(array_column($blocking, 'message'))
+        );
+
+        $warnings = array_values(array_filter($results, fn ($r) => ($r['severity'] ?? null) === SubmissionFileValidation::SEVERITY_WARNING));
+        $this->assertCount(1, $warnings);
+        $this->assertEquals('orphanet_without_mondo', $warnings[0]['error_type']);
+        $this->assertStringContainsString('Orphanet:723146', $warnings[0]['message']);
+        $this->assertStringContainsString('row 13', $warnings[0]['message']);
+    }
+
+    /**
+     * The unmapped-Orphanet warning is grouped: one result naming every
+     * affected CURIE and row, not one per row.
+     */
+    public function test_groups_orphanet_without_mondo_warnings(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'Orphanet:723146', 'local_key' => 'TEST001']),
+            $this->createValidDataRow(['disease_id' => 'ORPHA:723146', 'local_key' => 'TEST002', 'hgnc_id' => 'HGNC:9673', 'hgnc_symbol' => 'BRCA1']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:0000001', 'local_key' => 'TEST003', 'hgnc_id' => 'HGNC:1234', 'hgnc_symbol' => 'TEST1']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $warnings = array_values(array_filter($results, fn ($r) => ($r['error_type'] ?? null) === 'orphanet_without_mondo'));
+
+        $this->assertCount(1, $warnings);
+        $this->assertStringContainsString('rows 13, 14', $warnings[0]['message']);
+    }
+
+    /**
+     * An OMIM identifier MONDO asserts in its own xrefs stays submittable.
+     */
+    public function test_accepts_omim_id_asserted_by_mondo(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'OMIM:123456'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $this->assertEmpty($errors, 'Got: '.json_encode(array_column($errors, 'message')));
+    }
+
+    /**
+     * An OMIM identifier that only reaches MONDO through the FK is rejected at
+     * validation, unchanged by this refactor.  See DiseaseResolver::resolve().
+     */
+    public function test_rejects_omim_id_mapped_only_by_fk(): void
+    {
+        $unxrefed = Disease::create([
+            'curie' => 'MONDO:0000009',
+            'name' => 'Inferred mapping target',
+            'type' => Disease::TYPE_MONDO,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        Disease::create([
+            'curie' => 'OMIM:621570',
+            'name' => 'Transitively mapped OMIM disease',
+            'type' => Disease::TYPE_OMIM,
+            'mondo_id' => $unxrefed->id,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'OMIM:621570'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $diseaseErrors = array_values(array_filter($errors, fn ($e) => ($e['column'] ?? null) === 'disease_id'));
+        $this->assertCount(1, $diseaseErrors);
+        $this->assertEquals('invalid_field_value', $diseaseErrors[0]['error_type']);
     }
 
     /**

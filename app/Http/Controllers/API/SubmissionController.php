@@ -134,22 +134,6 @@ class SubmissionController extends Controller
     }
 
     /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
-    {
-        $disease = Disease::rosetta($id);
-
-        if ($disease === null)
-            return response()->json(['success' => 'false',
-                'status_code' => 3001,
-                'message' => 'Disease not found'],
-                200);
-
-        return $disease;
-    }
-
-    /**
      * Update the specified resource in storage.
      */
     public function update(Request $request, string $id)
@@ -250,23 +234,18 @@ class SubmissionController extends Controller
             case 'disease':
                 $uploadedCurie = $request->input('curie');
 
-                // Find the original disease by exact CURIE (could be MONDO, OMIM, or Orphanet)
-                $originalDisease = Disease::curie($uploadedCurie)->first();
+                // One resolution yields both disease references the submission
+                // stores, under the same rules the upload path applies
+                $resolution = Disease::resolver()->resolve($uploadedCurie);
 
-                if ($originalDisease === null)
+                if ($resolution === null || $resolution->original === null)
                     return response()->json(['success' => 'false',
                         'status_code' => 3001,
                         'message' => 'Disease not found'],
                         200);
 
-                // Find the MONDO disease (normalized) using rosetta
-                $mondoDisease = Disease::rosetta($uploadedCurie);
-
-                if ($mondoDisease === null)
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Disease not found - no MONDO mapping'],
-                        200);
+                $originalDisease = $resolution->original;
+                $mondoDisease = $resolution->mondo;
 
                 // Check for duplicate gene-disease-MOI combination
                 $duplicateCheck = SubmissionDuplicateDetection::checkForDuplicates(

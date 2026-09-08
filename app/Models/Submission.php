@@ -799,35 +799,25 @@ class Submission extends Model
 
         /**
          * Assert the disease lookup by ID.  If invalid, add to the errors_bag
-         * Logic:
-         * 1. Find the exact disease record for the uploaded CURIE (original_disease_id)
-         * 2. Find the MONDO mapping for normalization (disease_id)
-         * 3. If MONDO uploaded: both fields point to same record
-         * 4. If OMIM/Orphanet uploaded: original_disease_id = OMIM/Orphanet, disease_id = mapped MONDO
-         * 5. If no MONDO mapping exists, validation error
+         *
+         * A submission stores two disease references and DiseaseResolver
+         * produces both:
+         * - original_disease_id = the record for the CURIE exactly as submitted
+         * - disease_id          = that record normalized to MONDO
+         * For a submitted MONDO term the two are the same record.
+         *
+         * The resolver is threaded in for an uploaded file, where one instance
+         * serves every row; a single API submission builds its own.  Either way
+         * the resolution rules are the ones file validation already applied.
          */
         $uploadedDiseaseId = $obj->disease->id ?? null;
-        $originalDisease = null;
-        $mondoDisease = null;
 
-        if ($uploadedDiseaseId) {
-            // Step 1: Find the exact disease record that was uploaded
-            if (isset($lookupCaches['diseases'])) {
-                $originalDisease = $lookupCaches['diseases']->get($uploadedDiseaseId);
-            } else {
-                // Direct lookup by curie for exact match
-                $originalDisease = Disease::curie($uploadedDiseaseId)->first();
-            }
+        $resolution = $uploadedDiseaseId
+            ? ($lookupCaches['disease_resolver'] ?? Disease::resolver())->resolve($uploadedDiseaseId)
+            : null;
 
-            // Step 2: Find the MONDO mapping (normalized disease)
-            if (isset($lookupCaches['mondo_mappings'])) {
-                // Use MONDO mapping cache
-                $mondoDisease = $lookupCaches['mondo_mappings']->get($uploadedDiseaseId);
-            } else {
-                // Fallback: Use rosetta method which handles MONDO normalization
-                $mondoDisease = Disease::rosetta($uploadedDiseaseId);
-            }
-        }
+        $originalDisease = $resolution?->original;
+        $mondoDisease = $resolution?->mondo;
 
         // Set original_disease_id (the exact disease record for uploaded CURIE)
         $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');

@@ -18,10 +18,10 @@ use App\Models\Job;
 use App\Models\Submission;
 use App\Models\Pubmed;
 use App\Models\Gene;
-use App\Models\Disease;
 use App\Models\Inheritance;
 use App\Models\Classification;
 use App\Models\Mechanism;
+use App\Services\DiseaseResolver;
 use App\Services\SubmissionFileValidation;
 
 use App\Jobs\ProcessUpload;
@@ -259,7 +259,10 @@ class DocumentController extends Controller
             'status_code' => 200,
             'message' => 'File validated successfully. Upload processing in background.',
             'document_id' => $document->id,
-            'row_count' => $validationResult['row_count']
+            'row_count' => $validationResult['row_count'],
+            // Non-blocking findings validateFile() collected, e.g. Orphanet terms
+            // MONDO has no equivalent for.  Already returned on the 422 path.
+            'warnings' => $validationResult['warnings'] ?? []
         ], 200);
 
     }
@@ -748,47 +751,14 @@ class DocumentController extends Controller
 
         // Build lookup caches to avoid repeated database queries for each row
         // This dramatically improves performance for large files (e.g., 3000+ rows)
-        \Log::info('DocumentController@parser: Loading diseases...');
-        $allDiseases = Disease::select('id', 'curie', 'name', 'type', 'xrefs')->get();
-        \Log::info('DocumentController@parser: Loaded ' . $allDiseases->count() . ' diseases');
-
-        // Build disease cache - this is keyed by exact CURIE for direct lookups
-        // Used to find the original disease record that was uploaded
-        $diseaseCache = $allDiseases->keyBy('curie');
-
-        // Build MONDO mapping cache - maps any disease ID (MONDO, OMIM, Orphanet) to its MONDO record
-        // Used to normalize all diseases to MONDO
-        \Log::info('DocumentController@parser: Building MONDO mapping cache...');
-        $mondoMappingCache = collect();
-
-        foreach ($allDiseases as $disease) {
-            // If it's a MONDO disease, it maps to itself
-            if ($disease->type == Disease::TYPE_MONDO) {
-                $mondoMappingCache->put($disease->curie, $disease);
-
-                // Also map any OMIM/Orphanet xrefs to this MONDO disease
-                if (isset($disease->xrefs->omim_id)) {
-                    $omimIds = is_array($disease->xrefs->omim_id) ? $disease->xrefs->omim_id : [$disease->xrefs->omim_id];
-                    foreach ($omimIds as $omimId) {
-                        $mondoMappingCache->put('OMIM:' . $omimId, $disease);
-                    }
-                }
-                if (isset($disease->xrefs->orpha_id)) {
-                    $orphaIds = is_array($disease->xrefs->orpha_id) ? $disease->xrefs->orpha_id : [$disease->xrefs->orpha_id];
-                    foreach ($orphaIds as $orphaId) {
-                        $mondoMappingCache->put('ORPHA:' . $orphaId, $disease);
-                        $mondoMappingCache->put('ORPHANET:' . $orphaId, $disease);
-                    }
-                }
-            }
-        }
-        \Log::info('DocumentController@parser: Built MONDO mapping cache with ' . $mondoMappingCache->count() . ' entries');
+        // The disease resolver is built per run and never held between uploads:
+        // the nightly update:diseases run can change the table under the worker.
+        $diseaseResolver = new DiseaseResolver();
 
         \Log::info('DocumentController@parser: Loading other lookup tables...');
         $lookupCaches = [
             'genes' => Gene::select('id', 'hgnc_id', 'symbol')->get()->keyBy('hgnc_id'),
-            'diseases' => $diseaseCache,  // Exact disease lookups by CURIE
-            'mondo_mappings' => $mondoMappingCache,  // MONDO normalization mappings
+            'disease_resolver' => $diseaseResolver,  // The single disease resolution path
             'moi' => Inheritance::select('id', 'curie', 'name')->get()->keyBy('curie'),
             'classifications' => Classification::select('id', 'curie', 'name')->get()->keyBy('curie'),
             'mechanisms' => Mechanism::select('id', 'curie', 'name')->get()->keyBy('curie'),
@@ -796,8 +766,6 @@ class DocumentController extends Controller
         ];
         \Log::info('DocumentController@parser: Built lookup caches', [
             'genes' => $lookupCaches['genes']->count(),
-            'diseases' => $lookupCaches['diseases']->count(),
-            'mondo_mappings' => $lookupCaches['mondo_mappings']->count(),
             'moi' => $lookupCaches['moi']->count(),
             'classifications' => $lookupCaches['classifications']->count(),
             'mechanisms' => $lookupCaches['mechanisms']->count(),

@@ -435,7 +435,7 @@ php artisan test
 
 **Unit Tests:** (`tests/Unit/`)
 - Submission validation logic
-- Disease equivalence (rosetta methods)
+- Disease resolution (`DiseaseResolver`)
 - Status transitions
 - Data transformations
 

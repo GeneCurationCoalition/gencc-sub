@@ -273,9 +273,11 @@ if ($this->gene_id === null) {
 
 b. **Disease Lookup** (supports multiple ID types):
 ```php
-// rosetta() method handles MONDO, OMIM, and ORPHA IDs
-$disease = Disease::rosetta($obj->disease->id);
-$this->disease_id = $this->asserterrors($disease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
+// DiseaseResolver handles MONDO, OMIM, Orphanet/ORPHA and xref-only IDs, and
+// returns both the record as submitted and its MONDO equivalent
+$resolution = $resolver->resolve($obj->disease->id);
+$this->original_disease_id = $this->asserterrors($resolution?->original->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
+$this->disease_id = $this->asserterrors($resolution?->mondo->id ?? null, 'disease_curie_id', 'Invalid Disease ID - no MONDO mapping found');
 
 // If not found, use placeholder
 if ($this->disease_id === null) {

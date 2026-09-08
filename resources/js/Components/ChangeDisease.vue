@@ -7,7 +7,10 @@
 
     // component side validations
     const schema = yup.object({
-        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|Orphanet):[0-9]+$/gi, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
+        // Kept in step with the disease_id column regex in SubmissionFileValidation.php:
+        // 'ORPHA' is an accepted spelling of 'Orphanet', and dropping /g avoids yup
+        // reusing a stateful .test() lastIndex across submits
+        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|ORPHA|Orphanet):[0-9]+$/i, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
