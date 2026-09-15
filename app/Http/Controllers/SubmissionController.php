@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Auth;
 
 use App\Models\Alias;
+use App\Models\Disease;
 use App\Models\Submission;
 use App\Models\Submitter;
 use App\Services\SubmissionDuplicateDetection;
@@ -144,7 +145,52 @@ class SubmissionController extends Controller
             'submission' => $submission,
             'criterias' => $criteria_options,
             'hasSubmittedJob' => $hasSubmittedJob,
-            'unpublishedDuplicateWarning' => $unpublishedDuplicateWarning
+            'unpublishedDuplicateWarning' => $unpublishedDuplicateWarning,
+            'deprecatedDiseaseWarning' => $this->deprecatedDiseaseWarning($submission->disease)
         ]);
+    }
+
+    /**
+     * A non-blocking warning for a submission curated against an obsolete MONDO
+     * term.
+     *
+     * These are accepted deliberately: 1,130 active Orphanet disorders exact-match
+     * a MONDO term that MONDO has since obsoleted, and rejecting them would lose a
+     * working mapping.  Derived at display time from the disease's current status,
+     * so it applies retroactively and needs no stored state.
+     *
+     * MONDO names a successor for only about one obsolete term in seven; where it
+     * does not, the warning says the term is obsolete without naming one.
+     *
+     * @return array|null
+     */
+    private function deprecatedDiseaseWarning(?Disease $disease): ?array
+    {
+        if ($disease === null || $disease->status !== Disease::STATUS_DEPRECATED) {
+            return null;
+        }
+
+        // xrefs decodes to a list, not an object, for a row with no references
+        $replacedBy = is_object($disease->xrefs) ? ($disease->xrefs->replaced_by ?? null) : null;
+        $successor = $replacedBy ? Disease::curie($replacedBy)->first() : null;
+
+        $message = "{$disease->curie} ({$disease->name}) is obsolete in its source ontology. "
+            . 'This submission remains valid and can be published.';
+
+        if ($successor !== null) {
+            $message .= " The source names {$successor->curie} ({$successor->name}) as its replacement;"
+                . ' consider republishing against that term.';
+        } elseif ($replacedBy) {
+            $message .= " The source names {$replacedBy} as its replacement.";
+        } else {
+            $message .= ' The source does not name a replacement term.';
+        }
+
+        return [
+            'type' => 'deprecated_disease',
+            'curie' => $disease->curie,
+            'replaced_by' => $successor?->curie ?? $replacedBy,
+            'message' => $message,
+        ];
     }
 }

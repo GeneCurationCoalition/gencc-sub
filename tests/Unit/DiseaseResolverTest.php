@@ -43,28 +43,24 @@ class DiseaseResolverTest extends TestCase
     {
         $warm = new DiseaseResolver();
 
-        foreach ([false, true] as $forSubmission) {
-            foreach (self::diseaseWorldInputs() as $input) {
-                $warm->resolve($input, $forSubmission);
-            }
+        foreach (self::diseaseWorldInputs() as $input) {
+            $warm->resolve($input);
         }
 
         foreach (self::diseaseWorldInputs() as $input) {
-            foreach ([false, true] as $forSubmission) {
-                $this->assertSame(
-                    $this->describe((new DiseaseResolver())->resolve($input, $forSubmission)),
-                    $this->describe($warm->resolve($input, $forSubmission)),
-                    "Memoized resolver disagrees on '{$input}' (forSubmission: ".var_export($forSubmission, true).')'
-                );
-            }
+            $this->assertSame(
+                $this->describe((new DiseaseResolver())->resolve($input)),
+                $this->describe($warm->resolve($input)),
+                "Memoized resolver disagrees on '{$input}'"
+            );
         }
     }
 
     /**
-     * The fixture world must actually exercise each strategy and each failure
+     * The fixture world must actually exercise each step and each failure
      * mode, or the test above passes on an empty world.
      */
-    public function test_inputs_cover_every_strategy(): void
+    public function test_inputs_cover_every_step(): void
     {
         $resolver = new DiseaseResolver();
 
@@ -82,10 +78,27 @@ class DiseaseResolverTest extends TestCase
         }
 
         $this->assertArrayHasKey(DiseaseResolution::VIA_MONDO_SELF, $seen);
-        $this->assertArrayHasKey(DiseaseResolution::VIA_EQUIVALENCE_FK, $seen);
-        $this->assertArrayHasKey(DiseaseResolution::VIA_EQUIVALENCE_XREF, $seen);
-        $this->assertArrayHasKey(DiseaseResolution::VIA_ORPHANET_SELF, $seen);
+        $this->assertArrayHasKey(DiseaseResolution::VIA_MONDO_EXACT_MATCH, $seen);
+        $this->assertArrayHasKey(DiseaseResolution::VIA_ORPHANET_EXACT_MATCH, $seen);
+        $this->assertArrayHasKey(DiseaseResolution::VIA_OMIM_BRIDGE, $seen);
         $this->assertGreaterThan(10, $unresolved);
+    }
+
+    /**
+     * Resolution only ever normalizes to a MONDO term.  The Orphanet
+     * self-fallback is gone, so nothing else can reach submissions.disease_id.
+     */
+    public function test_every_resolution_targets_a_mondo_term(): void
+    {
+        $resolver = new DiseaseResolver();
+
+        foreach (self::diseaseWorldInputs() as $input) {
+            $resolution = $resolver->resolve($input);
+
+            if ($resolution !== null) {
+                $this->assertSame(Disease::TYPE_MONDO, $resolution->mondo->type, "'{$input}' resolved to a non-MONDO term");
+            }
+        }
     }
 
     /**

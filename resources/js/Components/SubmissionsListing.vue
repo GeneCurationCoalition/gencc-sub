@@ -968,6 +968,18 @@
         return true;
     }
 
+    // The recorded error messages for a row, so the indicator says what is
+    // wrong rather than only that something is
+    function errorSummary(item) {
+        if (!item.submission_errors) {
+            return 'Submission has errors';
+        }
+
+        const messages = Object.values(item.submission_errors).filter(m => typeof m === 'string' && m.trim() !== '');
+
+        return messages.length > 0 ? messages.join('; ') : 'Submission has errors';
+    }
+
     const dt = ref();
 
     function rowFilter(item)
@@ -1752,7 +1764,7 @@ table tbody tr:hover {
                             <span v-else>{{ displayStatus(data.status) }}</span>
                             <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
                                class="pi pi-exclamation-triangle text-red-500 text-xl"
-                               title="Submission has errors"></i>
+                               v-tooltip.top="errorSummary(data)"></i>
                             <!-- Indicator for archived versions (superseded by newer release) -->
                             <i v-if="data.is_archived"
                                class="pi pi-history text-gray-400"

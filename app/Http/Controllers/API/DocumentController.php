@@ -260,8 +260,8 @@ class DocumentController extends Controller
             'message' => 'File validated successfully. Upload processing in background.',
             'document_id' => $document->id,
             'row_count' => $validationResult['row_count'],
-            // Non-blocking findings validateFile() collected, e.g. Orphanet terms
-            // MONDO has no equivalent for.  Already returned on the 422 path.
+            // Non-blocking findings validateFile() collected, e.g. disease ids
+            // with no exact MONDO equivalent.  Already returned on the 422 path.
             'warnings' => $validationResult['warnings'] ?? []
         ], 200);
 
@@ -522,64 +522,50 @@ class DocumentController extends Controller
             $errors = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning'));
             $warnings = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning'));
 
+            // Errors and warnings share one shape, so the frontend renders both
+            // the same way, including grouped column details
+            $format = function($result) {
+                $formatted = [
+                    'error_type' => $result['error_type'] ?? 'validation_error',
+                    'severity' => $result['severity'] ?? 'error',
+                    'message' => $result['message'] ?? 'Unknown validation error',
+                    'rows' => $result['rows'] ?? ($result['row'] ?? 'N/A'),
+                ];
+
+                // Preserve column name for frontend grouping
+                if (!empty($result['column'])) {
+                    $formatted['column'] = $result['column'];
+                }
+
+                // Preserve expandable details (unique values with their rows)
+                if (!empty($result['details'])) {
+                    $formatted['details'] = $result['details'];
+                }
+
+                // Preserve file format error fields for frontend display
+                if (!empty($result['is_file_format_error'])) {
+                    $formatted['is_file_format_error'] = true;
+                }
+                if (!empty($result['user_title'])) {
+                    $formatted['user_title'] = $result['user_title'];
+                }
+                if (!empty($result['user_message'])) {
+                    $formatted['user_message'] = $result['user_message'];
+                }
+
+                return $formatted;
+            };
+
+            $formattedWarnings = array_map($format, $warnings);
+
             if (!empty($errors)) {
-                $formattedErrors = array_map(function($error) {
-                    $rows = $error['rows'] ?? ($error['row'] ?? 'N/A');
-                    $formatted = [
-                        'error_type' => $error['error_type'] ?? 'validation_error',
-                        'severity' => $error['severity'] ?? 'error',
-                        'message' => $error['message'] ?? 'Unknown validation error',
-                        'rows' => $rows,
-                    ];
-
-                    // Preserve column name for frontend grouping
-                    if (!empty($error['column'])) {
-                        $formatted['column'] = $error['column'];
-                    }
-
-                    // Preserve expandable details (unique values with their rows)
-                    if (!empty($error['details'])) {
-                        $formatted['details'] = $error['details'];
-                    }
-
-                    // Preserve file format error fields for frontend display
-                    if (!empty($error['is_file_format_error'])) {
-                        $formatted['is_file_format_error'] = true;
-                    }
-                    if (!empty($error['user_title'])) {
-                        $formatted['user_title'] = $error['user_title'];
-                    }
-                    if (!empty($error['user_message'])) {
-                        $formatted['user_message'] = $error['user_message'];
-                    }
-
-                    return $formatted;
-                }, $errors);
-
                 return [
                     'has_errors' => true,
-                    'errors' => array_values($formattedErrors),
-                    'warnings' => array_values(array_map(function($w) {
-                        return [
-                            'error_type' => $w['error_type'] ?? 'warning',
-                            'severity' => 'warning',
-                            'message' => $w['message'] ?? '',
-                            'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
-                        ];
-                    }, $warnings)),
+                    'errors' => array_map($format, $errors),
+                    'warnings' => $formattedWarnings,
                     'row_count' => $rowCount
                 ];
             }
-
-            // Only warnings, no blocking errors - format warnings for display
-            $formattedWarnings = array_values(array_map(function($w) {
-                return [
-                    'error_type' => $w['error_type'] ?? 'warning',
-                    'severity' => 'warning',
-                    'message' => $w['message'] ?? '',
-                    'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
-                ];
-            }, $warnings));
         }
 
         // Check for empty file (no valid submission rows)

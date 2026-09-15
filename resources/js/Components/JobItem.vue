@@ -213,11 +213,6 @@ const dataRowErrors = computed(() => {
         .map((err, idx) => ({ ...err, __index: idx }));
 });
 
-// Computed: PMID normalization warnings
-const pmidWarnings = computed(() => {
-    return uploadWarnings.value.filter(err => err.error_type === 'pmid_normalization_warning');
-});
-
 // Computed: Check if document can be cleared (validation failed OR partial upload, but NOT during active processing)
 const canClearDocument = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
@@ -617,6 +612,9 @@ const uploadFile = async (event) => {
     if (response.data.status_code === 200 || response.data.success === 'true') {
       // Validation passed and background job dispatched
       const rowCount = response.data.row_count || 0;
+
+      // Non-blocking findings; the reloads below preserve component state
+      uploadWarnings.value = response.data.warnings || [];
 
       console.log('[Upload] Validation passed - starting background processing for', rowCount, 'rows');
 
@@ -1398,22 +1396,33 @@ const formatDate = (dateString) => {
                 </template>
             </Card>
 
-            <!-- PMID Normalization Warnings Card -->
-            <div v-if="pmidWarnings.length > 0" class="mt-2 mb-4">
+            <!-- Validation Warnings Card: any non-blocking finding, whatever its type -->
+            <div v-if="uploadWarnings.length > 0" class="mt-2 mb-4">
                 <div class="bg-orange-50 border-l-4 border-orange-400 p-4 rounded">
                     <div class="flex justify-between items-center text-orange-700">
                         <div class="flex items-center gap-2">
                             <i class="pi pi-info-circle text-2xl"></i>
                             <div class="flex flex-col">
-                                <span class="font-semibold">{{ pmidWarnings.length }} PMID Normalization Warning(s)</span>
-                                <span class="text-sm">Some PMID values were automatically cleaned. Upload will proceed normally.</span>
+                                <span class="font-semibold">{{ uploadWarnings.length }} Validation Warning(s)</span>
+                                <span class="text-sm">These do not block the upload.</span>
                             </div>
                         </div>
                         <Button label="Dismiss" icon="pi pi-times" severity="warning" text size="small" @click="uploadWarnings = []" />
                     </div>
-                    <div class="mt-3 max-h-40 overflow-y-auto">
-                        <div v-for="(warning, index) in pmidWarnings" :key="index" class="text-sm text-orange-600 py-1 border-b border-orange-200 last:border-b-0">
-                            <span class="font-mono">Row {{ warning.rows }}:</span> {{ warning.message }}
+                    <div class="mt-3 max-h-80 overflow-y-auto">
+                        <div v-for="(warning, index) in uploadWarnings" :key="index" class="text-sm text-orange-600 py-1 border-b border-orange-200 last:border-b-0">
+                            <span v-if="warning.rows && !warning.details?.length" class="font-mono">Row(s) {{ warning.rows }}:</span> {{ warning.message }}
+                            <details v-if="warning.details?.length" class="mt-1">
+                                <summary class="cursor-pointer text-xs">{{ warning.details.length }} distinct value(s)</summary>
+                                <table class="w-full text-xs mt-1">
+                                    <tbody>
+                                        <tr v-for="(detail, dIdx) in warning.details" :key="dIdx" class="border-b border-orange-100 last:border-b-0">
+                                            <td class="py-1 pr-4 font-mono">{{ detail.value }}</td>
+                                            <td class="py-1 font-mono text-gray-500">Row(s) {{ detail.rows }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </details>
                         </div>
                     </div>
                 </div>

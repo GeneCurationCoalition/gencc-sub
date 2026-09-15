@@ -809,6 +809,11 @@ class Submission extends Model
          * The resolver is threaded in for an uploaded file, where one instance
          * serves every row; a single API submission builds its own.  Either way
          * the resolution rules are the ones file validation already applied.
+         *
+         * An identifier with no exact MONDO equivalent is rejected here rather
+         * than at upload: the row is created, carries a blocking
+         * `disease_curie_id` error naming the code that was submitted, and is
+         * fixed in place through the portal's disease dialog.
          */
         $uploadedDiseaseId = $obj->disease->id ?? null;
 
@@ -819,13 +824,21 @@ class Submission extends Model
         $originalDisease = $resolution?->original;
         $mondoDisease = $resolution?->mondo;
 
+        $submittedCurie = trim((string) ($uploadedDiseaseId ?? ''));
+        $unresolvedMessage = $submittedCurie === ''
+            ? 'Missing Disease ID'
+            : "No exact MONDO equivalent for Disease ID '{$submittedCurie}'";
+
         // Set original_disease_id (the exact disease record for uploaded CURIE)
-        $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
+        $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id',
+            $mondoDisease === null
+                ? $unresolvedMessage
+                : "Disease ID '{$submittedCurie}' has no record of its own; submit {$mondoDisease->curie} instead");
         if ($this->original_disease_id === null)
             $this->original_disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
 
         // Set disease_id (normalized to MONDO)
-        $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID - no MONDO mapping found');
+        $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', $unresolvedMessage);
         if ($this->disease_id === null)
             $this->disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
 

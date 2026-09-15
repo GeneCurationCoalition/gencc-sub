@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Console\Commands\UpdateDiseases;
 use App\Models\Disease;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Resolves a submitted disease identifier to the pair of disease records a
@@ -15,12 +17,29 @@ use Illuminate\Support\Facades\DB;
  * processing, the manual change form, the lookup endpoints — goes through
  * here, so the answer cannot depend on which path asked.
  *
- * Strategy order, for an OMIM or Orphanet identifier:
- *   1. the record for the submitted CURIE carries a mondo_id FK (strongest:
- *      MONDO asserts the equivalence directly)
- *   2. some MONDO record lists the submitted identifier in its xrefs
- *   3. Orphanet only — the term stands on its own, because MONDO has not
- *      ingested it yet.  Reported as a warning at upload, not an error.
+ * Three policy rules govern it:
+ *
+ *   1. Exact only.  Only an exact upstream mapping may relate terms across
+ *      ontologies.  UpdateDiseases stores nothing else, so presence in `xrefs`
+ *      already means exactness and nothing here re-checks it.
+ *   2. OMIM reciprocity.  An OMIM id maps to a MONDO term only when that MONDO
+ *      term maps back.  This is automatic: OMIM's source file asserts nothing,
+ *      so the only OMIM↔MONDO data is MONDO's own exactMatch list.
+ *   3. MONDO preferred, Orphanet fallback, else reject.
+ *
+ * For an Orphanet code, first match wins:
+ *
+ *   1. a MONDO term skos:exactMatch-es it;
+ *   2. Orphadata asserts an exact, validated MONDO equivalent;
+ *   3. Orphadata asserts an exact OMIM reference and a MONDO term
+ *      exactMatch-es that OMIM id;
+ *   4. otherwise the identifier does not resolve and the submission record is
+ *      rejected with a per-record error.
+ *
+ * For an OMIM id, step 1 only.  A transitive bridge through Orphanet — an
+ * Orphanet term that references the OMIM id and has a MONDO equivalent — is a
+ * possible future step; it would map 9 further identifiers in current data, and
+ * is deliberately not taken, because the OMIM side asserts nothing to reciprocate.
  *
  * Lookups are memoized per instance, so an upload that builds one resolver
  * and resolves a disease per row pays for each distinct identifier once.
@@ -30,19 +49,19 @@ use Illuminate\Support\Facades\DB;
 class DiseaseResolver
 {
     /**
-     * The xrefs field each supported ontology prefix is recorded under on a
-     * MONDO record.  Prefixes are as Disease::normalizeCurie() spells them.
+     * The MONDO xrefs field that records an exact match to each submitted
+     * ontology.  Prefixes are as Disease::normalizeCurie() spells them; field
+     * names must agree with UpdateDiseases::FIELD_*.
+     *
+     * OMIMPS shares OMIM's field: MONDO records phenotypic series under a URL
+     * form the importer does not store, so nothing ever lands there for it.
      *
      * @var array<string, string>
      */
-    private const XREF_FIELD = [
-        'OMIM' => 'omim_id',
-        'OMIMPS' => 'omim_id',
-        'Orphanet' => 'orpha_id',
-        'DOID' => 'do_id',
-        'GARD' => 'gard_id',
-        'MEDGEN' => 'medgen_id',
-        'UMLS' => 'umls_id',
+    private const EXACT_FIELD = [
+        'OMIM' => UpdateDiseases::FIELD_EXACT_OMIM,
+        'OMIMPS' => UpdateDiseases::FIELD_EXACT_OMIM,
+        'Orphanet' => UpdateDiseases::FIELD_EXACT_ORPHANET,
     ];
 
     /** @var array<string, ?Disease> canonical CURIE => record, memoized */
@@ -52,23 +71,28 @@ class DiseaseResolver
     private array $byId = [];
 
     /**
-     * xrefs field => xref value => id of the MONDO record that lists it.
+     * xrefs field => xref value => ids of the MONDO records that list it.
      * Built on first use from one query, because the xrefs column is JSON and
      * cannot be indexed, so per-lookup queries against it are the one slow
      * step in resolution.
      *
-     * @var array<string, array<string, int>>|null
+     * @var array<string, array<string, int[]>>|null
      */
     private ?array $xrefIndex = null;
+
+    /** @var array<string, ?Disease> "field:value" => exact-matching MONDO record, memoized */
+    private array $exactMatch = [];
 
     /**
      * Resolve a submitted disease identifier.
      *
+     * There is one policy: exactness and reciprocity are properties of what is
+     * stored, so every caller gets the same answer.
+     *
      * @param  string|null  $submitted  The identifier as submitted, in CURIE form
-     * @param  bool  $forSubmission  Apply the stricter OMIM rule described below
      * @return DiseaseResolution|null null when the identifier does not resolve
      */
-    public function resolve(?string $submitted, bool $forSubmission = false): ?DiseaseResolution
+    public function resolve(?string $submitted): ?DiseaseResolution
     {
         $curie = Disease::normalizeCurie($submitted);
 
@@ -78,29 +102,12 @@ class DiseaseResolver
 
         [$prefix, $number] = explode(':', $curie, 2);
 
-        $resolution = match ($prefix) {
+        return match ($prefix) {
             'MONDO' => $this->mondo($curie),
-            'OMIM', 'OMIMPS' => $this->equivalence($curie, self::XREF_FIELD[$prefix], $number, false),
-            'Orphanet' => $this->equivalence($curie, self::XREF_FIELD[$prefix], $number, true),
-            'DOID', 'GARD', 'MEDGEN', 'UMLS' => $this->xrefOnly(self::XREF_FIELD[$prefix], $number),
+            'OMIM', 'OMIMPS' => $this->omim($curie, $number),
+            'Orphanet' => $this->orphanet($curie, $number),
             default => null,
         };
-
-        if ($resolution === null) {
-            return null;
-        }
-
-        // A submission additionally requires that MONDO itself list the OMIM id,
-        // not just that an OMIM record point at a MONDO term.  Only strategy 1
-        // can produce the latter, and where it does the mapping was inferred
-        // transitively (see assignMondoIdToOmimViaOrphanet) rather than asserted
-        // by MONDO, and those inferences are unreliable enough to reject.
-        if ($forSubmission && in_array($prefix, ['OMIM', 'OMIMPS'], true)
-            && ! $this->assertsXref($resolution->mondo, 'omim_id', $number)) {
-            return null;
-        }
-
-        return $resolution;
     }
 
     /**
@@ -117,64 +124,95 @@ class DiseaseResolver
     }
 
     /**
-     * Resolve an ontology that has its own records in the diseases table and an
-     * equivalence to MONDO — OMIM and Orphanet.
+     * An OMIM identifier resolves only through MONDO's own exact match to it.
      *
-     * @param  string  $curie  The canonical CURIE
-     * @param  string  $xrefField  Where a MONDO record records this ontology
-     * @param  string  $number  The bare identifier, without its prefix
-     * @param  bool  $selfFallback  Whether an unmapped term may stand on its own
+     * OMIM asserts nothing about MONDO, so this single step is what makes the
+     * mapping reciprocal by construction.
      */
-    private function equivalence(string $curie, string $xrefField, string $number, bool $selfFallback): ?DiseaseResolution
+    private function omim(string $curie, string $number): ?DiseaseResolution
+    {
+        $mondo = $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_OMIM, $number);
+
+        return $mondo === null
+            ? null
+            : new DiseaseResolution($this->byCurie($curie), $mondo, DiseaseResolution::VIA_MONDO_EXACT_MATCH);
+    }
+
+    /**
+     * An Orphanet identifier resolves through the first of the three steps that
+     * yields a MONDO term.
+     */
+    private function orphanet(string $curie, string $number): ?DiseaseResolution
     {
         $original = $this->byCurie($curie);
 
-        // Strategy 1: the equivalence MONDO asserted, recorded as an FK by
-        // UpdateDiseases
-        if ($original !== null && $original->mondo_id) {
-            $mondo = $this->byId($original->mondo_id);
-
-            if ($mondo !== null) {
-                return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_EQUIVALENCE_FK);
-            }
-        }
-
-        // Strategy 2: a MONDO record naming this identifier in its xrefs
-        $mondo = $this->mondoByXref($xrefField, $number);
+        // Step 1: a MONDO term exact-matches this Orphanet code
+        $mondo = $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_ORPHANET, $number);
 
         if ($mondo !== null) {
-            return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_EQUIVALENCE_XREF);
+            return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_MONDO_EXACT_MATCH);
         }
 
-        // Strategy 3: an active Orphanet term MONDO has no equivalent for is
-        // still usable, as itself
-        if ($selfFallback && $original !== null && $original->status === Disease::STATUS_ACTIVE) {
-            return new DiseaseResolution($original, $original, DiseaseResolution::VIA_ORPHANET_SELF);
+        if ($original === null) {
+            return null;
+        }
+
+        // Step 2: Orphadata asserts an exact, validated MONDO equivalent
+        $mondo = $this->only(
+            array_map(
+                fn ($c) => $this->mondoByCurie($c),
+                self::xrefValues($original->xrefs, UpdateDiseases::FIELD_EXACT_MONDO)
+            ),
+            "Orphanet {$curie} asserts more than one MONDO equivalent"
+        );
+
+        if ($mondo !== null) {
+            return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_ORPHANET_EXACT_MATCH);
+        }
+
+        // Step 3: Orphadata asserts an exact OMIM reference MONDO exact-matches
+        $mondo = $this->only(
+            array_map(
+                fn ($n) => $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_OMIM, $n),
+                self::xrefValues($original->xrefs, UpdateDiseases::FIELD_EXACT_OMIM)
+            ),
+            "Orphanet {$curie} reaches more than one MONDO term through its OMIM references"
+        );
+
+        if ($mondo !== null) {
+            return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_OMIM_BRIDGE);
         }
 
         return null;
     }
 
     /**
-     * Resolve an ontology that has no records of its own in the diseases table
-     * and is only reachable through a MONDO record's xrefs — DOID, GARD,
-     * MEDGEN, UMLS.  There is no original record to report for these.
+     * The one distinct record among $candidates, or null when there is none.
+     *
+     * A step that reaches two different MONDO terms fails closed: the mapping is
+     * ambiguous and no choice between them is defensible.  Current upstream data
+     * produces no such case, but nothing guarantees that across releases, so the
+     * ambiguity is logged when it happens.
+     *
+     * @param  array<?Disease>  $candidates
      */
-    private function xrefOnly(string $xrefField, string $number): ?DiseaseResolution
+    private function only(array $candidates, string $ambiguity): ?Disease
     {
-        $mondo = $this->mondoByXref($xrefField, $number);
+        $found = [];
 
-        return $mondo === null
-            ? null
-            : new DiseaseResolution(null, $mondo, DiseaseResolution::VIA_EQUIVALENCE_XREF);
-    }
+        foreach ($candidates as $candidate) {
+            if ($candidate !== null) {
+                $found[$candidate->id] = $candidate;
+            }
+        }
 
-    /**
-     * Whether $disease's xrefs record $number under $field.
-     */
-    private function assertsXref(?Disease $disease, string $field, string $number): bool
-    {
-        return $disease !== null && in_array($number, self::xrefValues($disease->xrefs, $field), true);
+        if (count($found) > 1) {
+            Log::warning('DiseaseResolver: '.$ambiguity, ['mondo' => array_column($found, 'curie')]);
+
+            return null;
+        }
+
+        return reset($found) ?: null;
     }
 
     /**
@@ -190,6 +228,19 @@ class DiseaseResolver
     }
 
     /**
+     * The MONDO record with this CURIE.
+     *
+     * `submissions.disease_id` must be a MONDO term, so the type is checked
+     * rather than assumed of a CURIE that came out of a JSON column.
+     */
+    private function mondoByCurie(string $curie): ?Disease
+    {
+        $disease = $this->byCurie($curie);
+
+        return $disease?->type === Disease::TYPE_MONDO ? $disease : null;
+    }
+
+    /**
      * The disease record with this primary key.
      */
     private function byId(int $id): ?Disease
@@ -202,29 +253,37 @@ class DiseaseResolver
     }
 
     /**
-     * The MONDO record that lists $value in its xrefs under $field.
+     * The MONDO record that exact-matches $value under $field, or null when
+     * none does or more than one does.
      *
-     * @param  string  $field  An xrefs key, e.g. 'omim_id' or 'orpha_id'
-     * @param  string  $value  The bare identifier, without its prefix
+     * @param  string  $field  An equivalence key, e.g. UpdateDiseases::FIELD_EXACT_OMIM
+     * @param  string  $value  The bare identifier, as the field records it
      */
-    private function mondoByXref(string $field, string $value): ?Disease
+    private function mondoByExactMatch(string $field, string $value): ?Disease
     {
-        $this->xrefIndex ??= $this->buildXrefIndex();
+        $key = $field.'/'.$value;
 
-        $id = $this->xrefIndex[$field][$value] ?? null;
+        if (! array_key_exists($key, $this->exactMatch)) {
+            $this->xrefIndex ??= $this->buildXrefIndex();
 
-        return $id === null ? null : $this->byId($id);
+            $this->exactMatch[$key] = $this->only(
+                array_map(fn ($id) => $this->byId($id), $this->xrefIndex[$field][$value] ?? []),
+                "more than one MONDO term records {$field} {$value}"
+            );
+        }
+
+        return $this->exactMatch[$key];
     }
 
     /**
-     * Index every xref on every eligible MONDO record, once.
+     * Index every exact match on every eligible MONDO record, once.
      *
      * Rows are read as plain arrays rather than models — this is tens of
-     * thousands of rows and only two columns matter.  The put-if-absent build
-     * over the eligible() ordering means the ACTIVE record wins over a
-     * DEPRECATED one listing the same xref, and the lowest id breaks any tie.
+     * thousands of rows and only two columns matter.  Every id that lists a
+     * value is kept, so an ambiguous mapping can be detected rather than
+     * silently decided by row order.
      *
-     * @return array<string, array<string, int>>
+     * @return array<string, array<string, int[]>>
      */
     private function buildXrefIndex(): array
     {
@@ -239,9 +298,9 @@ class DiseaseResolver
         foreach ($rows as $row) {
             $xrefs = json_decode($row->xrefs);
 
-            foreach (self::XREF_FIELD as $field) {
+            foreach (array_unique(self::EXACT_FIELD) as $field) {
                 foreach (self::xrefValues($xrefs, $field) as $value) {
-                    $index[$field][$value] ??= (int) $row->id;
+                    $index[$field][$value][] = (int) $row->id;
                 }
             }
         }
@@ -250,11 +309,17 @@ class DiseaseResolver
     }
 
     /**
-     * The values of one xrefs field, whether stored as a scalar (`orpha_id`) or
-     * as an array (`omim_id`).
+     * The identifiers recorded under one equivalence field.
      *
-     * @param  mixed  $xrefs  A decoded xrefs column; an array (not object) for
-     *                        the `[]` UpdateDiseases writes when a term has none
+     * Every field this reads is written as an array — bare identifiers, except
+     * `exact_mondo`, which holds CURIEs.  A row written before the exact-only
+     * rename carries none of these keys at all and so yields nothing —
+     * deliberately, because its pre-policy `omim_id` / `orpha_id` / `mondo_id`
+     * values include non-exact identifiers that must not be read as
+     * equivalences.  The scalar and non-object cases are tolerated only so that
+     * malformed or hand-seeded data cannot raise.
+     *
+     * @param  mixed  $xrefs  A decoded xrefs column, as an object or model cast
      * @return string[]
      */
     private static function xrefValues(mixed $xrefs, string $field): array
@@ -263,7 +328,10 @@ class DiseaseResolver
             return [];
         }
 
-        return array_map('strval', (array) $xrefs->{$field});
+        return array_values(array_filter(
+            array_map('strval', (array) $xrefs->{$field}),
+            fn ($value) => $value !== ''
+        ));
     }
 
     /**
@@ -273,6 +341,9 @@ class DiseaseResolver
      * filter is stated here, not left to the SoftDeletes scope, because the
      * xref index reads the table through the query builder, which has no
      * scopes — the two lookup paths must agree by construction.
+     *
+     * Deprecated MONDO terms stay eligible: 1,130 active Orphanet disorders map
+     * to one, and the portal surfaces a non-blocking warning instead.
      *
      * @template T of \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder
      *

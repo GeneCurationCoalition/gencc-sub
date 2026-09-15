@@ -7,7 +7,7 @@
     import ChangeFriendly from '@/Components/ChangeFriendly.vue';
 
 
-    const props = defineProps(['submission', 'criterias', 'hasSubmittedJob', 'unpublishedDuplicateWarning'])
+    const props = defineProps(['submission', 'criterias', 'hasSubmittedJob', 'unpublishedDuplicateWarning', 'deprecatedDiseaseWarning'])
 
     const showFriendlyDialog = ref(false);
     const dialogTitle = defineModel('dialogTitle');
@@ -80,7 +80,7 @@
         <div class="pb-12">
             <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
                 <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg">
-                    <SubmissionItem :submission="submission" :criteria_options="criterias" :hasSubmittedJob="hasSubmittedJob" :unpublishedDuplicateWarning="unpublishedDuplicateWarning" />
+                    <SubmissionItem :submission="submission" :criteria_options="criterias" :hasSubmittedJob="hasSubmittedJob" :unpublishedDuplicateWarning="unpublishedDuplicateWarning" :deprecatedDiseaseWarning="deprecatedDiseaseWarning" />
                 </div>
             </div>
         </div>

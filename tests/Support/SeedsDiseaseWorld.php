@@ -5,9 +5,17 @@ namespace Tests\Support;
 use App\Models\Disease;
 
 /**
- * One fixture world covering every disease resolution strategy, shared by the
- * tests that assert what resolution returns and the test that asserts a
- * resolver's memoized answers match fresh ones.
+ * One fixture world covering every step of the disease resolution policy and
+ * every way an identifier can fail it, shared by the tests that assert what
+ * resolution returns and the test that asserts a resolver's memoized answers
+ * match fresh ones.
+ *
+ * Storage here mirrors what UpdateDiseases writes: a row's xrefs record only
+ * what that row's own ontology asserts, exactly, under `exact_*` keys holding
+ * arrays of bare identifiers — except `exact_mondo`, which holds CURIEs, since a
+ * MONDO identifier is zero-padded.  A MONDO row lists the OMIM and Orphanet
+ * terms it skos:exactMatch-es; an Orphanet row lists the MONDO and OMIM terms
+ * Orphadata marks exact and validated; an OMIM row asserts nothing.
  */
 trait SeedsDiseaseWorld
 {
@@ -21,82 +29,116 @@ trait SeedsDiseaseWorld
         // A MONDO term with no cross-references at all
         $w['mondo_plain'] = Disease::factory()->mondo()->create(['curie' => 'MONDO:0000001']);
 
-        // A soft-deleted MONDO row that shares xrefs with mondo_xrefs and has one of
-        // its own.  Created first so it takes the lower id and, without the
-        // deleted_at filter, wins the put-if-absent index build.
+        // A soft-deleted MONDO row claiming the same identifiers as mondo_exact.
+        // Created first so it takes the lower id and, without the deleted_at
+        // filter, would win the index build or make it ambiguous.
         $w['mondo_trashed'] = Disease::factory()->mondo()->withXrefs([
-            'omim_id' => ['600001'],
-            'orpha_id' => '700001',
-            'do_id' => '800002',
+            'exact_omim' => ['600001'],
+            'exact_orphanet' => ['700001'],
         ])->create(['curie' => 'MONDO:0000006']);
         $w['mondo_trashed']->delete();
 
-        // The xref target: every supported ontology points here through xrefs
-        $w['mondo_xrefs'] = Disease::factory()->mondo()->withXrefs([
-            'omim_id' => ['600001', '600004'],   // stored as an array
-            'orpha_id' => '700001',              // stored as a scalar
-            'do_id' => '800001',
-            'gard_id' => '810001',
-            'medgen_id' => '820001',
-            'umls_id' => 'C830001',
+        // Step 1 target: the terms MONDO itself exact-matches
+        $w['mondo_exact'] = Disease::factory()->mondo()->withXrefs([
+            'exact_omim' => ['600001', '600004'],
+            'exact_orphanet' => ['700001', '700002', '700500'],
         ])->create(['curie' => 'MONDO:0000002']);
 
-        // The FK target: reachable only through mondo_id, never through xrefs
-        $w['mondo_fk_only'] = Disease::factory()->mondo()->create(['curie' => 'MONDO:0000003']);
+        // Step 2 target: reachable only through an Orphanet row's own assertion
+        $w['mondo_orphanet_asserted'] = Disease::factory()->mondo()->create(['curie' => 'MONDO:0000003']);
 
+        // Step 3 target: reachable only by chaining an Orphanet row's OMIM
+        // reference through MONDO's exact match to that OMIM id
+        $w['mondo_bridge'] = Disease::factory()->mondo()->withXrefs([
+            'exact_omim' => ['600700'],
+        ])->create(['curie' => 'MONDO:0000007']);
+
+        // An obsolete MONDO term is still a valid target, and names its successor
         $w['mondo_deprecated'] = Disease::factory()->mondo()->deprecated()->withXrefs([
-            'omim_id' => ['600044'],
-            'orpha_id' => '700044',
+            'exact_omim' => ['600044'],
+            'exact_orphanet' => ['700044'],
+            'replaced_by' => 'MONDO:0000002',
         ])->create(['curie' => 'MONDO:0000004']);
 
         $w['mondo_removed'] = Disease::factory()->mondo()->removed()->create(['curie' => 'MONDO:0000005']);
 
-        // OMIM mapped by FK only — the mapping MONDO never asserted, which is
-        // what the submission guard rejects
-        $w['omim_fk'] = Disease::factory()->omim()->create([
-            'curie' => 'OMIM:600100',
-            'mondo_id' => $w['mondo_fk_only']->id,
-        ]);
+        // Two live terms claiming the same Orphanet code: no choice between them
+        // is defensible, so resolution fails closed
+        $w['mondo_rival_a'] = Disease::factory()->mondo()->withXrefs([
+            'exact_orphanet' => ['700888'],
+        ])->create(['curie' => 'MONDO:0000008']);
+        $w['mondo_rival_b'] = Disease::factory()->mondo()->withXrefs([
+            'exact_orphanet' => ['700888'],
+        ])->create(['curie' => 'MONDO:0000009']);
 
-        // OMIM with a record but no FK, so only the xref can match
-        $w['omim_xref'] = Disease::factory()->omim()->create(['curie' => 'OMIM:600001']);
+        // OMIM asserts nothing, so an OMIM row exists only to be named
+        $w['omim_exact'] = Disease::factory()->omim()->create(['curie' => 'OMIM:600001']);
 
         // OMIM:600004 deliberately has no record of its own: reachable only
-        // through mondo_xrefs' omim_id array
+        // through mondo_exact's exact_omim array
 
-        // OMIM removed, so its FK must not be followed
-        $w['omim_removed'] = Disease::factory()->omim()->removed()->create([
-            'curie' => 'OMIM:600900',
-            'mondo_id' => $w['mondo_fk_only']->id,
-        ]);
+        // An OMIM id no MONDO term exact-matches: reciprocity fails, so it does
+        // not resolve however many other rows mention it
+        $w['omim_unmapped'] = Disease::factory()->omim()->create(['curie' => 'OMIM:600100']);
 
-        $w['orpha_fk'] = Disease::factory()->orphanet()->create([
-            'curie' => 'Orphanet:700100',
-            'mondo_id' => $w['mondo_fk_only']->id,
-        ]);
+        $w['omim_removed'] = Disease::factory()->omim()->removed()->create(['curie' => 'OMIM:600900']);
 
-        $w['orpha_xref'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700001']);
+        $w['omim_bridge'] = Disease::factory()->omim()->create(['curie' => 'OMIM:600700']);
 
-        // Orphanet with no MONDO equivalent at all — resolves to itself
-        $w['orpha_self'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700200']);
+        // Step 1: MONDO exact-matches this Orphanet code
+        $w['orpha_exact'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700001']);
 
-        // Deprecated and unmapped: standing on its own requires an ACTIVE term
-        $w['orpha_deprecated'] = Disease::factory()->orphanet()->deprecated()->create(['curie' => 'Orphanet:700300']);
+        // Orphanet:700044 has no record of its own, and mondo_deprecated
+        // exact-matches it
+
+        // Step 1 wins over step 2: MONDO exact-matches this code, and the row
+        // also asserts a different MONDO equivalent of its own
+        $w['orpha_both'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_mondo' => ['MONDO:0000003'],
+        ])->create(['curie' => 'Orphanet:700002']);
+
+        // A deprecated Orphanet term MONDO still exact-matches
+        $w['orpha_deprecated'] = Disease::factory()->orphanet()->deprecated()
+            ->create(['curie' => 'Orphanet:700500']);
+
+        // Step 2: Orphadata's own exact, validated MONDO equivalent
+        $w['orpha_asserts_mondo'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_mondo' => ['MONDO:0000003'],
+            'exact_omim' => [],
+        ])->create(['curie' => 'Orphanet:700300']);
+
+        // Step 3: an exact OMIM reference MONDO exact-matches
+        $w['orpha_bridge'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_mondo' => [],
+            'exact_omim' => ['600700'],
+        ])->create(['curie' => 'Orphanet:700700']);
+
+        // Step 4: nothing maps it, so the submission is rejected.  This is the
+        // case that used to resolve to itself.
+        $w['orpha_unmapped'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700200']);
+
+        // Asserts a MONDO term that is not in the table
+        $w['orpha_stale'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_mondo' => ['MONDO:0009999'],
+        ])->create(['curie' => 'Orphanet:700600']);
+
+        // References an OMIM id no MONDO term exact-matches
+        $w['orpha_dead_bridge'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_omim' => ['600100'],
+        ])->create(['curie' => 'Orphanet:700800']);
 
         $w['orpha_removed'] = Disease::factory()->orphanet()->removed()->create(['curie' => 'Orphanet:700400']);
 
-        // An FK pointing at a deprecated MONDO term is still followed
-        $w['orpha_fk_deprecated'] = Disease::factory()->orphanet()->create([
-            'curie' => 'Orphanet:700404',
-            'mondo_id' => $w['mondo_deprecated']->id,
-        ]);
+        // Ambiguity at each step
+        $w['orpha_rival_targets'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700888']);
 
-        // An FK pointing at a removed MONDO term is not, so this falls through
-        // to standing on its own
-        $w['orpha_fk_removed'] = Disease::factory()->orphanet()->create([
-            'curie' => 'Orphanet:700500',
-            'mondo_id' => $w['mondo_removed']->id,
-        ]);
+        $w['orpha_two_mondo'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_mondo' => ['MONDO:0000001', 'MONDO:0000003'],
+        ])->create(['curie' => 'Orphanet:700999']);
+
+        $w['orpha_two_bridges'] = Disease::factory()->orphanet()->withXrefs([
+            'exact_omim' => ['600001', '600700'],
+        ])->create(['curie' => 'Orphanet:700777']);
 
         return $w;
     }
@@ -116,24 +158,24 @@ trait SeedsDiseaseWorld
             $inputs[] = strtolower($curie);
         }
 
-        foreach (['600001', '600004', '600044', '600100', '600900', '609999'] as $number) {
+        foreach (['600001', '600004', '600044', '600100', '600700', '600900', '609999'] as $number) {
             $inputs[] = 'OMIM:'.$number;
             $inputs[] = 'omim:'.$number;
         }
 
-        foreach (['700001', '700044', '700100', '700200', '700300', '700400', '700404', '700500', '709999'] as $number) {
+        foreach (['700001', '700002', '700044', '700200', '700300', '700400', '700500', '700600',
+            '700700', '700777', '700800', '700888', '700999', '709999'] as $number) {
             foreach (['Orphanet', 'ORPHANET', 'orphanet', 'ORPHA', 'orpha', 'oRpHa'] as $prefix) {
                 $inputs[] = $prefix.':'.$number;
             }
         }
 
-        foreach (['DOID:800001', 'GARD:810001', 'MEDGEN:820001', 'UMLS:C830001',
-            'DOID:800002', 'DOID:899999', 'GARD:819999', 'MEDGEN:829999', 'UMLS:C839999'] as $curie) {
-            $inputs[] = $curie;
-        }
-
-        // Malformed and out-of-scope input
+        // Namespaces this policy no longer accepts, and malformed input
         return array_merge($inputs, [
+            'DOID:800001',
+            'GARD:810001',
+            'MEDGEN:820001',
+            'UMLS:C830001',
             '',
             '600001',
             'MONDO',

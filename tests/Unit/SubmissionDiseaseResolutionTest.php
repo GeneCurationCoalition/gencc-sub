@@ -55,18 +55,12 @@ class SubmissionDiseaseResolutionTest extends TestCase
             'status' => Classification::STATUS_ACTIVE,
         ]);
 
-        $this->mondo = Disease::factory()->mondo()->withXrefs(['orpha_id' => '83471'])
+        $this->mondo = Disease::factory()->mondo()->withXrefs(['exact_orphanet' => ['83471']])
             ->create(['curie' => 'MONDO:0000001']);
 
-        $this->orphanetMapped = Disease::factory()->orphanet()->create([
-            'curie' => 'Orphanet:83471',
-            'mondo_id' => $this->mondo->id,
-        ]);
+        $this->orphanetMapped = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:83471']);
 
-        $this->orphanetUnmapped = Disease::factory()->orphanet()->create([
-            'curie' => 'Orphanet:723146',
-            'mondo_id' => null,
-        ]);
+        $this->orphanetUnmapped = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:723146']);
     }
 
     /**
@@ -88,20 +82,25 @@ class SubmissionDiseaseResolutionTest extends TestCase
     }
 
     /**
-     * An Orphanet term MONDO has not ingested stands on its own, so both
-     * references point at the Orphanet record.  Upload validation accepts these
-     * with a warning, so processing must accept them too.
+     * An Orphanet term with no exact MONDO equivalent is rejected: the row is
+     * created against the placeholder disease and carries a blocking
+     * disease_curie_id error naming the code that was submitted, which the job
+     * UI shows and JobStateMachine::submit() blocks on.
+     *
+     * This is the case that used to resolve to the Orphanet term itself.
      */
-    public function test_orphanet_row_without_mondo_resolves_to_itself(): void
+    public function test_orphanet_row_without_mondo_is_rejected(): void
     {
         foreach (['Orphanet:723146', 'ORPHA:723146'] as $submitted) {
             foreach ($this->resolverModes() as $mode => $lookupCaches) {
                 $submission = new Submission();
                 $result = $submission->load_from_json($this->submissionPacket($submitted), $lookupCaches);
 
-                $this->assertTrue($result, "'{$submitted}' ({$mode}) reported: ".json_encode($result));
-                $this->assertEquals($this->orphanetUnmapped->id, $submission->original_disease_id, "'{$submitted}' ({$mode})");
-                $this->assertEquals($this->orphanetUnmapped->id, $submission->disease_id, "'{$submitted}' ({$mode})");
+                $this->assertIsArray($result, "'{$submitted}' ({$mode}) should report errors");
+                $this->assertArrayHasKey('disease_curie_id', $result);
+                $this->assertStringContainsString($submitted, $result['disease_curie_id'],
+                    'The error must name the code that was submitted');
+                $this->assertEquals($this->mondo->id, $submission->disease_id, "'{$submitted}' ({$mode}) falls back to the placeholder");
             }
         }
     }

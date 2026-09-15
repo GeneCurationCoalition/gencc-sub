@@ -13,7 +13,6 @@ use App\Models\Submitter;
 use App\Models\Pubmed;
 use App\Models\Submission;
 use App\Services\SubmissionDuplicateDetection;
-use App\Services\DiseaseResolution;
 use App\Services\DiseaseResolver;
 
 class SubmissionFileValidation
@@ -56,6 +55,9 @@ class SubmissionFileValidation
      *                  returning null when it is invalid (required)
      *              'passes_resolver' = boolean indicating that the file's DiseaseResolver
      *                  is passed to the validator as a second argument (optional)
+     *              'severity' = severity of a rejection; defaults to SEVERITY_ERROR,
+     *                  which blocks the upload.  SEVERITY_WARNING lets the rows
+     *                  through to per-record validation (optional)
      *              'message' = string message used when the validator rejects a value (optional)
      */
     private static array $COLUMN_MAP = [
@@ -98,7 +100,12 @@ class SubmissionFileValidation
             'validator_with_argument' => [
                 'method' => [self::class, 'resolve_disease_for_submission'],
                 'passes_resolver' => true,
-                'message' => 'No MONDO associated disease value for submitted OMIM or ORPHA disease id',
+                // Not blocking: an identifier with no exact MONDO equivalent is
+                // reported per record once the rows exist, where the submitter
+                // can fix it in place through the disease dialog.  Reported here
+                // too, grouped by value, so it is not a surprise after upload.
+                'severity' => self::SEVERITY_WARNING,
+                'message' => 'No exact MONDO equivalent for submitted disease id; these rows will be imported with an error to resolve',
             ],
         ],
         'disease_name' => [
@@ -295,17 +302,18 @@ class SubmissionFileValidation
     /**
      * The 'disease_id' column validator.
      *
-     * Accepts the identifier if the file's resolver can resolve it under
-     * submission rules, so the column check and the later row processing reach
-     * the same verdict from the same code.
+     * Resolves through the file's resolver, so the column check and the later
+     * row processing reach the same verdict from the same code.  A failure here
+     * is a warning, not a blocking error: the row is still imported and carries
+     * a per-record `disease_curie_id` error the submitter fixes in the portal.
      *
      * @param string $value The submitted disease identifier
      * @param DiseaseResolver $resolver The file's resolver
-     * @return Disease|null The resolved disease, or null if the value is invalid
+     * @return Disease|null The resolved MONDO term, or null if it does not resolve
      */
     public static function resolve_disease_for_submission($value, DiseaseResolver $resolver): ?Disease
     {
-        return $resolver->resolve($value, true)?->mondo;
+        return $resolver->resolve($value)?->mondo;
     }
 
     private static function parse_as_date($numeric_date): ?string
@@ -622,12 +630,6 @@ class SubmissionFileValidation
             array_push($validation_results, ...$duplicate_submission_validation);
         }
 
-        // Warn about Orphanet terms MONDO has no equivalent for
-        $orphanet_warnings = self::validate_orphanet_without_mondo($worksheet, $disease_resolver);
-        if (!empty($orphanet_warnings)) {
-            array_push($validation_results, ...$orphanet_warnings);
-        }
-
         // Progress: Validating PMIDs
         if ($progressCallback) {
             $progressCallback('Validating PMID format...');
@@ -937,10 +939,11 @@ class SubmissionFileValidation
                 $return = call_user_func_array($validator_method, $validator_args);
                 if ($return === null ) {
                     $custom_message = self::$COLUMN_MAP[$column_name]['validator_with_argument']['message'] ?? null;
+                    $severity = self::$COLUMN_MAP[$column_name]['validator_with_argument']['severity'] ?? self::SEVERITY_ERROR;
                     $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
                     $error = [
                         'error_type' => 'invalid_field_value',
-                        'severity' => self::SEVERITY_ERROR,
+                        'severity' => $severity,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
                         'column' => $column_name,
@@ -1615,7 +1618,7 @@ class SubmissionFileValidation
 
             // Resolved the same way the disease_id column validator resolves it,
             // so the two steps agree on what a row refers to
-            $resolution = $disease_resolver->resolve($disease_id_raw, true);
+            $resolution = $disease_resolver->resolve($disease_id_raw);
 
             // Skip if any lookup failed (other validators will catch these)
             if ($gene === null || $resolution === null || $inheritance === null) {
@@ -1725,74 +1728,5 @@ class SubmissionFileValidation
         }
 
         return $validation_results;
-    }
-
-    /**
-     * Warn about Orphanet identifiers that MONDO has no equivalent for.
-     *
-     * These rows are valid and are accepted: an Orphanet term with no MONDO
-     * mapping resolves to itself, which is what the manual disease form already
-     * does.  But the submission then carries a non-MONDO disease_id, so the
-     * submitter should know which rows those are — MONDO usually catches up in a
-     * later release, at which point the rows can be republished against it.
-     *
-     * Reported as one grouped warning rather than one per row; warnings do not
-     * block the upload.
-     *
-     * @param array $worksheet The worksheet data as an array of rows
-     * @param DiseaseResolver $disease_resolver The file's disease resolver
-     * @return array Array of validation warnings
-     */
-    private static function validate_orphanet_without_mondo($worksheet, DiseaseResolver $disease_resolver): array
-    {
-        $disease_id_index = self::get_index('disease_id');
-        $action_index = self::get_index('action');
-
-        // CURIE => rows that used it
-        $unmapped = [];
-
-        $row_num = 0;
-        foreach ($worksheet as $row) {
-            $row_num++;
-
-            if ($row_num < self::FIRST_DATA_ROW || empty(implode('', $row))) {
-                continue;
-            }
-
-            // Unpublish rows carry no disease of their own
-            if (strtoupper(trim($row[$action_index] ?? '')) === 'U') {
-                continue;
-            }
-
-            $disease_id_raw = trim($row[$disease_id_index] ?? '');
-            if (empty($disease_id_raw)) {
-                continue;
-            }
-
-            $resolution = $disease_resolver->resolve($disease_id_raw, true);
-
-            if ($resolution?->via === DiseaseResolution::VIA_ORPHANET_SELF) {
-                $unmapped[$resolution->original->curie][] = $row_num;
-            }
-        }
-
-        if (empty($unmapped)) {
-            return [];
-        }
-
-        $described = [];
-        foreach ($unmapped as $curie => $rows) {
-            sort($rows, SORT_NUMERIC);
-            $described[] = $curie . ' (row' . (count($rows) === 1 ? ' ' : 's ') . implode(', ', $rows) . ')';
-        }
-
-        return [[
-            'error_type' => 'orphanet_without_mondo',
-            'severity' => self::SEVERITY_WARNING,
-            'validation_type' => self::DATA_VALIDATION,
-            'column' => null,
-            'message' => 'MONDO has no equivalent term for ' . implode(', ', $described) . '. '
-                . 'These submissions are accepted and will be curated against the Orphanet term itself.',
-        ]];
     }
 }

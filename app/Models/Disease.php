@@ -128,6 +128,12 @@ class Disease extends Model
     /**
      * Get the canonical MONDO disease for this disease
      * (null for MONDO diseases themselves)
+     *
+     * @deprecated `mondo_id` is no longer maintained.  It recorded the inverse of
+     * a MONDO assertion on the OMIM/Orphanet row, which exact-only storage
+     * forbids, and resolution now reads the asserting row's own xrefs instead.
+     * Existing values are pre-policy leftovers; the column is scheduled to be
+     * dropped once gencc-search stops declaring it.  See docs/DISEASE_MAPPING.md.
      */
     public function mondoDisease()
     {
@@ -137,6 +143,8 @@ class Disease extends Model
 
     /**
      * Get all OMIM/Orphanet diseases that map to this MONDO disease
+     *
+     * @deprecated See mondoDisease().
      */
     public function equivalentDiseases()
     {

@@ -23,7 +23,7 @@
     import { useToast } from "primevue/usetoast";
 
 
-    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning'])
+    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning', 'deprecatedDiseaseWarning'])
 
     const confirm = useConfirm();
     const toast = useToast();
@@ -216,6 +216,17 @@
             }
         }
         return false;
+    }
+
+    // The recorded messages, so the banner says what is wrong with this row
+    // rather than only that something is
+    function errorMessages() {
+        if (!props.submission.submission_errors) {
+            return [];
+        }
+
+        return Object.values(props.submission.submission_errors)
+            .filter(m => typeof m === 'string' && m.trim() !== '');
     }
 
     const JOB_STATUS_PROCESSING = 2;
@@ -1103,11 +1114,22 @@ console.log(props.submission)
             <!-- header -->
             <div v-if="hasAnyErrors()" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">This submission has errors</p>
-                <p>
+                <ul v-if="errorMessages().length > 0" class="list-disc list-inside mt-1">
+                    <li v-for="(message, index) in errorMessages()" :key="index">{{ message }}</li>
+                </ul>
+                <p class="mt-1">
                     Fields with errors are highlighted below in red.  Click on the field edit button to correct.
                     For a submission to be published to GenCC, all errors must be resolved.
                     Once all errors have been cleared, the system will automatically stage the submission for publishing.
                 </p>
+            </div>
+            <!-- Obsolete disease term warning banner - informational, never blocking -->
+            <div v-if="deprecatedDiseaseWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
+                <p class="font-bold flex items-center gap-2">
+                    <i class="pi pi-info-circle"></i>
+                    Obsolete Disease Term
+                </p>
+                <p class="mt-1">{{ deprecatedDiseaseWarning.message }}</p>
             </div>
             <!-- Unpublished duplicate warning banner -->
             <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
