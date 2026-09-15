@@ -196,10 +196,13 @@ const submissionIssues = computed(() => {
         }
     }
 
-    // Blocking errors first
-    return [...groups.values()]
-        .map(group => ({ ...group, messages: [...group.messages].map(([message, ids]) => ({ message, ids })) }))
-        .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1));
+    const all = [...groups.values()]
+        .map(group => ({ ...group, messages: [...group.messages].map(([message, ids]) => ({ message, ids })) }));
+
+    return [
+        { severity: 'error', title: 'Errors — fix these submissions or remove them before submitting the job', groups: all.filter(g => g.severity === 'error') },
+        { severity: 'warning', title: 'Warnings — informational, will not block submitting the job', groups: all.filter(g => g.severity === 'warning') },
+    ].filter(section => section.groups.length > 0);
 });
 
 // Computed: Check if document has validation errors (NOT partial upload - that's different!)
@@ -216,6 +219,13 @@ const hasPartialUpload = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
     const doc = props.job.documents[0];
     return doc.upload_state === 'upload_partial';
+});
+
+// Computed: the file failed validation, so nothing from it was loaded.  Right after a
+// rejected upload the page is not reloaded, so the job has no document yet.
+const fileRejected = computed(() => {
+    const doc = props.job.documents?.[0];
+    return !doc || doc.upload_state === 'validation_failed';
 });
 
 // Helper to detect file format errors (by flag or by error_type for backwards compatibility)
@@ -971,10 +981,6 @@ const formatDate = (dateString) => {
                 <p class="font-bold">Job has been Completed.</p>
             </div>
 
-            <!-- Error banner (applies to both V2 and legacy) -->
-            <div v-if="hasErrors" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
-                <p class="font-bold">There are submission errors present</p>
-            </div>
             
             <ConfirmDialog group="confirmsub">
                 <template #container="{ message, acceptCallback, rejectCallback }">
@@ -1314,8 +1320,9 @@ const formatDate = (dateString) => {
                 </div>
             </div>
 
-            <!-- Data Row Error Display Card - For row-level validation errors -->
-            <Card v-if="dataRowErrors.length > 0"
+            <!-- File Problems Card: what validation found in a file that was not loaded (errors stopped it;
+                 warnings alone would not have), or what went wrong while loading an accepted file. -->
+            <Card v-if="dataRowErrors.length > 0 || uploadWarnings.length > 0"
                   class="mt-4 border-2 border-red-500"
                   :class="{'collapsed-card': !showErrorCard}"
                   :pt="{
@@ -1330,8 +1337,11 @@ const formatDate = (dateString) => {
                         <div class="flex items-center gap-2">
                             <i class="pi pi-exclamation-triangle text-2xl"></i>
                             <div class="flex flex-col">
-                                <span>{{ dataRowErrors.length }} Data Validation Error(s){{ uploadedFilename ? ` - ${uploadedFilename}` : '' }}</span>
-                                <span v-if="MAX_VALIDATION_RESULTS > 0 && dataRowErrors.length === MAX_VALIDATION_RESULTS" class="text-sm font-semibold">Maximum errors reached</span>
+                                <template v-if="fileRejected">
+                                    <span>{{ uploadedFilename || 'Uploaded file' }} — not loaded</span>
+                                    <span class="text-sm font-normal">Fix the errors below and upload the file again. Nothing from this file has been added to the job.</span>
+                                </template>
+                                <span v-else>{{ uploadedFilename || 'Uploaded file' }} — problems while loading</span>
                             </div>
                         </div>
                         <div class="flex gap-2">
@@ -1352,6 +1362,11 @@ const formatDate = (dateString) => {
                 </template>
                 <template #content>
                     <div v-show="showErrorCard" class="error-content">
+                        <template v-if="dataRowErrors.length > 0">
+                        <div class="font-semibold text-red-700 mb-2">
+                            {{ fileRejected ? 'Errors — stop the file from loading' : 'Errors' }} ({{ dataRowErrors.length }})
+                            <span v-if="MAX_VALIDATION_RESULTS > 0 && dataRowErrors.length === MAX_VALIDATION_RESULTS" class="text-sm">· maximum errors reached</span>
+                        </div>
                         <div class="mb-4 p-3 bg-yellow-100 border-l-4 border-yellow-500 rounded-lg">
                             <p class="text-sm text-yellow-700">
                                 <i class="pi pi-info-circle mr-2"></i>
@@ -1435,64 +1450,67 @@ const formatDate = (dateString) => {
                                 </div>
                             </template>
                         </DataTable>
+                        </template>
+
+                        <!-- Warnings, whatever their type; each says what it would mean once the rows exist -->
+                        <div v-if="uploadWarnings.length > 0" :class="{ 'mt-6': dataRowErrors.length > 0 }">
+                            <div class="font-semibold text-orange-700 mb-2">
+                                Warnings — would not stop the file from loading ({{ uploadWarnings.length }})
+                            </div>
+                            <div class="max-h-80 overflow-y-auto bg-orange-50 border-l-4 border-orange-400 rounded px-3">
+                                <div v-for="(warning, index) in uploadWarnings" :key="index" class="text-sm text-orange-700 py-2 border-b border-orange-200 last:border-b-0">
+                                    <span v-if="warning.rows && !warning.details?.length" class="font-mono">Row(s) {{ warning.rows }}:</span> {{ warning.message }}
+                                    <div class="text-xs mt-1" :class="warning.blocks_submission ? 'text-red-700 font-medium' : 'text-gray-600'">
+                                        {{ warning.blocks_submission
+                                            ? 'If loaded, these rows would be created with an error that must be fixed before the job can be submitted.'
+                                            : 'Informational: would not block submitting the job.' }}
+                                    </div>
+                                    <details v-if="warning.details?.length" class="mt-1">
+                                        <summary class="cursor-pointer text-xs">{{ warning.details.length }} distinct value(s)</summary>
+                                        <table class="w-full text-xs mt-1">
+                                            <tbody>
+                                                <tr v-for="(detail, dIdx) in warning.details" :key="dIdx" class="border-b border-orange-100 last:border-b-0">
+                                                    <td class="py-1 pr-4 font-mono">{{ detail.value }}</td>
+                                                    <td class="py-1 font-mono text-gray-500">Row(s) {{ detail.rows }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </details>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </template>
             </Card>
 
-            <!-- Validation Warnings Card: non-blocking findings for a rejected file, whatever their type.
-                 An accepted file's findings are shown from its submissions instead, below. -->
-            <div v-if="uploadWarnings.length > 0" class="mt-2 mb-4">
-                <div class="bg-orange-50 border-l-4 border-orange-400 p-4 rounded">
-                    <div class="flex justify-between items-center text-orange-700">
-                        <div class="flex items-center gap-2">
-                            <i class="pi pi-info-circle text-2xl"></i>
-                            <div class="flex flex-col">
-                                <span class="font-semibold">{{ uploadWarnings.length }} Validation Warning(s)</span>
-                                <span class="text-sm">These do not block the upload.</span>
-                            </div>
-                        </div>
-                        <Button label="Dismiss" icon="pi pi-times" severity="warning" text size="small" @click="uploadWarnings = []" />
-                    </div>
-                    <div class="mt-3 max-h-80 overflow-y-auto">
-                        <div v-for="(warning, index) in uploadWarnings" :key="index" class="text-sm text-orange-600 py-1 border-b border-orange-200 last:border-b-0">
-                            <span v-if="warning.rows && !warning.details?.length" class="font-mono">Row(s) {{ warning.rows }}:</span> {{ warning.message }}
-                            <details v-if="warning.details?.length" class="mt-1">
-                                <summary class="cursor-pointer text-xs">{{ warning.details.length }} distinct value(s)</summary>
-                                <table class="w-full text-xs mt-1">
-                                    <tbody>
-                                        <tr v-for="(detail, dIdx) in warning.details" :key="dIdx" class="border-b border-orange-100 last:border-b-0">
-                                            <td class="py-1 pr-4 font-mono">{{ detail.value }}</td>
-                                            <td class="py-1 font-mono text-gray-500">Row(s) {{ detail.rows }}</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </details>
-                        </div>
+            <!-- Submission Issues Summary: derived from the submissions, so it is current after any reload or fix -->
+            <div v-if="submissionIssues.length > 0" class="mt-2 mb-4 bg-amber-50 border-l-4 border-amber-600 p-4 rounded">
+                <div class="font-semibold text-amber-800 mb-2">Submissions needing attention</div>
+                <div v-for="section in submissionIssues" :key="section.severity" class="mb-3 last:mb-0">
+                    <div class="text-sm font-semibold" :class="section.severity === 'error' ? 'text-red-700' : 'text-orange-700'">{{ section.title }}</div>
+                    <div v-if="section.severity === 'error' && job.status === 'draft'" class="text-xs text-amber-700">Use the "Show Errors" filter below to list them.</div>
+                    <div v-for="group in section.groups" :key="group.key" class="text-sm py-1 border-b border-amber-200 last:border-b-0">
+                        <details>
+                            <summary class="cursor-pointer">
+                                <span class="font-medium">{{ group.label }}</span>
+                                <span class="text-gray-600"> — {{ group.count }} submission(s)</span>
+                            </summary>
+                            <table class="w-full text-xs mt-1 ml-6">
+                                <tbody>
+                                    <tr v-for="(item, idx) in group.messages" :key="idx" class="border-b border-amber-100 last:border-b-0 align-top">
+                                        <td class="py-1 pr-4">{{ item.message }}</td>
+                                        <td class="py-1 font-mono text-gray-500">{{ item.ids.join(', ') }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </details>
                     </div>
                 </div>
             </div>
 
-            <!-- Submission Issues Summary: derived from the submissions, so it is current after any reload or fix -->
-            <div v-if="submissionIssues.length > 0" class="mt-2 mb-4 bg-amber-50 border-l-4 border-amber-600 p-4 rounded">
-                <div class="font-semibold text-amber-800">Issues on this job's submissions</div>
-                <div v-if="job.status === 'draft'" class="text-sm text-amber-700 mb-2">Errors must be fixed before the job can be submitted. Use the "Show Errors" filter below to list those submissions.</div>
-                <div v-for="group in submissionIssues" :key="group.key" class="text-sm py-1 border-b border-amber-200 last:border-b-0">
-                    <details>
-                        <summary class="cursor-pointer">
-                            <Tag :severity="group.severity === 'error' ? 'danger' : 'warning'" :value="group.severity" class="mr-2" />
-                            <span class="font-medium">{{ group.label }}</span>
-                            <span class="text-gray-600"> — {{ group.count }} submission(s)</span>
-                        </summary>
-                        <table class="w-full text-xs mt-1 ml-6">
-                            <tbody>
-                                <tr v-for="(item, idx) in group.messages" :key="idx" class="border-b border-amber-100 last:border-b-0 align-top">
-                                    <td class="py-1 pr-4">{{ item.message }}</td>
-                                    <td class="py-1 font-mono text-gray-500">{{ item.ids.join(', ') }}</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </details>
-                </div>
+            <!-- The listing below is empty because the file was rejected, not because the job is empty -->
+            <div v-if="fileRejected && hasValidationErrors && submissions.length === 0" class="mt-2 text-sm text-gray-600">
+                No submissions: the uploaded file was not loaded.
             </div>
 
             <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />

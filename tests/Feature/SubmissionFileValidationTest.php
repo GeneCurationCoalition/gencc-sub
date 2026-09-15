@@ -524,6 +524,9 @@ class SubmissionFileValidationTest extends TestCase
         $this->assertEquals('disease_id', $warnings[0]['column']);
         $this->assertEquals('13', $warnings[0]['rows']);
         $this->assertEquals('Orphanet:723146', $warnings[0]['details'][0]['value']);
+
+        // The rows would become record errors, which block submitting the job
+        $this->assertTrue($warnings[0]['blocks_submission'] ?? false);
     }
 
     /**

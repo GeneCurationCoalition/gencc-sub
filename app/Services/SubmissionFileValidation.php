@@ -105,7 +105,10 @@ class SubmissionFileValidation
                 // can fix it in place through the disease dialog.  Reported here
                 // too, grouped by value, so it is not a surprise after upload.
                 'severity' => self::SEVERITY_WARNING,
-                'message' => 'No exact MONDO equivalent for submitted disease id; these rows will be imported with an error to resolve',
+                // ...but each such row becomes a record error, which does block
+                // submitting the job
+                'blocks_submission' => true,
+                'message' => 'No exact MONDO equivalent for submitted disease id',
             ],
         ],
         'disease_name' => [
@@ -407,6 +410,11 @@ class SubmissionFileValidation
                 // Preserve custom group message from validator_with_argument
                 if (!empty($error['group_message'])) {
                     $grouped[$key]['_group_message'] = $error['group_message'];
+                }
+
+                // Preserve whether the affected rows would block submitting the job
+                if (!empty($error['blocks_submission'])) {
+                    $grouped[$key]['blocks_submission'] = true;
                 }
 
                 // Preserve file format error fields
@@ -956,6 +964,9 @@ class SubmissionFileValidation
                     ];
                     if ($custom_message) {
                         $error['group_message'] = $custom_message;
+                    }
+                    if (!empty(self::$COLUMN_MAP[$column_name]['validator_with_argument']['blocks_submission'])) {
+                        $error['blocks_submission'] = true;
                     }
                     $validation_results[] = $error;
                     // No need to set flag here as this is the last check

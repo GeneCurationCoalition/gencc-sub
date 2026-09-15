@@ -545,6 +545,11 @@ class DocumentController extends Controller
                     $formatted['details'] = $result['details'];
                 }
 
+                // Preserve whether a warning's rows would block submitting the job
+                if (!empty($result['blocks_submission'])) {
+                    $formatted['blocks_submission'] = true;
+                }
+
                 // Preserve file format error fields for frontend display
                 if (!empty($result['is_file_format_error'])) {
                     $formatted['is_file_format_error'] = true;
