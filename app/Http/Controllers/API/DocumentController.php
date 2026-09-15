@@ -205,9 +205,12 @@ class DocumentController extends Controller
         if ($validationResult['has_errors']) {
             \Log::error('DocumentController@store: Validation failed for document: ' . $document->id);
 
+            // Warnings are kept with the errors so they survive a reload.  A
+            // rejected file never changes, so neither can go stale; the job page
+            // separates them again by severity.
             $document->update([
                 'upload_state' => Document::UPLOAD_STATE_VALIDATION_FAILED,
-                'processing_errors' => $validationResult['errors']
+                'processing_errors' => array_merge($validationResult['errors'], $validationResult['warnings'] ?? [])
             ]);
 
             // Send validation error event
@@ -260,8 +263,8 @@ class DocumentController extends Controller
             'message' => 'File validated successfully. Upload processing in background.',
             'document_id' => $document->id,
             'row_count' => $validationResult['row_count'],
-            // Non-blocking findings validateFile() collected, e.g. disease ids
-            // with no exact MONDO equivalent.  Already returned on the 422 path.
+            // Non-blocking findings validateFile() collected.  The job page
+            // shows these once the rows exist, from what the records carry.
             'warnings' => $validationResult['warnings'] ?? []
         ], 200);
 

@@ -156,6 +156,52 @@ const hasErrors = computed(() => {
     return hasSubmissionErrors || hasFileErrors;
 });
 
+// What each submission_errors key is about, for the issues summary
+const ISSUE_LABELS = {
+    gene_hgnc_id: 'Gene',
+    disease_curie_id: 'Disease',
+    moi_curie_id: 'Mode of Inheritance',
+    classification_curie_id: 'Classification',
+    mechanism_of_disease: 'Mechanism of Disease',
+    report_date: 'Evaluated Date',
+    report_url: 'Public Report',
+    invalid_pmid: 'PMIDs',
+};
+
+// Issues recorded on this job's submissions, grouped by field and then by
+// message.  Derived from the records rather than from an upload response, so it
+// survives a reload and changes as submissions are fixed.
+const submissionIssues = computed(() => {
+    const groups = new Map();
+
+    const add = (key, label, severity, message, submission) => {
+        if (!groups.has(key)) {
+            groups.set(key, { key, label, severity, count: 0, messages: new Map() });
+        }
+        const group = groups.get(key);
+        group.count++;
+        if (!group.messages.has(message)) group.messages.set(message, []);
+        group.messages.get(message).push(submission.display_id || submission.sid);
+    };
+
+    for (const submission of props.submissions || []) {
+        for (const [key, message] of Object.entries(submission.submission_errors || {})) {
+            if (typeof message === 'string' && message.trim() !== '') {
+                add(key, ISSUE_LABELS[key] || key, 'error', message, submission);
+            }
+        }
+        // A submission left with no valid PMIDs already carries invalid_pmid
+        if (submission.pmid_issues?.length && !submission.submission_errors?.invalid_pmid) {
+            add('pmid_issues', 'PMIDs', 'warning', 'Some PMID values were cleaned during normalization', submission);
+        }
+    }
+
+    // Blocking errors first
+    return [...groups.values()]
+        .map(group => ({ ...group, messages: [...group.messages].map(([message, ids]) => ({ message, ids })) }))
+        .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1));
+});
+
 // Computed: Check if document has validation errors (NOT partial upload - that's different!)
 const hasValidationErrors = computed(() => {
     if (!props.job.documents || props.job.documents.length === 0) return false;
@@ -612,9 +658,6 @@ const uploadFile = async (event) => {
     if (response.data.status_code === 200 || response.data.success === 'true') {
       // Validation passed and background job dispatched
       const rowCount = response.data.row_count || 0;
-
-      // Non-blocking findings; the reloads below preserve component state
-      uploadWarnings.value = response.data.warnings || [];
 
       console.log('[Upload] Validation passed - starting background processing for', rowCount, 'rows');
 
@@ -1396,7 +1439,8 @@ const formatDate = (dateString) => {
                 </template>
             </Card>
 
-            <!-- Validation Warnings Card: any non-blocking finding, whatever its type -->
+            <!-- Validation Warnings Card: non-blocking findings for a rejected file, whatever their type.
+                 An accepted file's findings are shown from its submissions instead, below. -->
             <div v-if="uploadWarnings.length > 0" class="mt-2 mb-4">
                 <div class="bg-orange-50 border-l-4 border-orange-400 p-4 rounded">
                     <div class="flex justify-between items-center text-orange-700">
@@ -1425,6 +1469,29 @@ const formatDate = (dateString) => {
                             </details>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Submission Issues Summary: derived from the submissions, so it is current after any reload or fix -->
+            <div v-if="submissionIssues.length > 0" class="mt-2 mb-4 bg-amber-50 border-l-4 border-amber-600 p-4 rounded">
+                <div class="font-semibold text-amber-800">Issues on this job's submissions</div>
+                <div v-if="job.status === 'draft'" class="text-sm text-amber-700 mb-2">Errors must be fixed before the job can be submitted. Use the "Show Errors" filter below to list those submissions.</div>
+                <div v-for="group in submissionIssues" :key="group.key" class="text-sm py-1 border-b border-amber-200 last:border-b-0">
+                    <details>
+                        <summary class="cursor-pointer">
+                            <Tag :severity="group.severity === 'error' ? 'danger' : 'warning'" :value="group.severity" class="mr-2" />
+                            <span class="font-medium">{{ group.label }}</span>
+                            <span class="text-gray-600"> — {{ group.count }} submission(s)</span>
+                        </summary>
+                        <table class="w-full text-xs mt-1 ml-6">
+                            <tbody>
+                                <tr v-for="(item, idx) in group.messages" :key="idx" class="border-b border-amber-100 last:border-b-0 align-top">
+                                    <td class="py-1 pr-4">{{ item.message }}</td>
+                                    <td class="py-1 font-mono text-gray-500">{{ item.ids.join(', ') }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </details>
                 </div>
             </div>
 

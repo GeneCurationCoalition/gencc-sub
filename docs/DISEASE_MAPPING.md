@@ -218,7 +218,7 @@ The index maps each stored identifier to every MONDO row that lists it, so an am
 
 This is deliberate: whether a disease identifier maps to MONDO is checked per record, after the rows exist, where the submitter can fix it in place, rather than as an upload-blocking check that rejects a whole file over a handful of rows.
 
-Spreadsheet validation still resolves every `disease_id` and still reports what it finds, but as a **warning** — one grouped result for the column, listing each unresolvable value and the rows that used it — so the outcome is visible before the rows are processed rather than only after. The job page renders every warning the upload returns, whatever its type, until it is dismissed or the page is left; warnings are not stored with the document. The `disease_id` format check (`MONDO|OMIM|ORPHA|Orphanet` followed by digits) remains a blocking error.
+Spreadsheet validation still resolves every `disease_id` and still reports what it finds, but as a **warning** — one grouped result for the column, listing each unresolvable value and the rows that used it — so the outcome is visible before the rows are processed rather than only after. What the job page shows depends on the outcome. For a rejected file, the warnings are stored with the errors on the document and shown alongside them, whatever their type. For an accepted file, the job page instead summarises the errors and PMID issues recorded on the job's submissions, grouped by field and message, so the summary survives a reload and stays current as records are fixed. The `disease_id` format check (`MONDO|OMIM|ORPHA|Orphanet` followed by digits) remains a blocking error.
 
 ### Obsolete MONDO targets
 

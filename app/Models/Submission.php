@@ -539,7 +539,7 @@ class Submission extends Model
                               'local_key', 'friendly', 'created_at', 'submitted_at', 'released_at', 'unpublished_at', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
                               // Removed: 'original_submission_data', 'evidence' - too large for listing
-                              'submission_data', 'submission_errors', 'status', 'origin_state')
+                              'submission_data', 'submission_errors', 'pmid_issues', 'status', 'origin_state')
                      ->with('gene:id,hgnc_id,symbol')
                      ->with('disease:id,curie,name,deprecated_name,status')
                      ->with('originalDisease:id,curie,name,deprecated_name,status')
