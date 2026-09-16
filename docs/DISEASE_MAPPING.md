@@ -35,11 +35,11 @@ Two consequences are worth stating explicitly:
 
 `omim_id` and `orpha_id` keep the names they had under the previous importer, when MONDO's `omim_id` also merged in generic xrefs, MONDO's `orpha_id` was a single last-wins value, and Orphanet's `omim_id` was a single reference of any relation. The names were kept so that gencc-search, which reads them for its legacy friendly-URL redirect, needs no change: it matches values with `JSON_CONTAINS`, which works on a single value or an array alike, so it simply starts following only exact mappings once the rows are rewritten.
 
-`DiseaseResolver` trusts whatever is stored under these keys, so the rows the previous importer wrote have to be rewritten when this policy is deployed. A plain `update:diseases` run does not do that for unchanged sources, because it skips any source whose file headers match the previous run. The migration `reimport_diseases_as_exact_only_xrefs` does it. It recognises the previous shape by a key the current importer writes on every row of the type, even when empty, and the previous one never wrote: `replaced_by` on MONDO rows, `mondo_id` on Orphanet rows. When MONDO or Orphanet rows exist and none of them carries that key, it runs `update:diseases --force` inside `migrate`, then fails the migration if that is still true. It is a no-op on an empty table and, like any migration, never runs again once it has succeeded.
+`DiseaseResolver` trusts whatever is stored under these keys, so the rows the previous importer wrote have to be rewritten when this policy is deployed. A plain `update:diseases` run would not do that until upstream next published, because it skips any source whose file headers match the ones it last recorded. The migration `expire_disease_source_file_headers` deletes those recorded headers for MONDO and Orphanet, so the next `update:diseases` run treats both sources as changed and re-imports them. OMIM rows did not change shape, so its headers are kept. The migration touches only that table and needs no network access; like any migration it runs once, so later `update:diseases` runs skip unchanged sources as usual.
 
-Deployments run `migrate` in the `db_bootstrap` role, after the new containers have started, so for the minutes the re-import takes — or until it is rerun, if it fails — resolution still reads the previous importer's values, non-exact ones included.
+The deploy starts the `update:diseases` service once, at the end of the `timers` role, rather than waiting for the nightly timer. It is not waited on: a failed run is logged to the journal and retried by the timer. Until a run succeeds, resolution reads the previous importer's values, non-exact ones included.
 
-A few rows are never rewritten: those whose term has left its source file entirely (see [Phase outcomes and reconciliation](#phase-outcomes-and-reconciliation)). They keep the previous importer's shape, which is why the migration checks whether *any* row carries the key rather than whether all do. Such a row still carries keys like `do_id`, `gard_id` or `umls_id`, which nothing reads any more.
+A few rows are never rewritten: those whose term has left its source file entirely (see [Phase outcomes and reconciliation](#phase-outcomes-and-reconciliation)). They keep the previous importer's shape, including keys like `do_id`, `gard_id` or `umls_id` that nothing reads any more.
 
 ### The dropped `diseases.mondo_id` column
 
@@ -72,7 +72,7 @@ Reconciliation sets a previously active row absent from its current source to `D
 
 Distinguishing "failed" from "skipped" matters: a phase that failed reported nothing as seen, which is indistinguishable from "the source dropped every term it had". Reconciling on that would deprecate an entire namespace — a failed MONDO download combined with a changed Orphanet file used to be enough to deprecate every MONDO row in the table.
 
-`--force` bypasses the header comparison, so every phase re-reads its source. A downloaded MONDO file younger than one hour on disk is reused even when headers changed or `--force` is given. OMIM and Orphanet have no such age rule and are re-downloaded whenever they are re-read.
+A source with no recorded headers is always re-read, so deleting its rows from `static_file_headers` forces the next run to import it. A downloaded MONDO file younger than one hour on disk is reused even when headers changed. OMIM and Orphanet have no such age rule and are re-downloaded whenever they are re-read.
 
 ### Database representation
 

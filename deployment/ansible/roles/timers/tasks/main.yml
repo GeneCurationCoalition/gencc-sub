@@ -117,3 +117,14 @@
     - gencc-sub-release.timer
     - gencc-backup-db.timer
   when: gencc_enable_timers | bool
+
+# Run the disease import once now rather than waiting for the nightly timer.
+# It only re-reads sources whose file headers changed, or that a migration
+# marked for re-import, so on most deploys it finishes quickly.  Not waited on:
+# a failure is logged to the journal and retried by the timer.
+- name: Start the disease update once
+  ansible.builtin.systemd:
+    name: gencc-sub-update-diseases.service
+    state: started
+    no_block: true
+  when: gencc_enable_timers | bool

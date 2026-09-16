@@ -52,8 +52,7 @@ class UpdateDiseases extends Command
      *
      * @var string
      */
-    protected $signature = 'update:diseases
-        {--force : Re-read every source even when its file headers are unchanged}';
+    protected $signature = 'update:diseases';
 
     /**
      * The console command description.
@@ -229,7 +228,7 @@ class UpdateDiseases extends Command
         $cacheFilename = "mondo-with-equivalents.json";
 
         // Check if file needs updating
-        if (!$this->option('force') && !$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
+        if (!$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
             $this->info('...MONDO update skipped (file unchanged)');
 
             // Still need the existing identifiers so reconciliation does not
@@ -513,7 +512,7 @@ class UpdateDiseases extends Command
         $cacheFilename = "mimTitles.txt";
 
         // Check if file needs updating
-        if (!$this->option('force') && !$this->shouldUpdateFile($fileIdentifier, $url)) {
+        if (!$this->shouldUpdateFile($fileIdentifier, $url)) {
             $this->info('...OMIM update skipped (file unchanged)');
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'omim', 'Skipped - file unchanged');
 
@@ -687,7 +686,7 @@ class UpdateDiseases extends Command
         $cacheFilename = 'en_product1.xml';
 
         // Check if file needs updating
-        if (!$this->option('force') && !$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
+        if (!$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
             $this->info('...Orphanet update skipped (file unchanged)');
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'orphanet', 'Skipped - file unchanged');
 
