@@ -18,33 +18,32 @@ The rules are enforced by what is stored, not by checks at the point of use. The
 
 | Row type | `xrefs` contents |
 | --- | --- |
-| MONDO | `exact_omim`: `skos:exactMatch` OMIM ids · `exact_orphanet`: `skos:exactMatch` Orphanet codes · `replaced_by`: successor CURIE when the term is obsolete |
-| Orphanet | `exact_mondo`: exact + validated MONDO CURIEs from Orphadata · `exact_omim`: exact + validated OMIM ids from Orphadata |
+| MONDO | `omim_id`: `skos:exactMatch` OMIM ids · `orpha_id`: `skos:exactMatch` Orphanet codes · `replaced_by`: successor CURIE when the term is obsolete |
+| Orphanet | `mondo_id`: exact + validated MONDO CURIEs from Orphadata · `omim_id`: exact + validated OMIM ids from Orphadata |
 | OMIM | `include_titles` only — the OMIM source asserts nothing about any other ontology |
 
-Every equivalence key is an array, and is named for the *relation* rather than the target ontology alone: presence under an `exact_*` key **is** the assertion that the two terms are the same concept.
+Every equivalence key is an array, even when empty, and presence under one **is** the assertion that the two terms are the same concept.
 
-Values are bare identifiers, because the key already names the namespace — `exact_omim` holds `152700`, `exact_orphanet` holds `536`. `exact_mondo` is the one exception and holds a full CURIE: a MONDO identifier is zero-padded to 7 digits, the padding is part of its canonical form, and Orphadata writes a fifth of its references unpadded, so storing the CURIE keeps that normalization visible in the data.
+Values are bare identifiers, because the key already names the namespace — `omim_id` holds `152700`, `orpha_id` holds `536`. An Orphanet row's `mondo_id` is the one exception and holds full CURIEs: a MONDO identifier is zero-padded to 7 digits, the padding is part of its canonical form, and Orphadata writes a fifth of its references unpadded, so storing the CURIE keeps that normalization visible in the data.
 
-Three consequences are worth stating explicitly:
+Two consequences are worth stating explicitly:
 
 - Rule 2 needs no implementation. The only OMIM↔MONDO data anywhere is MONDO's own exact-match list, so an OMIM identifier can only ever resolve through a MONDO term that names it.
 - No provenance column or relation qualifier is needed. A stored cross-reference means "this ontology asserts this identifier is the same concept", and nothing else is stored.
-- The key names changed, not just their shape. The previous `omim_id` / `orpha_id` / `mondo_id` keys held a mixture of exact and non-exact identifiers, so reusing them would have meant a row not yet re-imported was silently read as asserting exactness. With new names, a stale row yields *no* mapping rather than a wrong one.
 
-The last point has an operational consequence: until every source has been re-read, no row carries the `exact_*` keys, so every OMIM and Orphanet identifier fails to resolve and only MONDO identifiers work. That is the intended direction of failure — loud and fixable per record — rather than the alternative of silently accepting mappings the policy forbids. A plain `update:diseases` run does not end it, because it skips any source whose file headers are unchanged. The migration `reimport_diseases_as_exact_only_xrefs` does: when MONDO or Orphanet rows exist but none carries the new keys, it runs `update:diseases --force` inside `migrate`, then fails the migration if the rows are still in the old shape. It is a no-op on an empty table and, like any migration, never runs again once it has succeeded.
+### Rows written before this policy
 
-### Reading a row written before this policy
+`omim_id` and `orpha_id` keep the names they had under the previous importer, when MONDO's `omim_id` also merged in generic xrefs, MONDO's `orpha_id` was a single last-wins value, and Orphanet's `omim_id` was a single reference of any relation. The names were kept so that gencc-search, which reads them for its legacy friendly-URL redirect, needs no change: it matches values with `JSON_CONTAINS`, which works on a single value or an array alike, so it simply starts following only exact mappings once the rows are rewritten.
 
-`xrefs` still has its old name, and still carries a per-source payload that is not a cross-ontology equivalence (`include_titles` on OMIM rows, `replaced_by` on MONDO rows), so the column itself is not "the exact matches". The equivalences are the `exact_*` keys, and only those. A row carrying `omim_id`, `orpha_id`, `mondo_id`, `do_id`, `gard_id`, `umls_id`, `mesh`, `ncit`, `ogms`, `medgen_id`, `omim_label` or `orpha_label` predates the policy and has not been re-imported; nothing reads those keys any more.
+`DiseaseResolver` trusts whatever is stored under these keys, so the rows the previous importer wrote have to be rewritten when this policy is deployed. A plain `update:diseases` run does not do that for unchanged sources, because it skips any source whose file headers match the previous run. The migration `reimport_diseases_as_exact_only_xrefs` does it. It recognises the previous shape by a key the current importer writes on every row of the type, even when empty, and the previous one never wrote: `replaced_by` on MONDO rows, `mondo_id` on Orphanet rows. When MONDO or Orphanet rows exist and none of them carries that key, it runs `update:diseases --force` inside `migrate`, then fails the migration if that is still true. It is a no-op on an empty table and, like any migration, never runs again once it has succeeded.
 
-### The retired `mondo_id` column
+Deployments run `migrate` in the `db_bootstrap` role, after the new containers have started, so for the minutes the re-import takes — or until it is rerun, if it fails — resolution still reads the previous importer's values, non-exact ones included.
 
-`diseases.mondo_id` was a foreign key from an OMIM or Orphanet row to a MONDO row. It recorded the inverse of a MONDO assertion on the asserting row's counterpart, which this model forbids, and two post-processing passes filled it in by joining Orphanet and OMIM references that neither ontology relates.
+A few rows are never rewritten: those whose term has left its source file entirely (see [Phase outcomes and reconciliation](#phase-outcomes-and-reconciliation)). They keep the previous importer's shape, which is why the migration checks whether *any* row carries the key rather than whether all do. Such a row still carries keys like `do_id`, `gard_id` or `umls_id`, which nothing reads any more.
 
-The importer no longer writes it and the resolver no longer reads it. The column still exists and retains its pre-policy values, which nothing consults; it is left in place rather than nulled so that reverting the application code restores the previous behaviour intact. Dropping it is a separate migration, blocked on removing the matching declarations in `gencc-search` (`app/Disease.php`'s `$fillable`, `mondoDisease()` and `equivalentDiseases()`, none of which have call sites).
+### The dropped `diseases.mondo_id` column
 
-`Disease::mondoDisease()` and `Disease::equivalentDiseases()` remain on the model, marked deprecated, for the same reason.
+`diseases.mondo_id` was a foreign key from an OMIM or Orphanet row to a MONDO row. It recorded the inverse of a MONDO assertion on the asserting row's counterpart, which this model forbids, and two post-processing passes filled it in by joining Orphanet and OMIM references that neither ontology relates. Nothing writes or reads it under this policy, and the migration `drop_mondo_id_from_diseases_table` removes it, with its index and foreign key. It is unrelated to the `mondo_id` key inside an Orphanet row's `xrefs`.
 
 ## Interpreting and storing the upstream data
 
@@ -97,8 +96,8 @@ Only `meta.basicPropertyValues` is read, and only three predicates from it:
 
 | Predicate | Stored as |
 | --- | --- |
-| `skos:exactMatch` with a value under `omim.org/entry/` | an entry in `xrefs.exact_omim` |
-| `skos:exactMatch` with a value naming an Orphanet code | an entry in `xrefs.exact_orphanet` |
+| `skos:exactMatch` with a value under `omim.org/entry/` | an entry in `xrefs.omim_id` |
+| `skos:exactMatch` with a value naming an Orphanet code | an entry in `xrefs.orpha_id` |
 | `IAO_0100001` (term replaced by) | `xrefs.replaced_by`, as a MONDO CURIE |
 
 The generic `meta.xrefs` list is **not** read. It carries no per-entry relation annotation in the OBO Graphs JSON, so nothing in it can be known to be exact, and under rule 1 an unannotated cross-reference is not a mapping. A few hundred OMIM and Orphanet identifiers appear only there and no longer map to anything.
@@ -136,15 +135,15 @@ The same file is Orphadata's cross-referencing product. Each external reference 
 
 | Orphadata source | Stored on the Orphanet row |
 | --- | --- |
-| MONDO, exact + validated | an entry in `xrefs.exact_mondo` |
-| OMIM, exact + validated | an entry in `xrefs.exact_omim` |
+| MONDO, exact + validated | an entry in `xrefs.mondo_id` |
+| OMIM, exact + validated | an entry in `xrefs.omim_id` |
 | everything else | dropped |
 
 More than half of Orphadata's OMIM references are broader (`BTNT`), narrower (`NTBT`) or undecided (`ND`): 3,781 of 8,745 are exact and validated. UMLS, GARD, ICD-10, ICD-11, MeSH and MedDRA references are dropped entirely; the portal accepts none of those namespaces as input.
 
 Orphadata writes MONDO references as bare digits, and 2,045 of 9,979 are unpadded (`44`, `7800`, `18887`). They are left-padded to the 7 digits a MONDO CURIE uses, after which all of them name a real MONDO node.
 
-Both fields are arrays, and an empty result is still an object (`{"exact_mondo":[],"exact_omim":[]}`), so a row with no references reads back with the same shape as one that has them.
+Both fields are arrays, and an empty result is still an object (`{"mondo_id":[],"omim_id":[]}`), so a row with no references reads back with the same shape as one that has them.
 
 ## Resolving an identifier
 
@@ -205,7 +204,7 @@ The index maps each stored identifier to every MONDO row that lists it, so an am
 | Input namespace | Standalone row loaded? | Resolves through | Typical result |
 | --- | --- | --- | --- |
 | `MONDO` | Yes | Exact `curie` lookup | `original = MONDO`, `mondo` = the same row |
-| `OMIM` | Yes | MONDO `xrefs.exact_omim` | `original = OMIM`, `mondo = MONDO`; `original` is null when no OMIM row exists for the id |
+| `OMIM` | Yes | MONDO `xrefs.omim_id` | `original = OMIM`, `mondo = MONDO`; `original` is null when no OMIM row exists for the id |
 | `OMIMPS` | No | Same path as OMIM | Does not succeed in current data |
 | `ORPHA` / `Orphanet` | Yes | The three steps above | `original = Orphanet`, `mondo = MONDO`, or no resolution |
 | anything else | No | — | Does not resolve |

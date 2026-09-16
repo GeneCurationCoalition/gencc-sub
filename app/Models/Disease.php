@@ -50,7 +50,7 @@ class Disease extends Model
      *
      * @var array
      */
-	protected $fillable = [	'ident', 'type', 'mondo_id',
+	protected $fillable = [	'ident', 'type',
                             'curie', 'name', 'deprecated_name', 'description', 'synonyms', 'events',
                             'scores', 'xrefs', 'counts', 'activity', 'notes',
                             'status' ];
@@ -67,7 +67,7 @@ class Disease extends Model
      *
      * @var array
      */
-    protected $visible = ['id', 'mondo_id', 'ident', 'type', 'curie', 'name', 'deprecated_name', 'description', 'synonyms', 'xrefs', 'scores', 'counts', 'activity', 'events', 'notes', 'status', 'created_at', 'updated_at', 'deleted_at'];
+    protected $visible = ['id', 'ident', 'type', 'curie', 'name', 'deprecated_name', 'description', 'synonyms', 'xrefs', 'scores', 'counts', 'activity', 'events', 'notes', 'status', 'created_at', 'updated_at', 'deleted_at'];
 
     /**
      * Enumerted constants for status
@@ -122,33 +122,6 @@ class Disease extends Model
     public function submissions()
     {
        return $this->hasMany('App\Models\Submission');
-    }
-
-
-    /**
-     * Get the canonical MONDO disease for this disease
-     * (null for MONDO diseases themselves)
-     *
-     * @deprecated `mondo_id` is no longer maintained.  It recorded the inverse of
-     * a MONDO assertion on the OMIM/Orphanet row, which exact-only storage
-     * forbids, and resolution now reads the asserting row's own xrefs instead.
-     * Existing values are pre-policy leftovers; the column is scheduled to be
-     * dropped once gencc-search stops declaring it.  See docs/DISEASE_MAPPING.md.
-     */
-    public function mondoDisease()
-    {
-        return $this->belongsTo('App\Models\Disease', 'mondo_id');
-    }
-
-
-    /**
-     * Get all OMIM/Orphanet diseases that map to this MONDO disease
-     *
-     * @deprecated See mondoDisease().
-     */
-    public function equivalentDiseases()
-    {
-        return $this->hasMany('App\Models\Disease', 'mondo_id');
     }
 
 

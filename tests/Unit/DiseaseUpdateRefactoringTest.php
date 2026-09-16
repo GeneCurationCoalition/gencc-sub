@@ -27,22 +27,6 @@ class DiseaseUpdateRefactoringTest extends TestCase
     use SeedsDiseaseWorld;
 
     /**
-     * Test that MONDO diseases have null mondo_id
-     */
-    public function test_mondo_diseases_have_null_mondo_id()
-    {
-        $mondoDisease = Disease::factory()->create([
-            'type' => Disease::TYPE_MONDO,
-            'curie' => 'MONDO:0000001',
-            'mondo_id' => null,
-            'status' => Disease::STATUS_ACTIVE,
-        ]);
-
-        $this->assertNull($mondoDisease->mondo_id);
-        $this->assertEquals(Disease::TYPE_MONDO, $mondoDisease->type);
-    }
-
-    /**
      * A MONDO row records the OMIM and Orphanet identifiers it exact-matches,
      * both as arrays.  Orphanet used to be a last-wins scalar, which could keep
      * only one of the 43 terms' several exact matches.
@@ -53,8 +37,8 @@ class DiseaseUpdateRefactoringTest extends TestCase
 
         $mondo = Disease::curie('MONDO:0000002')->first();
 
-        $this->assertSame(['600001', '600004'], (array) $mondo->xrefs->exact_omim);
-        $this->assertSame(['700001', '700002', '700500'], (array) $mondo->xrefs->exact_orphanet);
+        $this->assertSame(['600001', '600004'], (array) $mondo->xrefs->omim_id);
+        $this->assertSame(['700001', '700002', '700500'], (array) $mondo->xrefs->orpha_id);
     }
 
     /**
@@ -67,8 +51,8 @@ class DiseaseUpdateRefactoringTest extends TestCase
 
         $orphanet = Disease::curie('Orphanet:700300')->first();
 
-        $this->assertSame(['MONDO:0000003'], (array) $orphanet->xrefs->exact_mondo);
-        $this->assertSame([], (array) $orphanet->xrefs->exact_omim);
+        $this->assertSame(['MONDO:0000003'], (array) $orphanet->xrefs->mondo_id);
+        $this->assertSame([], (array) $orphanet->xrefs->omim_id);
     }
 
     /**

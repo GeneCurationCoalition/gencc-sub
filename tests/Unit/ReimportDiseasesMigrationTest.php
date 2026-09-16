@@ -32,11 +32,12 @@ class ReimportDiseasesMigrationTest extends TestCase
     /** @test */
     public function rows_already_in_the_exact_only_shape_need_no_import(): void
     {
-        Disease::factory()->mondo()->withXrefs(['exact_omim' => [], 'exact_orphanet' => [], 'replaced_by' => null])->create();
-        Disease::factory()->orphanet()->withXrefs(['exact_mondo' => [], 'exact_omim' => []])->create();
+        // The marker keys count even when their value is empty
+        Disease::factory()->mondo()->withXrefs(['omim_id' => [], 'orpha_id' => [], 'replaced_by' => null])->create();
+        Disease::factory()->orphanet()->withXrefs(['mondo_id' => [], 'omim_id' => []])->create();
 
-        // A MONDO term absent from later releases keeps its old keys forever
-        Disease::factory()->mondo()->deprecated()->withXrefs(['omim_id' => [], 'orpha_id' => null])->create();
+        // A MONDO term absent from later releases keeps its old shape forever
+        Disease::factory()->mondo()->deprecated()->withXrefs(['do_id' => null, 'omim_id' => [], 'orpha_id' => null])->create();
 
         Artisan::shouldReceive('call')->never();
 
@@ -46,13 +47,14 @@ class ReimportDiseasesMigrationTest extends TestCase
     /** @test */
     public function pre_policy_rows_force_an_import(): void
     {
-        Disease::factory()->mondo()->withXrefs(['omim_id' => ['600001'], 'orpha_id' => '700001'])->create();
+        // Same key names as the current shape, but no marker
+        Disease::factory()->mondo()->withXrefs(['do_id' => null, 'omim_id' => ['600001'], 'orpha_id' => '700001'])->create();
 
         Artisan::shouldReceive('call')
             ->once()
             ->withArgs(fn ($command, $parameters) => $command === 'update:diseases' && $parameters === ['--force' => true])
             ->andReturnUsing(function () {
-                DB::table('diseases')->update(['xrefs' => json_encode(['exact_omim' => ['600001'], 'exact_orphanet' => ['700001']])]);
+                DB::table('diseases')->update(['xrefs' => json_encode(['omim_id' => ['600001'], 'orpha_id' => ['700001'], 'replaced_by' => null])]);
 
                 return 0;
             });
@@ -63,7 +65,7 @@ class ReimportDiseasesMigrationTest extends TestCase
     /** @test */
     public function an_import_that_leaves_pre_policy_rows_fails_the_migration(): void
     {
-        Disease::factory()->orphanet()->withXrefs(['omim_id' => [], 'mondo_id' => null])->create();
+        Disease::factory()->orphanet()->withXrefs(['omim_id' => '203450', 'umls_id' => 'C0270726'])->create();
 
         Artisan::shouldReceive('call')->once()->andReturn(0);
 

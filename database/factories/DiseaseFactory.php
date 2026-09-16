@@ -24,7 +24,6 @@ class DiseaseFactory extends Factory
             'curie' => 'MONDO:' . str_pad($this->faker->unique()->numberBetween(1, 9999999), 7, '0', STR_PAD_LEFT),
             'name' => $this->faker->words(3, true) . ' disease',
             'description' => $this->faker->sentence(),
-            'mondo_id' => null, // MONDO diseases have null mondo_id
             'status' => Disease::STATUS_ACTIVE,
             'xrefs' => [], // Empty JSON array (required by migration)
             'synonyms' => null, // nullable
@@ -44,7 +43,6 @@ class DiseaseFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'type' => Disease::TYPE_MONDO,
             'curie' => 'MONDO:' . str_pad($this->faker->unique()->numberBetween(1, 9999999), 7, '0', STR_PAD_LEFT),
-            'mondo_id' => null,
         ]);
     }
 
@@ -56,7 +54,6 @@ class DiseaseFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'type' => Disease::TYPE_OMIM,
             'curie' => 'OMIM:' . $this->faker->unique()->numberBetween(100000, 999999),
-            'mondo_id' => null, // Can be set manually after creating MONDO disease
         ]);
     }
 
@@ -68,7 +65,6 @@ class DiseaseFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'type' => Disease::TYPE_ORPHANET,
             'curie' => 'Orphanet:' . $this->faker->unique()->numberBetween(1, 999999),
-            'mondo_id' => null, // Can be set manually after creating MONDO disease
         ]);
     }
 

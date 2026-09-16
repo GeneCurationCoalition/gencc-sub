@@ -57,8 +57,8 @@ class DiseasePolicyPortalTest extends TestCase
         ]);
 
         $obsolete = Disease::factory()->mondo()->deprecated()->withXrefs([
-            'exact_omim' => [],
-            'exact_orphanet' => [],
+            'omim_id' => [],
+            'orpha_id' => [],
             'replaced_by' => 'MONDO:0009299',
         ])->create(['curie' => 'MONDO:0000002', 'name' => 'Obsolete term']);
 

@@ -312,12 +312,8 @@ class DiseaseResolver
      * The identifiers recorded under one equivalence field.
      *
      * Every field this reads is written as an array — bare identifiers, except
-     * `exact_mondo`, which holds CURIEs.  A row written before the exact-only
-     * rename carries none of these keys at all and so yields nothing —
-     * deliberately, because its pre-policy `omim_id` / `orpha_id` / `mondo_id`
-     * values include non-exact identifiers that must not be read as
-     * equivalences.  The scalar and non-object cases are tolerated only so that
-     * malformed or hand-seeded data cannot raise.
+     * an Orphanet row's `mondo_id`, which holds CURIEs.  The scalar case is
+     * tolerated only so that malformed or hand-seeded data cannot raise.
      *
      * @param  mixed  $xrefs  A decoded xrefs column, as an object or model cast
      * @return string[]

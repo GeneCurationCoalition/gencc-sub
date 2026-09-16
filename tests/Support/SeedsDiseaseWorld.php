@@ -11,11 +11,13 @@ use App\Models\Disease;
  * match fresh ones.
  *
  * Storage here mirrors what UpdateDiseases writes: a row's xrefs record only
- * what that row's own ontology asserts, exactly, under `exact_*` keys holding
- * arrays of bare identifiers — except `exact_mondo`, which holds CURIEs, since a
- * MONDO identifier is zero-padded.  A MONDO row lists the OMIM and Orphanet
- * terms it skos:exactMatch-es; an Orphanet row lists the MONDO and OMIM terms
- * Orphadata marks exact and validated; an OMIM row asserts nothing.
+ * what that row's own ontology asserts, exactly, in arrays of bare identifiers —
+ * except an Orphanet row's `mondo_id`, which holds CURIEs, since a MONDO
+ * identifier is zero-padded.  A MONDO row lists the OMIM (`omim_id`) and
+ * Orphanet (`orpha_id`) terms it skos:exactMatch-es and always carries
+ * `replaced_by`; an Orphanet row lists the MONDO (`mondo_id`) and OMIM
+ * (`omim_id`) terms Orphadata marks exact and validated; an OMIM row asserts
+ * nothing.
  */
 trait SeedsDiseaseWorld
 {
@@ -33,15 +35,17 @@ trait SeedsDiseaseWorld
         // Created first so it takes the lower id and, without the deleted_at
         // filter, would win the index build or make it ambiguous.
         $w['mondo_trashed'] = Disease::factory()->mondo()->withXrefs([
-            'exact_omim' => ['600001'],
-            'exact_orphanet' => ['700001'],
+            'omim_id' => ['600001'],
+            'orpha_id' => ['700001'],
+            'replaced_by' => null,
         ])->create(['curie' => 'MONDO:0000006']);
         $w['mondo_trashed']->delete();
 
         // Step 1 target: the terms MONDO itself exact-matches
         $w['mondo_exact'] = Disease::factory()->mondo()->withXrefs([
-            'exact_omim' => ['600001', '600004'],
-            'exact_orphanet' => ['700001', '700002', '700500'],
+            'omim_id' => ['600001', '600004'],
+            'orpha_id' => ['700001', '700002', '700500'],
+            'replaced_by' => null,
         ])->create(['curie' => 'MONDO:0000002']);
 
         // Step 2 target: reachable only through an Orphanet row's own assertion
@@ -50,13 +54,15 @@ trait SeedsDiseaseWorld
         // Step 3 target: reachable only by chaining an Orphanet row's OMIM
         // reference through MONDO's exact match to that OMIM id
         $w['mondo_bridge'] = Disease::factory()->mondo()->withXrefs([
-            'exact_omim' => ['600700'],
+            'omim_id' => ['600700'],
+            'orpha_id' => [],
+            'replaced_by' => null,
         ])->create(['curie' => 'MONDO:0000007']);
 
         // An obsolete MONDO term is still a valid target, and names its successor
         $w['mondo_deprecated'] = Disease::factory()->mondo()->deprecated()->withXrefs([
-            'exact_omim' => ['600044'],
-            'exact_orphanet' => ['700044'],
+            'omim_id' => ['600044'],
+            'orpha_id' => ['700044'],
             'replaced_by' => 'MONDO:0000002',
         ])->create(['curie' => 'MONDO:0000004']);
 
@@ -65,17 +71,21 @@ trait SeedsDiseaseWorld
         // Two live terms claiming the same Orphanet code: no choice between them
         // is defensible, so resolution fails closed
         $w['mondo_rival_a'] = Disease::factory()->mondo()->withXrefs([
-            'exact_orphanet' => ['700888'],
+            'omim_id' => [],
+            'orpha_id' => ['700888'],
+            'replaced_by' => null,
         ])->create(['curie' => 'MONDO:0000008']);
         $w['mondo_rival_b'] = Disease::factory()->mondo()->withXrefs([
-            'exact_orphanet' => ['700888'],
+            'omim_id' => [],
+            'orpha_id' => ['700888'],
+            'replaced_by' => null,
         ])->create(['curie' => 'MONDO:0000009']);
 
         // OMIM asserts nothing, so an OMIM row exists only to be named
         $w['omim_exact'] = Disease::factory()->omim()->create(['curie' => 'OMIM:600001']);
 
         // OMIM:600004 deliberately has no record of its own: reachable only
-        // through mondo_exact's exact_omim array
+        // through mondo_exact's omim_id array
 
         // An OMIM id no MONDO term exact-matches: reciprocity fails, so it does
         // not resolve however many other rows mention it
@@ -94,7 +104,8 @@ trait SeedsDiseaseWorld
         // Step 1 wins over step 2: MONDO exact-matches this code, and the row
         // also asserts a different MONDO equivalent of its own
         $w['orpha_both'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_mondo' => ['MONDO:0000003'],
+            'mondo_id' => ['MONDO:0000003'],
+            'omim_id' => [],
         ])->create(['curie' => 'Orphanet:700002']);
 
         // A deprecated Orphanet term MONDO still exact-matches
@@ -103,14 +114,14 @@ trait SeedsDiseaseWorld
 
         // Step 2: Orphadata's own exact, validated MONDO equivalent
         $w['orpha_asserts_mondo'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_mondo' => ['MONDO:0000003'],
-            'exact_omim' => [],
+            'mondo_id' => ['MONDO:0000003'],
+            'omim_id' => [],
         ])->create(['curie' => 'Orphanet:700300']);
 
         // Step 3: an exact OMIM reference MONDO exact-matches
         $w['orpha_bridge'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_mondo' => [],
-            'exact_omim' => ['600700'],
+            'mondo_id' => [],
+            'omim_id' => ['600700'],
         ])->create(['curie' => 'Orphanet:700700']);
 
         // Step 4: nothing maps it, so the submission is rejected.  This is the
@@ -119,12 +130,14 @@ trait SeedsDiseaseWorld
 
         // Asserts a MONDO term that is not in the table
         $w['orpha_stale'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_mondo' => ['MONDO:0009999'],
+            'mondo_id' => ['MONDO:0009999'],
+            'omim_id' => [],
         ])->create(['curie' => 'Orphanet:700600']);
 
         // References an OMIM id no MONDO term exact-matches
         $w['orpha_dead_bridge'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_omim' => ['600100'],
+            'mondo_id' => [],
+            'omim_id' => ['600100'],
         ])->create(['curie' => 'Orphanet:700800']);
 
         $w['orpha_removed'] = Disease::factory()->orphanet()->removed()->create(['curie' => 'Orphanet:700400']);
@@ -133,11 +146,13 @@ trait SeedsDiseaseWorld
         $w['orpha_rival_targets'] = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:700888']);
 
         $w['orpha_two_mondo'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_mondo' => ['MONDO:0000001', 'MONDO:0000003'],
+            'mondo_id' => ['MONDO:0000001', 'MONDO:0000003'],
+            'omim_id' => [],
         ])->create(['curie' => 'Orphanet:700999']);
 
         $w['orpha_two_bridges'] = Disease::factory()->orphanet()->withXrefs([
-            'exact_omim' => ['600001', '600700'],
+            'mondo_id' => [],
+            'omim_id' => ['600001', '600700'],
         ])->create(['curie' => 'Orphanet:700777']);
 
         return $w;

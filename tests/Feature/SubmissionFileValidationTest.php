@@ -119,7 +119,7 @@ class SubmissionFileValidationTest extends TestCase
             'type' => Disease::TYPE_MONDO,
             // The identifiers MONDO itself exact-matches, which is the only way
             // an OMIM or Orphanet code reaches a MONDO term
-            'xrefs' => ['exact_omim' => ['123456'], 'exact_orphanet' => ['700001']],
+            'xrefs' => ['omim_id' => ['123456'], 'orpha_id' => ['700001'], 'replaced_by' => null],
             'status' => Disease::STATUS_ACTIVE
         ]);
 

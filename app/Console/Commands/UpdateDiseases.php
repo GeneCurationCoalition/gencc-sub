@@ -21,24 +21,20 @@ use Illuminate\Support\Str;
  * Presence in `xrefs` therefore implies exactness, so no provenance column or
  * relation qualifier is needed anywhere downstream.
  *
- *   MONDO row     `exact_omim`      skos:exactMatch OMIM ids
- *                 `exact_orphanet`  skos:exactMatch Orphanet codes
+ *   MONDO row     `omim_id`         skos:exactMatch OMIM ids
+ *                 `orpha_id`        skos:exactMatch Orphanet codes
  *                 `replaced_by`     successor CURIE when the term is obsolete
- *   Orphanet row  `exact_mondo`     exact + validated MONDO CURIEs from Orphadata
- *                 `exact_omim`      exact + validated OMIM ids from Orphadata
+ *   Orphanet row  `mondo_id`        exact + validated MONDO CURIEs from Orphadata
+ *                 `omim_id`         exact + validated OMIM ids from Orphadata
  *   OMIM row      `include_titles` only; OMIM's source file asserts nothing
  *
- * Every equivalence key is an array, and is named for the relation rather than
- * the target ontology alone, so a row written before this policy cannot be
- * misread as asserting exactness.  Values are bare identifiers — the key already
- * names the namespace — except `exact_mondo`, which holds a CURIE so that the
- * zero-padding MONDO identifiers require stays visible.
+ * Every equivalence key is an array, even when empty.  Values are bare
+ * identifiers — the key already names the namespace — except `mondo_id`, which
+ * holds CURIEs so that the zero-padding MONDO identifiers require stays visible.
  *
- * `diseases.mondo_id` is no longer maintained: it recorded the inverse of a
- * MONDO assertion on the OMIM/Orphanet row, which this model forbids, and two
- * of its passes invented mappings neither ontology asserted.  The column still
- * exists and retains its pre-policy values; nothing reads it.  Dropping it is a
- * separate migration, blocked on the matching gencc-search cleanup.
+ * `omim_id` and `orpha_id` keep the names they had before this policy, when
+ * they also held non-exact identifiers, so that gencc-search, which reads them,
+ * needs no change.
  *
  * See docs/DISEASE_MAPPING.md.
  */
@@ -93,9 +89,10 @@ class UpdateDiseases extends Command
      * The `xrefs` keys that hold cross-ontology equivalences; see the class
      * docblock.  DiseaseResolver reads them through these constants.
      */
-    public const FIELD_EXACT_OMIM = 'exact_omim';
-    public const FIELD_EXACT_ORPHANET = 'exact_orphanet';
-    public const FIELD_EXACT_MONDO = 'exact_mondo';
+    public const FIELD_EXACT_OMIM = 'omim_id';
+    public const FIELD_EXACT_ORPHANET = 'orpha_id';
+    public const FIELD_EXACT_MONDO = 'mondo_id';
+    public const FIELD_REPLACED_BY = 'replaced_by';
 
     /**
      * Orphadata's numeric ids for "E (Exact mapping...)" and "Validated".  The
@@ -384,7 +381,7 @@ class UpdateDiseases extends Command
      * Claim this term's exact matches, throwing if another term in the release
      * already claimed one of them.
      *
-     * @param  array{exact_omim: string[], exact_orphanet: string[]}  $exactMatches  As
+     * @param  array{omim_id: string[], orpha_id: string[]}  $exactMatches  As
      *      returned by x_mondo_xrefs_array(), i.e. exactly what is stored
      */
     protected function recordMondoExactMatches(string $mondoCurie, array $exactMatches): void
@@ -413,14 +410,14 @@ class UpdateDiseases extends Command
      * only map to a MONDO term that maps back, so a value arriving under some
      * other predicate must not be stored.
      *
-     * @return array{exact_omim: string[], exact_orphanet: string[], replaced_by: ?string}
+     * @return array{omim_id: string[], orpha_id: string[], replaced_by: ?string}
      */
     protected function x_mondo_xrefs_array($meta)
     {
         $cleansed = [
             self::FIELD_EXACT_OMIM => [],
             self::FIELD_EXACT_ORPHANET => [],
-            'replaced_by' => null,
+            self::FIELD_REPLACED_BY => null,
         ];
 
         foreach (($meta['basicPropertyValues'] ?? []) as $property) {
@@ -429,7 +426,7 @@ class UpdateDiseases extends Command
 
             if ($pred === self::PRED_REPLACED_BY) {
                 // Never let a later foreign successor erase a MONDO one
-                $cleansed['replaced_by'] = $this->x_mondo_curie($val) ?? $cleansed['replaced_by'];
+                $cleansed[self::FIELD_REPLACED_BY] = $this->x_mondo_curie($val) ?? $cleansed[self::FIELD_REPLACED_BY];
             } elseif ($pred !== self::PRED_EXACT_MATCH) {
                 continue;
             } elseif (($n = strpos($val, self::OMIM_ENTRY_PATH)) !== false) {
@@ -916,6 +913,17 @@ class UpdateDiseases extends Command
      * Set deprecated_name with REMOVED- prefix, leaving xrefs untouched so
      * historical submissions keep their relationships.
      *
+     * All three sources mark retired terms in their own files, and those are
+     * stored as DEPRECATED by the phases above.  This only catches rows a
+     * source no longer lists at all (e.g. MONDO ids withdrawn without
+     * obsoletion, or OMIM entries reclassified as Asterisk, which are not
+     * imported), and records them the same way.
+     *
+     * TODO: give these their own status (e.g. MISSING_FROM_UPSTREAM) instead
+     * of reusing DEPRECATED plus a name prefix, and record when a term became
+     * missing or deprecated.  Needs a migration and a review of every status
+     * check, so it was left out of the exact-only mapping change.
+     *
      * @return array ['deprecated' => bool, 'has_refs' => bool]
      */
     protected function markAsRemovedOrDeprecated(Disease $disease): array
@@ -1005,7 +1013,7 @@ class UpdateDiseases extends Command
      * written unpadded ("44", "7800"), so they are left-padded to the 7 digits
      * MONDO CURIEs use.
      *
-     * @return array{exact_mondo: string[], exact_omim: string[]}
+     * @return array{mondo_id: string[], omim_id: string[]}
      */
     protected function x_orphanet_xrefs_xml($externalRefList)
     {

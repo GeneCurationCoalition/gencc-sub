@@ -171,7 +171,7 @@ class UpdateDiseasesTest extends TestCase
      */
     public function record_mondo_exact_matches_claims_omim_and_orphanet_ids(): void
     {
-        $this->callMethod('recordMondoExactMatches', ['MONDO:0014651', ['exact_omim' => ['615438'], 'exact_orphanet' => ['464724']]]);
+        $this->callMethod('recordMondoExactMatches', ['MONDO:0014651', ['omim_id' => ['615438'], 'orpha_id' => ['464724']]]);
 
         $this->assertSame(
             ['OMIM:615438' => 'MONDO:0014651', 'Orphanet:464724' => 'MONDO:0014651'],
@@ -184,7 +184,7 @@ class UpdateDiseasesTest extends TestCase
      */
     public function record_mondo_exact_matches_throws_when_two_terms_claim_one_id(): void
     {
-        $matches = ['exact_omim' => ['999999'], 'exact_orphanet' => []];
+        $matches = ['omim_id' => ['999999'], 'orpha_id' => []];
 
         $this->callMethod('recordMondoExactMatches', ['MONDO:0001111', $matches]);
 
@@ -215,8 +215,8 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_mondo_xrefs_array', [$meta]);
 
-        $this->assertSame(['123456', '789012'], $result['exact_omim']);
-        $this->assertSame(['9999', '8888'], $result['exact_orphanet']);
+        $this->assertSame(['123456', '789012'], $result['omim_id']);
+        $this->assertSame(['9999', '8888'], $result['orpha_id']);
         $this->assertNull($result['replaced_by']);
     }
 
@@ -247,11 +247,11 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_mondo_xrefs_array', [$meta]);
 
-        $this->assertSame([], $result['exact_omim']);
-        $this->assertSame([], $result['exact_orphanet']);
+        $this->assertSame([], $result['omim_id']);
+        $this->assertSame([], $result['orpha_id']);
 
         // The namespaces this policy stopped loading leave no trace at all
-        $this->assertSame(['exact_omim', 'exact_orphanet', 'replaced_by'], array_keys($result));
+        $this->assertSame(['omim_id', 'orpha_id', 'replaced_by'], array_keys($result));
     }
 
     /**
@@ -308,8 +308,8 @@ class UpdateDiseasesTest extends TestCase
     {
         $result = $this->callMethod('x_mondo_xrefs_array', [[]]);
 
-        $this->assertSame([], $result['exact_omim']);
-        $this->assertSame([], $result['exact_orphanet']);
+        $this->assertSame([], $result['omim_id']);
+        $this->assertSame([], $result['orpha_id']);
         $this->assertNull($result['replaced_by']);
     }
 
@@ -327,7 +327,7 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_mondo_xrefs_array', [$meta]);
 
-        $this->assertSame(['123456'], $result['exact_omim']);
+        $this->assertSame(['123456'], $result['omim_id']);
     }
 
     // =========================================================================
@@ -346,8 +346,8 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_orphanet_xrefs_xml', [$list]);
 
-        $this->assertSame(['MONDO:0011778'], $result['exact_mondo']);
-        $this->assertSame(['217090'], $result['exact_omim']);
+        $this->assertSame(['MONDO:0011778'], $result['mondo_id']);
+        $this->assertSame(['217090'], $result['omim_id']);
     }
 
     /**
@@ -365,7 +365,7 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_orphanet_xrefs_xml', [$list]);
 
-        $this->assertSame(['MONDO:0000044', 'MONDO:0007800', 'MONDO:0018887'], $result['exact_mondo']);
+        $this->assertSame(['MONDO:0000044', 'MONDO:0007800', 'MONDO:0018887'], $result['mondo_id']);
     }
 
     /**
@@ -385,7 +385,7 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_orphanet_xrefs_xml', [$list]);
 
-        $this->assertSame(['100400'], $result['exact_omim']);
+        $this->assertSame(['100400'], $result['omim_id']);
     }
 
     /**
@@ -400,8 +400,8 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_orphanet_xrefs_xml', [$list]);
 
-        $this->assertSame([], $result['exact_omim']);
-        $this->assertSame([], $result['exact_mondo']);
+        $this->assertSame([], $result['omim_id']);
+        $this->assertSame([], $result['mondo_id']);
     }
 
     /**
@@ -419,7 +419,7 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_orphanet_xrefs_xml', [$list]);
 
-        $this->assertSame(['exact_mondo' => [], 'exact_omim' => []], $result);
+        $this->assertSame(['mondo_id' => [], 'omim_id' => []], $result);
     }
 
     /**
@@ -432,7 +432,7 @@ class UpdateDiseasesTest extends TestCase
     {
         $result = $this->callMethod('x_orphanet_xrefs_xml', [null]);
 
-        $this->assertSame('{"exact_mondo":[],"exact_omim":[]}', json_encode($result));
+        $this->assertSame('{"mondo_id":[],"omim_id":[]}', json_encode($result));
     }
 
     // =========================================================================

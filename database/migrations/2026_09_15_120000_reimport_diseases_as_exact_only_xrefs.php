@@ -6,25 +6,28 @@ use Illuminate\Support\Facades\DB;
 use Symfony\Component\Console\Output\ConsoleOutput;
 
 /**
- * Re-import diseases into the exact-only `xrefs` shape (docs/DISEASE_MAPPING.md).
+ * Re-import diseases so their `xrefs` hold exact-only equivalences
+ * (docs/DISEASE_MAPPING.md).
  *
- * DiseaseResolver reads only the `exact_*` keys, so until every source has been
- * re-read no OMIM or Orphanet identifier resolves.  A plain update:diseases run
- * does not fix that, because it skips any source whose file headers are
- * unchanged, hence --force.
+ * The earlier importer wrote `omim_id` / `orpha_id` under the same names but
+ * with non-exact identifiers mixed in, and DiseaseResolver trusts whatever is
+ * stored there.  A plain update:diseases run does not rewrite them, because it
+ * skips any source whose file headers are unchanged, hence --force.
+ *
+ * The earlier shape is recognised by a key the current importer writes on every
+ * row of the type, even when empty, and the earlier one never wrote.  A handful
+ * of rows whose terms have left their source are never rewritten, so the test
+ * is whether *any* row of the type carries the key, not whether all do.
  *
  * A database with no disease rows yet needs nothing: its first import writes the
- * new shape.  Once this migration has succeeded it never runs again; if the
+ * current shape.  Once this migration has succeeded it never runs again; if the
  * import fails, the migration fails and is retried by the next migrate.
  */
 return new class extends Migration
 {
-    /**
-     * The key every re-imported row of each type carries, even when empty.
-     */
-    private const EXACT_KEY_BY_TYPE = [
-        1 => 'exact_omim',   // Disease::TYPE_MONDO
-        20 => 'exact_mondo', // Disease::TYPE_ORPHANET
+    private const SHAPE_MARKER = [
+        1 => 'replaced_by', // Disease::TYPE_MONDO
+        20 => 'mondo_id',   // Disease::TYPE_ORPHANET
     ];
 
     public function up(): void
@@ -50,10 +53,10 @@ return new class extends Migration
 
     private function predatesExactOnlyXrefs(): bool
     {
-        foreach (self::EXACT_KEY_BY_TYPE as $type => $key) {
+        foreach (self::SHAPE_MARKER as $type => $key) {
             $rows = DB::table('diseases')->where('type', $type);
 
-            if ((clone $rows)->exists() && ! $rows->whereNotNull("xrefs->{$key}")->exists()) {
+            if ((clone $rows)->exists() && ! $rows->whereJsonContainsKey("xrefs->{$key}")->exists()) {
                 return true;
             }
         }

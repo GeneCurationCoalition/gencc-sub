@@ -55,7 +55,7 @@ class SubmissionDiseaseResolutionTest extends TestCase
             'status' => Classification::STATUS_ACTIVE,
         ]);
 
-        $this->mondo = Disease::factory()->mondo()->withXrefs(['exact_orphanet' => ['83471']])
+        $this->mondo = Disease::factory()->mondo()->withXrefs(['omim_id' => [], 'orpha_id' => ['83471'], 'replaced_by' => null])
             ->create(['curie' => 'MONDO:0000001']);
 
         $this->orphanetMapped = Disease::factory()->orphanet()->create(['curie' => 'Orphanet:83471']);
