@@ -32,7 +32,7 @@ class ClearPlaceholderReferencesMigrationTest extends TestCase
         $unresolved = Submission::factory()->create($placeholders + [
             'submission_errors' => [
                 'gene_hgnc_id' => "Invalid HGNC ID 'HGNC:99999999'",
-                'disease_curie_id' => "No exact MONDO equivalent for Disease ID 'Orphanet:716903'",
+                'disease_curie_id' => "No MONDO term found for Disease ID 'Orphanet:716903' (unknown ID, or no exact MONDO match)",
                 'moi_curie_id' => "Invalid MOI ID 'HP:9999999'",
             ],
         ]);

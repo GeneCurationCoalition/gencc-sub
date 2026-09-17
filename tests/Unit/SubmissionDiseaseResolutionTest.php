@@ -165,7 +165,7 @@ class SubmissionDiseaseResolutionTest extends TestCase
 
             $this->assertSame([
                 'gene_hgnc_id' => "Invalid HGNC ID 'HGNC:99999999'",
-                'disease_curie_id' => "No exact MONDO equivalent for Disease ID 'Orphanet:999999'",
+                'disease_curie_id' => "No MONDO term found for Disease ID 'Orphanet:999999' (unknown ID, or no exact MONDO match)",
                 'moi_curie_id' => "Invalid MOI ID 'HP:9999999'",
                 'classification_curie_id' => "Invalid Classification ID 'GENCC:999999'",
             ], array_intersect_key($result, array_flip(['gene_hgnc_id', 'disease_curie_id', 'moi_curie_id', 'classification_curie_id'])), $mode);

@@ -108,7 +108,7 @@ class SubmissionFileValidation
                 // ...but each such row becomes a record error, which does block
                 // submitting the job
                 'blocks_submission' => true,
-                'message' => 'No exact MONDO equivalent for submitted disease id',
+                'message' => 'No MONDO term found for submitted disease id (unknown ID, or no exact MONDO match)',
             ],
         ],
         'disease_name' => [

@@ -151,8 +151,9 @@ class SubmissionController extends Controller
     }
 
     /**
-     * A non-blocking warning for a submission curated against an obsolete MONDO
-     * term.
+     * A non-blocking warning for a submission curated against a deprecated MONDO
+     * term: one MONDO marks obsolete, or one the latest MONDO file no longer
+     * lists.  The two are not told apart yet (see UpdateDiseases).
      *
      * These are accepted deliberately: 1,130 active Orphanet disorders exact-match
      * a MONDO term that MONDO has since obsoleted, and rejecting them would lose a
@@ -160,7 +161,7 @@ class SubmissionController extends Controller
      * so it applies retroactively and needs no stored state.
      *
      * MONDO names a successor for only about one obsolete term in seven; where it
-     * does not, the warning says the term is obsolete without naming one.
+     * does not, the warning says the term is deprecated without naming one.
      *
      * @return array|null
      */
@@ -174,7 +175,7 @@ class SubmissionController extends Controller
         $replacedBy = is_object($disease->xrefs) ? ($disease->xrefs->replaced_by ?? null) : null;
         $successor = $replacedBy ? Disease::curie($replacedBy)->first() : null;
 
-        $message = "{$disease->curie} ({$disease->name}) is obsolete in its source ontology. "
+        $message = "{$disease->curie} ({$disease->name}) is deprecated. "
             . 'This submission remains valid and can be published.';
 
         if ($successor !== null) {

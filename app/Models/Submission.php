@@ -833,7 +833,7 @@ class Submission extends Model
         $submittedCurie = trim((string) ($uploadedDiseaseId ?? ''));
         $unresolvedMessage = $submittedCurie === ''
             ? 'Missing Disease ID'
-            : "No exact MONDO equivalent for Disease ID '{$submittedCurie}'";
+            : "No MONDO term found for Disease ID '{$submittedCurie}' (unknown ID, or no exact MONDO match)";
 
         // Set original_disease_id (the exact disease record for uploaded CURIE)
         $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id',
@@ -1010,15 +1010,6 @@ class Submission extends Model
 
 
     /**
-     * Assert that the passed element is a non-zero, or non-zero equivalent.
-     * If not, add the errormsg to the errors_bag.
-     * 
-     * @params string $element
-     * @params string $errortype
-     * @params string $errormsg
-     * @rerurn string 
-     */
-    /**
      * The error for a reference field that did not resolve, naming what was
      * submitted so the portal can show it in place of the missing record.
      */
@@ -1029,6 +1020,15 @@ class Submission extends Model
         return $submitted === '' ? "Missing {$label}" : "Invalid {$label} '{$submitted}'";
     }
 
+    /**
+     * Assert that the passed element is a non-zero, or non-zero equivalent.
+     * If not, add the errormsg to the errors_bag.
+     *
+     * @params string $element
+     * @params string $errortype
+     * @params string $errormsg
+     * @rerurn string
+     */
     protected function asserterrors($element, $errortype, $errormsg)
     {
         if (empty($element))

@@ -827,6 +827,7 @@ const clearDocument = (event) => {
         // Clear local state
         showErrorCard.value = false;
         uploadErrors.value = [];
+        uploadWarnings.value = [];
         uploadedDocumentId.value = null;
         uploadedFilename.value = '';
         uploadedFileSize.value = 0;
