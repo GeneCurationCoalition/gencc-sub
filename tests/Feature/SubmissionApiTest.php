@@ -1949,4 +1949,62 @@ class SubmissionApiTest extends TestCase
         ]);
         $this->assertStringContainsString('archived', $response->json('errors.0'));
     }
+
+    /**
+     * A report date the system cannot store is refused with a message the
+     * portal can show, rather than failing the write and returning a 500.
+     */
+    public function test_report_date_outside_the_allowed_range_is_refused(): void
+    {
+        $before = $this->submission->report_date;
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '2999-01-01',
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => 'false', 'status_code' => 3003]);
+        $this->assertStringContainsString('outside the allowed date range', $response->json('message'));
+
+        $this->submission->refresh();
+        $this->assertEquals($before, $this->submission->report_date);
+    }
+
+    /**
+     * A date in a form the system does not read is refused the same way.
+     */
+    public function test_report_date_in_an_unaccepted_format_is_refused(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '08/26/2024',
+            ]);
+
+        $response->assertJson(['success' => 'false', 'status_code' => 3003]);
+        $this->assertStringContainsString('Not a date', $response->json('message'));
+    }
+
+    public function test_a_report_date_in_the_accepted_form_is_saved(): void
+    {
+        $data = $this->submission->submission_data;
+        $data->report = (object) ['ext_url' => null, 'display_date' => null];
+        $this->submission->update(['submission_data' => $data]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '2024-01-15',
+            ]);
+
+        $response->assertJson(['status_code' => 200]);
+
+        $this->submission->refresh();
+        $this->assertStringStartsWith('2024-01-15', (string) $this->submission->report_date);
+    }
 }

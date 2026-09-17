@@ -41,7 +41,14 @@
         if (disabled.value  === true)
             return;
 
-        emit('input_report_item', { url: url.value, date: date.value });
+        // The picker hands back a Date; send the plain YYYY-MM-DD the server
+        // accepts, read in local time so the day does not shift
+        const picked = date.value;
+        const ymd = picked instanceof Date
+            ? [picked.getFullYear(), String(picked.getMonth() + 1).padStart(2, '0'), String(picked.getDate()).padStart(2, '0')].join('-')
+            : picked;
+
+        emit('input_report_item', { url: url.value, date: ymd });
         emit('input_report_close');
 
     }

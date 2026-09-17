@@ -8,8 +8,6 @@ use Maatwebsite\Excel\Facades\Excel;
 use App\Events\SpreadsheetUpdate;
 
 use Auth;
-use Carbon\Carbon;
-use Carbon\Exceptions\InvalidFormatException;
 
 use App\Models\Document;
 use App\Models\Nodal;
@@ -23,6 +21,7 @@ use App\Models\Classification;
 use App\Models\Mechanism;
 use App\Services\DiseaseResolver;
 use App\Services\SubmissionFileValidation;
+use App\Services\SubmittedDate;
 
 use App\Jobs\ProcessUpload;
 use App\Jobs\ProcessSubmissionsUpload;
@@ -953,17 +952,10 @@ class DocumentController extends Controller
             $data->hp_id = $row['moi_id'];
             $data->moi_name = $row['moi_name'];
 
-            // the date can get tricky due to excels auto format
-            if (is_numeric($row['date']))
-                $date = Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($row['date']));
-            else
-            {
-                try {
-                    $date = Carbon::parse($row['date']);
-                } catch (InvalidFormatException $_) {
-                    $date = null;
-                }
-            }
+            // Excel dates arrive as a day count, so SubmittedDate reads both
+            // those and the accepted text forms; file validation rejected
+            // anything else before these rows were created
+            $date = SubmittedDate::usable($row['date']);
 
             $data->report_date = $date;
             $data->report_url = $row['public_report_url'];

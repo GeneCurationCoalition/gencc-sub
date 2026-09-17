@@ -4,8 +4,6 @@ namespace App\Services;
 
 use App\Models\Disease;
 use App\Models\Gene;
-use Carbon\Carbon;
-use Carbon\Exceptions\InvalidFormatException;
 
 use App\Models\Classification;
 use App\Models\Inheritance;
@@ -14,6 +12,7 @@ use App\Models\Pubmed;
 use App\Models\Submission;
 use App\Services\SubmissionDuplicateDetection;
 use App\Services\DiseaseResolver;
+use App\Services\SubmittedDate;
 
 class SubmissionFileValidation
 {
@@ -145,8 +144,7 @@ class SubmissionFileValidation
         'date' => [
             'desc' => 'Report Date',
             'required' => true,
-            # YYYY/MM/DD or YYYY-MM-DD
-            'regexp' => '/^\d{4}[\/-]\d{2}[\/\-]\d{2}$/',
+            # No regexp: SubmittedDate is the only rule for which dates are accepted
             'is_date' => true,
         ],
         'public_report_url' => [
@@ -319,22 +317,13 @@ class SubmissionFileValidation
         return $resolver->resolve($value)?->mondo;
     }
 
-    private static function parse_as_date($numeric_date): ?string
+    /**
+     * The submitted date as YYYY-MM-DD, or null when it is not one this system
+     * accepts.  See ReportDate for which spellings and which range are allowed.
+     */
+    private static function parse_as_date($submitted_date): ?string
     {
-        // the date can get tricky due to excels auto format
-        if (is_numeric($numeric_date)) {
-            $date = Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($numeric_date));
-            $date = $date->format('Y-m-d');
-        }
-        else
-        {
-            try {
-                $date = Carbon::parse($numeric_date)->format('Y-m-d');
-            } catch (InvalidFormatException $_) {
-                $date = null;
-            }
-        }
-        return $date;
+        return SubmittedDate::usable($submitted_date)?->format('Y-m-d');
     }
 
     /**
@@ -353,7 +342,7 @@ class SubmissionFileValidation
             'action' => 'Must be one of: N (New), R (Republish), or U (Unpublish).',
             'public_report_url' => 'Must be a valid URL starting with http:// or https://',
             'assertion_criteria_url' => 'Must be a valid URL to the assertion criteria documentation.',
-            'date' => 'Must be a valid date in format YYYY-MM-DD or MM/DD/YYYY.',
+            'date' => SubmittedDate::GUIDANCE,
         ];
 
         return $guidance[$column_name] ?? 'Please check the value and refer to https://thegencc.org/submission-directions';
@@ -863,15 +852,18 @@ class SubmissionFileValidation
                 $value = self::parse_as_date($original_value);
 
                 // If date parsing failed but original value was not empty, report error
-                if ($value === null && !empty(trim($original_value))) {
+                if ($value === null && !empty(trim((string) $original_value))) {
                     $validation_results[] = [
                         'error_type' => 'invalid_field_format',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
+                        'column' => $column_name,
+                        'value' => (string) $original_value,
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid date format for column '{$column_name}'. Expected format: YYYY-MM-DD (e.g., 2024-01-15). Got: '{$original_value}'"
+                        'message' => "Invalid date for column '{$column_name}': '{$original_value}'. "
+                            . SubmittedDate::rejectionReason($original_value),
                     ];
                     continue;
                 }

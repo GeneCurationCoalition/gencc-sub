@@ -27,6 +27,7 @@ use App\Jobs\ProcessPubmed;
 
 use App\Services\SubmissionStateMachine;
 use App\Services\JobStateMachine;
+use App\Services\SubmittedDate;
 use App\Services\SubmissionDuplicateDetection;
 use App\Exports\SubmissionsTemplateExport;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -462,8 +463,16 @@ class SubmissionController extends Controller
                 $bags = ['invalid_pmid'];
                 break;
             case 'report':
+                $reportDate = SubmittedDate::usable($request->input('date'));
+
+                if ($reportDate === null)
+                    return response()->json(['success' => 'false',
+                        'status_code' => 3003,
+                        'message' => 'Invalid report date: '.SubmittedDate::rejectionReason($request->input('date'))],
+                        200);
+
                 $submission->report_url = $request->input('curie');
-                $submission->report_date = Carbon::parse($request->input('date'));
+                $submission->report_date = $reportDate;
                 $submission_data = $submission->submission_data;
                 $report = $submission_data->report;
                 $report->ext_url = $request->input('curie');

@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 
 use App\Jobs\ProcessPubmed;
+use App\Services\SubmittedDate;
 
 use Auth;
 
@@ -895,15 +896,15 @@ class Submission extends Model
         /**
          * Assert the report date is present.  If not, add to the errors_bag
          */
-        $this->report_date = $this->asserterrors($obj->report->display_date ?? null, 'report_date', 'Missing Report Date');
+        $submittedDate = $obj->report->display_date ?? null;
+        $this->report_date = $this->asserterrors($submittedDate, 'report_date', 'Missing Report Date');
         if ($this->report_date !== null)
         {
-            // we let carbon try to parse the date, and if it can't we catch the exception and clean things up
-            try {
-                $this->report_date = Carbon::parse($this->report_date);
-            } catch (Exception $e) {
-                $this->report_date = null;
-                $this->asserterrors(null, 'report_date', 'Invalid Report Date');
+            // One reading of a submitted date, shared with file validation
+            $this->report_date = SubmittedDate::usable($submittedDate);
+            if ($this->report_date === null) {
+                $this->asserterrors(null, 'report_date',
+                    'Invalid Report Date: '.SubmittedDate::rejectionReason($submittedDate));
             }
         }
         

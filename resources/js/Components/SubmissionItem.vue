@@ -350,6 +350,19 @@
         }
     }
 
+    /**
+     * Report a failed field update.  Without this a rejected value, or a server
+     * error, left the dialog open with nothing said.
+     */
+    function showUpdateFailed(reason) {
+        const detail = typeof reason === 'string' && reason
+            ? reason
+            : (reason?.response?.data?.message || 'The change could not be saved. Please try again.');
+
+        console.error(reason);
+        toast.add({ severity: 'error', summary: 'Update failed', detail, life: 8000 });
+    }
+
     // query the server for the entry given
     async function checkEntry() {
         try {
@@ -617,8 +630,12 @@
                 // close the dialog
                 showReportDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -1111,6 +1128,8 @@ console.log(props.submission)
 
 <template>
     <div>
+        <!-- Without this the toasts raised here, such as a rejected field edit, never appear -->
+        <Toast />
         <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
 
             <!-- header -->
