@@ -846,12 +846,10 @@ class DocumentController extends Controller
 
             // Get the action from the row (N, R, or U)
             $action = strtoupper(trim($row['action'] ?? 'N'));
-            \Log::info('DocumentController@parser: Processing row with action: ' . $action);
 
             // Handle based on action type
             if ($action === 'N') {
                 // New submission
-                \Log::info('DocumentController@parser creating new submission...');
                 $submission = new Submission();
                 $submission->submitter_id = $document->submitter_id;
                 $existingSubmissionState = null;
@@ -868,7 +866,6 @@ class DocumentController extends Controller
                     continue;
                 }
 
-                \Log::info('DocumentController@parser looking up submission sid by sgc_id: ' . $row['sgc_id']);
                 // Use pre-loaded cache for O(1) lookup instead of per-row database query
                 $originalSubmission = $existingSubmissionsCache->get($row['sgc_id']);
                 if ($originalSubmission === null) {
@@ -984,7 +981,9 @@ class DocumentController extends Controller
             $data->submitter_curie = $document->submitter->curie ?? '';
             $data->submitter_title = $document->submitter->name ?? '';
 
-            $check = $document->submitter->submissions()->sid($row['local_key'])->first();
+            $check = empty($row['local_key'])
+                ? null
+                : $document->submitter->submissions()->sid($row['local_key'])->first();
             if ($check === null)
             {
                 $data->version_display = "1.0";
@@ -1019,14 +1018,10 @@ class DocumentController extends Controller
                 continue;
             }
 
-            \Log::info("JSON object from template: " . json_encode($obj));
-
             $job = $document->job;
 
             // For Unpublish action, skip data loading and just set status
             if ($action === 'U') {
-                \Log::info('DocumentController@parser: Unpublish action - new version already created, setting status');
-
                 // Set status to draft_unpublish (new version record was already created above)
                 $submission->status = Submission::STATUS_DRAFT_UNPUBLISH;
 
@@ -1040,14 +1035,12 @@ class DocumentController extends Controller
                 if (isset($originalSubmission) && $originalSubmission->is_most_recent) {
                     $originalSubmission->is_most_recent = false;
                     $originalSubmission->save();
-                    \Log::info("DocumentController@parser: Marked original submission as not most recent");
                 }
 
-                // Copy pubmed associations from original submission
+                // The unpublish version keeps the original's PubMed links
                 if (isset($originalSubmission)) {
                     $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
                     $submission->pubmeds()->sync($pubmedIds);
-                    \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to unpublish version");
                 }
 
                 $successfulSubmissions++;
@@ -1063,10 +1056,8 @@ class DocumentController extends Controller
                         // Republish: Set status to draft_republish
                         // New version record was already created above with version_number incremented
                         $submission->status = Submission::STATUS_DRAFT_REPUBLISH;
-                        \Log::info('DocumentController@parser: Setting republish status to draft_republish');
                     } elseif ($action === 'N') {
                         // New submission: set status to draft_new
-                        \Log::info('DocumentController@parser: Setting new submission status to draft_new');
                         $submission->status = Submission::STATUS_DRAFT_NEW;
                     }
 
@@ -1079,14 +1070,6 @@ class DocumentController extends Controller
                     if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
                         $originalSubmission->is_most_recent = false;
                         $originalSubmission->save();
-                        \Log::info("DocumentController@parser: Marked original submission as not most recent");
-                    }
-
-                    // For republish, copy pubmed associations from original submission
-                    if ($action === 'R' && isset($originalSubmission)) {
-                        $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
-                        $submission->pubmeds()->sync($pubmedIds);
-                        \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to new version");
                     }
 
                     $successfulSubmissions++;
@@ -1122,10 +1105,14 @@ class DocumentController extends Controller
                 }
             }
 
-            // we can now update the evidence pivot table entries
-            $submission->pubmeds()->detach();
+            // Link the PubMed records cited in the sheet.  An unpublish version
+            // already has its links, copied above.  A new submission has none
+            // yet; a republish version may be a reused draft holding old ones.
+            if ($action === 'R') {
+                $submission->pubmeds()->detach();
+            }
 
-            if (isset($submission->submission_data->evidence) && is_array($submission->submission_data->evidence)) {
+            if ($action !== 'U' && isset($submission->submission_data->evidence) && is_array($submission->submission_data->evidence)) {
                 // Collect all pubmed IDs to attach in one query
                 $pubmedIdsToAttach = [];
                 foreach ($submission->submission_data->evidence as $evidence)
