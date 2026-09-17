@@ -37,7 +37,7 @@ class DiseaseResolution
 
     public function __construct(
         public readonly ?Disease $original,
-        public readonly ?Disease $mondo,
+        public readonly Disease $mondo,
         public readonly string $via
     ) {
     }

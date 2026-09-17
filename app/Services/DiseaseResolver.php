@@ -49,19 +49,16 @@ use Illuminate\Support\Facades\Log;
 class DiseaseResolver
 {
     /**
-     * The MONDO xrefs field that records an exact match to each submitted
-     * ontology.  Prefixes are as Disease::normalizeCurie() spells them; field
-     * names must agree with UpdateDiseases::FIELD_*.
+     * The MONDO xrefs fields that record an exact match to another ontology,
+     * and so are indexed for lookup.  An OMIMPS identifier shares OMIM's field:
+     * MONDO records phenotypic series under a URL form the importer does not
+     * store, so nothing ever lands there for it.
      *
-     * OMIMPS shares OMIM's field: MONDO records phenotypic series under a URL
-     * form the importer does not store, so nothing ever lands there for it.
-     *
-     * @var array<string, string>
+     * @var array<int, string>
      */
-    private const EXACT_FIELD = [
-        'OMIM' => UpdateDiseases::FIELD_EXACT_OMIM,
-        'OMIMPS' => UpdateDiseases::FIELD_EXACT_OMIM,
-        'Orphanet' => UpdateDiseases::FIELD_EXACT_ORPHANET,
+    private const INDEXED_EXACT_FIELDS = [
+        UpdateDiseases::FIELD_EXACT_OMIM,
+        UpdateDiseases::FIELD_EXACT_ORPHANET,
     ];
 
     /** @var array<string, ?Disease> canonical CURIE => record, memoized */
@@ -298,7 +295,7 @@ class DiseaseResolver
         foreach ($rows as $row) {
             $xrefs = json_decode($row->xrefs);
 
-            foreach (array_unique(self::EXACT_FIELD) as $field) {
+            foreach (self::INDEXED_EXACT_FIELDS as $field) {
                 foreach (self::xrefValues($xrefs, $field) as $value) {
                     $index[$field][$value][] = (int) $row->id;
                 }

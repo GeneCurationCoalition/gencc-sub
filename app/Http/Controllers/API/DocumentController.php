@@ -262,9 +262,6 @@ class DocumentController extends Controller
             'message' => 'File validated successfully. Upload processing in background.',
             'document_id' => $document->id,
             'row_count' => $validationResult['row_count'],
-            // Non-blocking findings validateFile() collected.  The job page
-            // shows these once the rows exist, from what the records carry.
-            'warnings' => $validationResult['warnings'] ?? []
         ], 200);
 
     }
