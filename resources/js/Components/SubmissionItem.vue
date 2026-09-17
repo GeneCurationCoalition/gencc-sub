@@ -8,6 +8,8 @@
     import ChangeGene from './ChangeGene.vue';
     import ChangeDisease from './ChangeDisease.vue';
     import { getDiseaseUrl, getGeneUrl } from '@/utils/externalLinks';
+    import { unresolvedField } from '@/utils/submissionFields';
+    import UnresolvedField from './UnresolvedField.vue';
     import ChangeContributor from './ChangeContributor.vue';
     import ChangeNotes from './ChangeNotes.vue';
     import ChangeEvidence from './ChangeEvidence.vue';
@@ -1299,10 +1301,13 @@ console.log(props.submission)
                         <!-- classification -->
                         <div class="col-span-2 pt-3 text-right pr-3">Classification:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('classification_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'classification')" :unresolved="unresolvedField(submission, 'classification')" />
+                            <template v-else>
                             <div class="font-normal ">
                                 {{  submission.classification?.name || '-' }}
                             </div>
                             <div class="text-xs">{{ submission.classification?.curie || '' }}</div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('classification_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('classification_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
@@ -1315,6 +1320,8 @@ console.log(props.submission)
                         <!-- gene -->
                         <div class="col-span-2 pt-3 text-right pr-3">Gene:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('gene_hgnc_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'gene')" :unresolved="unresolvedField(submission, 'gene')" />
+                            <template v-else>
                             <div class="font-normal">{{ submission.gene?.symbol || '-' }}</div>
                             <div class="text-xs">
                                 <a v-if="submission.gene?.hgnc_id && getGeneUrl(submission.gene.hgnc_id)"
@@ -1326,30 +1333,33 @@ console.log(props.submission)
                                 </a>
                                 <span v-else>{{ submission.gene?.hgnc_id || '' }}</span>
                             </div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('gene_hgnc_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="danger" text raised rounded/></div>
                           <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeGene v-model:visible="showGeneDialog" v-bind:input="submission.gene?.hgnc_id || ''" @input_dialog_close="showGeneDialog = false" @input_gene_item="updateGene" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeGene>
+                              <ChangeGene v-model:visible="showGeneDialog" v-bind:input="submission.gene?.hgnc_id || unresolvedField(submission, 'gene')?.id || ''" @input_dialog_close="showGeneDialog = false" @input_gene_item="updateGene" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeGene>
                           </div>
                         </div>
 
                         <!-- disease -->
                         <div class="col-span-2 pt-3 text-right pr-3">Disease:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('disease_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'disease')" :unresolved="unresolvedField(submission, 'disease')" />
+                            <template v-else>
                             <!-- Primary Display: Always show MONDO disease (normalized) -->
                             <div class="mb-2">
-                                <div class="font-normal">{{ !submission.disease || submission.disease?.curie == "MONDO:0000001" ? '-' : submission.disease.name }}</div>
+                                <div class="font-normal">{{ submission.disease?.name || '-' }}</div>
                                 <div class="text-xs">
-                                    <a v-if="submission.disease?.curie && submission.disease.curie !== 'MONDO:0000001' && getDiseaseUrl(submission.disease.curie)"
+                                    <a v-if="submission.disease?.curie && getDiseaseUrl(submission.disease.curie)"
                                        :href="getDiseaseUrl(submission.disease.curie)"
                                        target="_blank"
                                        rel="noopener noreferrer"
                                        class="text-blue-600 hover:text-blue-800 hover:underline">
                                         {{ submission.disease.curie }}
                                     </a>
-                                    <span v-else>{{ !submission.disease || submission.disease?.curie == "MONDO:0000001" ? '-' : submission.disease?.curie }}</span>
+                                    <span v-else>{{ submission.disease?.curie || '' }}</span>
                                     <span v-if="submission.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)">⚠</span>
                                 </div>
                             </div>
@@ -1370,20 +1380,24 @@ console.log(props.submission)
                                     <span v-if="submission.original_disease.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)">⚠</span>
                                 </div>
                             </div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('disease_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
                           <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeDisease v-model:visible="showDiseaseDialog" v-bind:input="submission.original_disease?.curie || submission.disease?.curie || ''" @input_dialog_close="showDiseaseDialog = false" @input_disease_item="updateDisease" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeDisease>
+                              <ChangeDisease v-model:visible="showDiseaseDialog" v-bind:input="unresolvedField(submission, 'disease')?.id || submission.original_disease?.curie || submission.disease?.curie || ''" @input_dialog_close="showDiseaseDialog = false" @input_disease_item="updateDisease" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeDisease>
                           </div>
                         </div>
 
                         <!-- mode of inheritance -->
                         <div class="col-span-2 pt-3 text-right pr-3">Mode Of Inheritance:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('moi_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'inheritance')" :unresolved="unresolvedField(submission, 'inheritance')" />
+                            <template v-else>
                             <div class="font-normal">{{ submission.inheritance?.name || '-' }}</div>
                             <div class="text-xs">{{ submission.inheritance?.curie || '' }}</div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('moi_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('moi_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>

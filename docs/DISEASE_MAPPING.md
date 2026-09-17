@@ -213,7 +213,7 @@ The index maps each stored identifier to every MONDO row that lists it, so an am
 
 ### A rejected identifier
 
-`Submission::load_from_json()` records a `disease_curie_id` entry in `submission_errors` and substitutes the `MONDO:0000001` placeholder when resolution fails. The message names the code that was submitted. The row is created, and from there the existing machinery applies: the red indicator in `SubmissionsListing.vue`, the "Show Errors" filter, the field highlighting in `SubmissionItem.vue`, the `ChangeDisease` dialog, and `JobStateMachine::submit()` refusing to submit a job that still has errored records.
+`Submission::load_from_json()` records a `disease_curie_id` entry in `submission_errors` and leaves both disease columns empty when resolution fails. The message names the code that was submitted, and the portal shows that code, marked as not resolved, wherever the disease is displayed. The row is created, and from there the existing machinery applies: the red indicator in `SubmissionsListing.vue`, the "Show Errors" filter, the field highlighting in `SubmissionItem.vue`, the `ChangeDisease` dialog, and `JobStateMachine::submit()` refusing to submit a job that still has errored records.
 
 This is deliberate: whether a disease identifier maps to MONDO is checked per record, after the rows exist, where the submitter can fix it in place, rather than as an upload-blocking check that rejects a whole file over a handful of rows.
 
@@ -248,7 +248,7 @@ For a successful row, the stored pair is:
 | Submitted identifier | `original_disease_id` | `disease_id` |
 | --- | --- | --- |
 | MONDO | Submitted MONDO row | The same MONDO row |
-| Mapped OMIM | Submitted OMIM row, or the placeholder with an error if no OMIM row exists | Selected MONDO row |
+| Mapped OMIM | Submitted OMIM row, or empty with an error if no OMIM row exists | Selected MONDO row |
 | Mapped Orphanet | Submitted Orphanet row | Selected MONDO row |
 
 ## Observed data

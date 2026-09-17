@@ -83,9 +83,9 @@ class SubmissionDiseaseResolutionTest extends TestCase
 
     /**
      * An Orphanet term with no exact MONDO equivalent is rejected: the row is
-     * created against the placeholder disease and carries a blocking
-     * disease_curie_id error naming the code that was submitted, which the job
-     * UI shows and JobStateMachine::submit() blocks on.
+     * created with no disease and carries a blocking disease_curie_id error
+     * naming the code that was submitted, which the job UI shows and
+     * JobStateMachine::submit() blocks on.
      *
      * This is the case that used to resolve to the Orphanet term itself.
      */
@@ -100,7 +100,8 @@ class SubmissionDiseaseResolutionTest extends TestCase
                 $this->assertArrayHasKey('disease_curie_id', $result);
                 $this->assertStringContainsString($submitted, $result['disease_curie_id'],
                     'The error must name the code that was submitted');
-                $this->assertEquals($this->mondo->id, $submission->disease_id, "'{$submitted}' ({$mode}) falls back to the placeholder");
+                $this->assertNull($submission->disease_id, "'{$submitted}' ({$mode}) stores no disease");
+                $this->assertNull($submission->original_disease_id, "'{$submitted}' ({$mode}) stores no original disease");
             }
         }
     }
@@ -121,8 +122,7 @@ class SubmissionDiseaseResolutionTest extends TestCase
     }
 
     /**
-     * An unresolvable identifier still errors, and falls back to the
-     * placeholder disease.
+     * An unresolvable identifier errors and stores no disease.
      */
     public function test_unknown_disease_id_reports_an_error(): void
     {
@@ -132,8 +132,55 @@ class SubmissionDiseaseResolutionTest extends TestCase
 
             $this->assertIsArray($result, "({$mode}) should report errors");
             $this->assertArrayHasKey('disease_curie_id', $result);
-            $this->assertEquals($this->mondo->id, $submission->disease_id, "({$mode}) falls back to MONDO:0000001");
+            $this->assertNull($submission->disease_id, "({$mode}) stores no disease");
         }
+    }
+
+    /**
+     * Every reference field that does not resolve is left empty, with an error
+     * naming what was submitted.  No stand-in record is stored: HP:0000005 in
+     * particular is a real "Unknown" answer, not a placeholder.
+     */
+    public function test_unresolved_reference_fields_store_nothing(): void
+    {
+        // The rows that used to be stored as stand-ins exist, as in production
+        Gene::factory()->create(['hgnc_id' => '', 'symbol' => '-']);
+        Inheritance::create([
+            'curie' => 'HP:0000005',
+            'name' => 'Unknown',
+            'description' => 'Test inheritance',
+            'abbreviation' => 'Unknown',
+            'type' => Inheritance::TYPE_MOI,
+            'status' => Inheritance::STATUS_ACTIVE,
+        ]);
+
+        foreach ($this->resolverModes() as $mode => $lookupCaches) {
+            $packet = $this->submissionPacket('Orphanet:999999');
+            $packet->gene->id = 'HGNC:99999999';
+            $packet->moi->id = 'HP:9999999';
+            $packet->classification->id = 'GENCC:999999';
+
+            $submission = new Submission();
+            $result = $submission->load_from_json($packet, $lookupCaches);
+
+            $this->assertSame([
+                'gene_hgnc_id' => "Invalid HGNC ID 'HGNC:99999999'",
+                'disease_curie_id' => "No exact MONDO equivalent for Disease ID 'Orphanet:999999'",
+                'moi_curie_id' => "Invalid MOI ID 'HP:9999999'",
+                'classification_curie_id' => "Invalid Classification ID 'GENCC:999999'",
+            ], array_intersect_key($result, array_flip(['gene_hgnc_id', 'disease_curie_id', 'moi_curie_id', 'classification_curie_id'])), $mode);
+
+            foreach (['gene_id', 'disease_id', 'original_disease_id', 'inheritance_id', 'classification_id'] as $column) {
+                $this->assertNull($submission->{$column}, "({$mode}) {$column}");
+            }
+        }
+
+        // A missing value is reported as missing
+        $packet = $this->submissionPacket('MONDO:0000001');
+        unset($packet->gene, $packet->moi);
+        $result = (new Submission())->load_from_json($packet);
+        $this->assertSame('Missing HGNC ID', $result['gene_hgnc_id']);
+        $this->assertSame('Missing MOI ID', $result['moi_curie_id']);
     }
 
     /**

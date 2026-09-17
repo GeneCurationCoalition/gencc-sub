@@ -783,6 +783,13 @@ class Submission extends Model
         // clear the errors
         $this->errors_bag = [];
 
+        /*
+         * A field that does not resolve is left null and recorded in the errors
+         * bag, with a message naming what was submitted.  No stand-in record is
+         * stored: the portal shows the submitted value from submission_data
+         * instead, so a record never appears to hold a value it does not have.
+         */
+
         /**
          * Assert the gene lookup by HGNC ID.  If invalid, add to the errors_bag
          */
@@ -793,9 +800,8 @@ class Submission extends Model
             // Fallback to database query
             $gene = isset($obj->gene->id) ? Gene::hgnc_id($obj->gene->id)->first() : null;
         }
-        $this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id', 'Invalid HGNC ID');
-        if ($this->gene_id === null)
-            $this->gene_id = $lookupCaches['defaults']['gene_id'] ?? Gene::symbol('-')->first()->id;
+        $this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id',
+            self::unresolvedMessage('HGNC ID', $obj->gene->id ?? null));
 
         /**
          * Assert the disease lookup by ID.  If invalid, add to the errors_bag
@@ -834,13 +840,9 @@ class Submission extends Model
             $mondoDisease === null
                 ? $unresolvedMessage
                 : "Disease ID '{$submittedCurie}' has no record of its own; submit {$mondoDisease->curie} instead");
-        if ($this->original_disease_id === null)
-            $this->original_disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
 
         // Set disease_id (normalized to MONDO)
         $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', $unresolvedMessage);
-        if ($this->disease_id === null)
-            $this->disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
 
         // Note: Deprecated diseases are allowed in submissions
         // The UI shows a warning symbol (⚠) to indicate deprecated status
@@ -855,9 +857,8 @@ class Submission extends Model
             // Fallback to database query
             $moi = isset($obj->moi->id) ? Inheritance::curie($obj->moi->id)->first() : null;
         }
-        $this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id', 'Invalid MOI ID');
-        if ($this->inheritance_id === null)
-            $this->inheritance_id = $lookupCaches['defaults']['moi_id'] ?? Inheritance::curie('HP:0000005')->first()->id;
+        $this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id',
+            self::unresolvedMessage('MOI ID', $obj->moi->id ?? null));
 
         /**
          * Assert the classification lookup by ID.  If invalid, add to the errors_bag
@@ -869,8 +870,8 @@ class Submission extends Model
             // Fallback to database query
             $classification = isset($obj->classification->id) ? Classification::curie($obj->classification->id)->first() : null;
         }
-        $this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id', 'Invalid Classification ID');
-        // classification_id can remain null if invalid - file validation prevents invalid data from being imported
+        $this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id',
+            self::unresolvedMessage('Classification ID', $obj->classification->id ?? null));
 
         /**
          * Assert the mechanism lookup by ID.  If invalid, add to the errors_bag
@@ -1017,6 +1018,17 @@ class Submission extends Model
      * @params string $errormsg
      * @rerurn string 
      */
+    /**
+     * The error for a reference field that did not resolve, naming what was
+     * submitted so the portal can show it in place of the missing record.
+     */
+    private static function unresolvedMessage(string $label, $submitted): string
+    {
+        $submitted = trim((string) $submitted);
+
+        return $submitted === '' ? "Missing {$label}" : "Invalid {$label} '{$submitted}'";
+    }
+
     protected function asserterrors($element, $errortype, $errormsg)
     {
         if (empty($element))

@@ -235,7 +235,7 @@ The submission model validates against:
 - **Report URL**: Optional, must be valid URL format
 - **PMIDs**: Validated as numeric, automatically fetched via PubMed API
 
-Invalid values are added to `submission_errors` JSON field and default placeholder values are used.
+Invalid values are added to the `submission_errors` JSON field, naming the submitted value, and the unresolved reference column (gene, disease, MOI, classification) is left null. The portal shows the submitted value from `submission_data`, marked as not resolved (`resources/js/utils/submissionFields.js`); never store a stand-in record.
 
 ### ID Generation
 

@@ -87,10 +87,6 @@
     function initializeInput()
     {
         disease.value = props.input;
-
-        // 001 is only used as a placeholder.  don't let it into the dialog
-        if (disease.value == "MONDO:0000001")
-            disease.value = "";
     }
 
 </script>
