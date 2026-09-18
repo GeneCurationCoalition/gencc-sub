@@ -21,7 +21,7 @@ use App\Models\Classification;
 use App\Models\Mechanism;
 use App\Services\DiseaseResolver;
 use App\Services\SubmissionFileValidation;
-use App\Services\SubmittedDate;
+use App\Services\SubmissionDuplicateDetection;
 
 use App\Jobs\ProcessUpload;
 use App\Jobs\ProcessSubmissionsUpload;
@@ -204,12 +204,9 @@ class DocumentController extends Controller
         if ($validationResult['has_errors']) {
             \Log::error('DocumentController@store: Validation failed for document: ' . $document->id);
 
-            // Warnings are kept with the errors so they survive a reload.  A
-            // rejected file never changes, so neither can go stale; the job page
-            // separates them again by severity.
             $document->update([
                 'upload_state' => Document::UPLOAD_STATE_VALIDATION_FAILED,
-                'processing_errors' => array_merge($validationResult['errors'], $validationResult['warnings'] ?? [])
+                'processing_errors' => $validationResult['errors'],
             ]);
 
             // Send validation error event
@@ -228,7 +225,7 @@ class DocumentController extends Controller
                 'results' => false,
                 'document_id' => $document->id,
                 'errors' => $validationResult['errors'],
-                'warnings' => $validationResult['warnings'] ?? []
+                'warnings' => [],
             ], 422);
         }
 
@@ -494,7 +491,43 @@ class DocumentController extends Controller
         try {
             // Import raw data for header validation
             $rawWorksheets = Excel::toArray([], $tempPath);
+            if (empty($rawWorksheets) || !isset($rawWorksheets[0])) {
+                return [
+                    'has_errors' => true,
+                    'errors' => [[
+                        'error_type' => 'invalid_file_format',
+                        'severity' => 'fatal',
+                        'is_file_format_error' => true,
+                        'user_title' => 'Invalid File Format',
+                        'user_message' => 'The uploaded workbook does not contain a readable submission worksheet.',
+                        'message' => 'No readable first worksheet was found.',
+                        'rows' => 'N/A',
+                    ]],
+                    'warnings' => [],
+                    'row_count' => 0,
+                ];
+            }
             $rawFirstsheet = collect($rawWorksheets[0]);
+        } catch (\Throwable $e) {
+            \Log::warning('DocumentController@validateFile: Spreadsheet could not be parsed', [
+                'document_id' => $document->id,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return [
+                'has_errors' => true,
+                'errors' => [[
+                    'error_type' => 'invalid_file_format',
+                    'severity' => 'fatal',
+                    'is_file_format_error' => true,
+                    'user_title' => 'Invalid File Format',
+                    'user_message' => 'The uploaded file could not be read as a GenCC submission workbook.',
+                    'message' => 'The spreadsheet reader could not parse the uploaded file.',
+                    'rows' => 'N/A',
+                ]],
+                'warnings' => [],
+                'row_count' => 0,
+            ];
         } finally {
             // Always clean up temp file
             $this->cleanupTempFile($tempPath);
@@ -511,18 +544,16 @@ class DocumentController extends Controller
 
         \Log::info('DocumentController@validateFile: Row count (non-empty data rows after header): ' . $rowCount);
 
-        // Validate spreadsheet headers and data
-        // Skip PMID fetching during upload - PMIDs will be refreshed later
-        $validation_errors = SubmissionFileValidation::validate_spreadsheet($rawWorksheets[0], $document->submitter_id, true);
+        // Only reject files that cannot be interpreted safely. Content issues
+        // are attached to the individual records created by parser().
+        $validation_errors = SubmissionFileValidation::validate_upload_gate(
+            $rawWorksheets[0],
+            $document->submitter_id
+        );
 
         if (!empty($validation_errors)) {
-            // Separate blocking errors from warnings
-            // array_values() reindexes to ensure JSON serializes as array, not object
-            $errors = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning'));
-            $warnings = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning'));
-
-            // Errors and warnings share one shape, so the frontend renders both
-            // the same way, including grouped column details
+            // The upload gate emits blocking file/operation errors only. Keep
+            // grouped details and file-format guidance for the error display.
             $format = function($result) {
                 $formatted = [
                     'error_type' => $result['error_type'] ?? 'validation_error',
@@ -541,11 +572,6 @@ class DocumentController extends Controller
                     $formatted['details'] = $result['details'];
                 }
 
-                // Preserve whether a warning's rows would block submitting the job
-                if (!empty($result['blocks_submission'])) {
-                    $formatted['blocks_submission'] = true;
-                }
-
                 // Preserve file format error fields for frontend display
                 if (!empty($result['is_file_format_error'])) {
                     $formatted['is_file_format_error'] = true;
@@ -560,30 +586,11 @@ class DocumentController extends Controller
                 return $formatted;
             };
 
-            $formattedWarnings = array_map($format, $warnings);
-
-            if (!empty($errors)) {
-                return [
-                    'has_errors' => true,
-                    'errors' => array_map($format, $errors),
-                    'warnings' => $formattedWarnings,
-                    'row_count' => $rowCount
-                ];
-            }
-        }
-
-        // Check for empty file (no valid submission rows)
-        if ($rowCount === 0) {
-            \Log::error('DocumentController@validateFile: File contains no valid submissions');
             return [
                 'has_errors' => true,
-                'errors' => [[
-                    'error_type' => 'validation_error',
-                    'severity' => 'error',
-                    'message' => 'File contains no valid submission rows',
-                    'rows' => 'N/A'
-                ]],
-                'row_count' => 0
+                'errors' => array_map($format, array_values($validation_errors)),
+                'warnings' => [],
+                'row_count' => $rowCount,
             ];
         }
 
@@ -592,7 +599,7 @@ class DocumentController extends Controller
         return [
             'has_errors' => false,
             'errors' => null,
-            'warnings' => $formattedWarnings ?? [],
+            'warnings' => [],
             'row_count' => $rowCount
         ];
     }
@@ -949,19 +956,20 @@ class DocumentController extends Controller
             $data->hp_id = $row['moi_id'];
             $data->moi_name = $row['moi_name'];
 
-            // Excel dates arrive as a day count, so SubmittedDate reads both
-            // those and the accepted text forms; file validation rejected
-            // anything else before these rows were created
-            $date = SubmittedDate::usable($row['date']);
-
-            $data->report_date = $date;
+            // Pass the raw cell through the shared record validator. It accepts
+            // Excel day counts and supported text forms while retaining invalid
+            // input in submission_data for an actionable record error.
+            $data->report_date = $row['date'];
             $data->report_url = $row['public_report_url'];
             $data->gencc_classification_id = $row['classification_id'];
             $data->gencc_classification_name = $row['classification_name'];
             $data->criteria_url = $row['assertion_criteria_url'];
 
-            // deal with some accidental separators
-            $data->evidence_items = $this->process_pmids($row['pmids']);
+            // Preserve the raw cell through record validation. PmidNormalizer
+            // will retain valid IDs and attach cleanup/removal reasons to this
+            // submission; pre-cleaning here used to discard those warnings.
+            $rawPmids = trim((string) $row['pmids']);
+            $data->evidence_items = $rawPmids === '' ? [] : [$rawPmids];
 
             $data->notes_display = $row['notes'];
             $data->notes_private = "File " . $document->file_name . " Row " . $rownum;
@@ -1036,6 +1044,31 @@ class DocumentController extends Controller
             } else {
                 // For New (N) and Republish (R) actions, load data from spreadsheet
                 $status = $submission->load_from_json($obj, $lookupCaches);
+                $recordErrors = $status === true ? [] : $status;
+
+                // A conflict with an existing submission is a record-content
+                // problem, not a reason to reject every row in the file. The
+                // same service is used by portal edits. Intra-file duplicate
+                // keys were already rejected by the upload gate.
+                $duplicateCheck = SubmissionDuplicateDetection::checkForDuplicates(
+                    $document->submitter_id,
+                    $submission->gene_id,
+                    $submission->original_disease_id,
+                    $submission->inheritance_id,
+                    $action === 'R'
+                        ? array_filter([
+                            $originalSubmission->id ?? null,
+                            $submission->exists ? $submission->id : null,
+                        ])
+                        : ($submission->id ?? null)
+                );
+                if ($duplicateCheck['has_blocking_duplicate']) {
+                    $recordErrors['duplicate_submission'] = SubmissionDuplicateDetection::formatBlockingErrorMessage(
+                        $duplicateCheck['blocking_duplicates']->first()
+                    );
+                }
+
+                $status = empty($recordErrors) ? true : $recordErrors;
                 if ($status === true)
                 {
                     $submission->user_id = $document->user_id;
@@ -1217,17 +1250,6 @@ class DocumentController extends Controller
      * list is all over the place.  Some use ; as a separator.  Some include
      * [PMID].  Some include _.  This function attempts to clean it all up.
      */
-    public function process_pmids($list)
-    {
-        if (empty(trim($list))) {
-            return [];
-        }
-
-        $result = \App\Services\PmidNormalizer::normalize($list);
-        return $result['pmids'];
-    }
-
-
     /**
      * Get error report as JSON for a document
      */

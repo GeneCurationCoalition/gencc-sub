@@ -363,6 +363,17 @@
         toast.add({ severity: 'error', summary: 'Update failed', detail, life: 8000 });
     }
 
+    function safeWebUrl(value) {
+        if (typeof value !== 'string' || value.trim() === '') return null;
+
+        try {
+            const url = new URL(value);
+            return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+        } catch {
+            return null;
+        }
+    }
+
     // query the server for the entry given
     async function checkEntry() {
         try {
@@ -603,8 +614,12 @@
                 // close the dialog
                 showEvidenceDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -663,8 +678,12 @@
                 // close the dialog
                 showCriteriaDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -1507,12 +1526,12 @@ console.log(props.submission)
                         <!-- report url -->
                         <div class="col-span-2 pt-3 text-right pr-3">Public Report:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3" :class="hasProperty('report_url') ? 'border-2 border-red-600' : ''">
-                            <div v-show="submission.report_url" class="font-normal"><a class="underline" id='click-exit-public-report' target="_blank" v-bind:href="submission.report_url">Click here to view the public report <i class="fas fa-external-link-alt"></i></a></div>
-                            <div class="text-xs">{{ submission.report_url }}</div>
+                            <div v-if="safeWebUrl(submission.report_url)" class="font-normal"><a class="underline" id='click-exit-public-report' target="_blank" rel="noopener noreferrer" v-bind:href="safeWebUrl(submission.report_url)">Click here to view the public report <i class="fas fa-external-link-alt"></i></a></div>
+                            <div class="text-xs">{{ submission.report_url || submission.submission_data?.report?.ext_url || '' }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Evaluated Date:</div>
                         <div class="col-span-4 py-1 my-2 border-l-8 pl-3" :class="hasProperty('report_date') ? 'border-2 border-red-600' : ''">
-                            <div class="font-normal">{{ submission.report_date ? new Date(Date.parse(submission.report_date)).toISOString().split('T')[0] : '' }}</div>
+                            <div class="font-normal">{{ submission.report_date ? new Date(Date.parse(submission.report_date)).toISOString().split('T')[0] : (submission.submission_data?.report?.display_date || '') }}</div>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('report_url') || hasProperty('report_date')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('report')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
@@ -1525,7 +1544,7 @@ console.log(props.submission)
                         <!-- assertion criteria -->
                         <div class="col-span-2 pt-3 text-right pr-3">Assertion Criteria:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3" :class="hasProperty('criteria_url') ? 'border-2 border-red-600' : ''">
-                            <div v-show="submission.submission_data?.criteria?.url" class="font-normal"><a class="underline" id='click-exit-assertion-criteria' target="_blank" v-bind:href="submission.submission_data?.criteria?.url">Click here to view assertion criteria <i class="fas fa-external-link-alt"></i></a></div>
+                            <div v-if="safeWebUrl(submission.submission_data?.criteria?.url) && !hasProperty('criteria_url')" class="font-normal"><a class="underline" id='click-exit-assertion-criteria' target="_blank" rel="noopener noreferrer" v-bind:href="safeWebUrl(submission.submission_data?.criteria?.url)">Click here to view assertion criteria <i class="fas fa-external-link-alt"></i></a></div>
                             <div class="text-xs">{{ submission.submission_data?.criteria?.url }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Name:</div>

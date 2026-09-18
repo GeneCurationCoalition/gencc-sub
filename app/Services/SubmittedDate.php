@@ -37,7 +37,7 @@ class SubmittedDate
     private const DATE_PATTERN = '/^(\d{4})[-\/](\d{2})[-\/](\d{2})$/';
 
     private const ISO_TIMESTAMP_PATTERN = '/\A(\d{4})-(\d{2})-(\d{2})[T ](?:[01]\d|2[0-3]):[0-5]\d'
-        .'(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?\z/';
+        .'(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:(?:0\d|1[0-3]):[0-5]\d|14:00))?\z/';
 
     /**
      * The date a submitted value spells, or null when it spells none.  Whether

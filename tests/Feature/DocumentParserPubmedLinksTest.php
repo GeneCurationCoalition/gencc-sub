@@ -70,6 +70,10 @@ class DocumentParserPubmedLinksTest extends TestCase
         $this->parse([$this->row('N', pmids: '111, 222')]);
 
         $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame(['111', '222'], array_column(
+            json_decode(json_encode($created->submission_data->evidence), true),
+            'pmid'
+        ));
         $this->assertSame(['111', '222'], $this->linkedPmids($created));
     }
 
@@ -113,6 +117,81 @@ class DocumentParserPubmedLinksTest extends TestCase
         $this->assertSame(['222', '333'], $this->linkedPmids($original));
     }
 
+    public function test_record_validation_preserves_pmid_cleanup_warnings_from_the_raw_cell(): void
+    {
+        $this->parse([$this->row('N', pmids: '111; NULL; not-a-pmid')]);
+
+        $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame(['111'], $this->linkedPmids($created));
+        $this->assertSame(['literal_null', 'non_numeric'], array_column($created->pmid_issues, 'reason'));
+    }
+
+    public function test_content_errors_create_an_editable_record_with_submission_errors(): void
+    {
+        $this->parse([$this->row('N', overrides: [
+            'hgnc_id' => '',
+            'disease_id' => 'NOT_A_DISEASE',
+            'moi_id' => 'HP:9999999',
+            'classification_id' => 'GENCC:999999',
+            'date' => '2024-02-30',
+            'public_report_url' => 'not-a-url',
+            'pmids' => 'not-a-pmid',
+            'assertion_criteria_url' => 'not-a-url',
+        ])]);
+
+        $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame(Submission::STATUS_DRAFT_NEW, $created->status);
+        $this->assertSame('2024-02-30', $created->submission_data->report->display_date);
+        $this->assertStringContainsString(
+            'Not a date',
+            $created->submission_errors->report_date
+        );
+        $this->assertEqualsCanonicalizing([
+            'gene_hgnc_id',
+            'disease_curie_id',
+            'moi_curie_id',
+            'classification_curie_id',
+            'report_date',
+            'report_url',
+            'criteria_url',
+            'invalid_pmid',
+        ], array_keys((array) $created->submission_errors));
+    }
+
+    public function test_existing_duplicate_becomes_a_record_error_instead_of_preventing_creation(): void
+    {
+        $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();
+        $disease = Disease::where('curie', 'MONDO:0000002')->firstOrFail();
+        $inheritance = Inheritance::where('curie', 'HP:0000006')->firstOrFail();
+
+        $existing = Submission::factory()->create([
+            'submitter_id' => $this->submitter->id,
+            'gene_id' => $gene->id,
+            'disease_id' => $disease->id,
+            'original_disease_id' => $disease->id,
+            'inheritance_id' => $inheritance->id,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
+        ]);
+
+        $this->parse([$this->row('N')]);
+
+        $created = Submission::where('id', '!=', $existing->id)->where('job_id', $this->job->id)->sole();
+        $this->assertArrayHasKey('duplicate_submission', (array) $created->submission_errors);
+    }
+
+    public function test_invalid_date_keeps_the_submitted_value_and_specific_reason(): void
+    {
+        $this->parse([$this->row('N', overrides: ['date' => '2999-01-01'])]);
+
+        $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame('2999-01-01', $created->submission_data->report->display_date);
+        $this->assertStringContainsString(
+            'outside the allowed date range',
+            $created->submission_errors->report_date
+        );
+    }
+
     private function publishedSubmission(string $sid, array $pmids): Submission
     {
         $submission = Submission::factory()->create([
@@ -132,13 +211,13 @@ class DocumentParserPubmedLinksTest extends TestCase
     /**
      * A data row; an unpublish row carries only its action and SGC ID.
      */
-    private function row(string $action, string $sgcId = '', string $pmids = ''): array
+    private function row(string $action, string $sgcId = '', string $pmids = '', array $overrides = []): array
     {
         if ($action === 'U') {
             return array_merge(array_fill_keys(self::COLUMNS, ''), ['sgc_id' => $sgcId, 'action' => 'U']);
         }
 
-        return [
+        return array_replace([
             'sgc_id' => $sgcId,
             'action' => $action,
             'local_key' => '',
@@ -157,7 +236,7 @@ class DocumentParserPubmedLinksTest extends TestCase
             'notes' => '',
             'pmids' => $pmids,
             'assertion_criteria_url' => 'https://example.com/criteria',
-        ];
+        ], $overrides);
     }
 
     /**

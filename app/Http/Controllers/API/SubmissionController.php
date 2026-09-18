@@ -6,10 +6,6 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
-use App\Models\Disease;
-use App\Models\Inheritance;
-use App\Models\Gene;
-use App\Models\Classification;
 use App\Models\Submission;
 use App\Models\Submitter;
 use App\Models\Alias;
@@ -26,10 +22,9 @@ use App\Models\Action;
 use App\Jobs\ProcessPubmed;
 
 use App\Services\SubmissionStateMachine;
-use App\Services\DiseaseMappingAmbiguity;
 use App\Services\JobStateMachine;
-use App\Services\SubmittedDate;
 use App\Services\SubmissionDuplicateDetection;
+use App\Services\SubmissionValueValidation;
 use App\Exports\SubmissionsTemplateExport;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
@@ -172,7 +167,8 @@ class SubmissionController extends Controller
         switch ($type)
         {
             case 'inheritance':
-                $inheritance = Inheritance::curie($request->input('curie'))->first();
+                $inheritanceValidation = SubmissionValueValidation::inheritance($request->input('curie'));
+                $inheritance = $inheritanceValidation['record'];
 
                 if ($inheritance === null)
                     return response()->json(['success' => 'false',
@@ -210,22 +206,18 @@ class SubmissionController extends Controller
                     ];
                 }
 
-                $bags = ['moi_curie_id'];
+                $bags = ['moi_curie_id', 'duplicate_submission'];
                 break;
             case 'classification':
-                $classification = Classification::curie($request->input('curie'))->first();
+                $classificationValidation = SubmissionValueValidation::classification($request->input('curie'));
+                $classification = $classificationValidation['record'];
 
                 if ($classification === null)
                     return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Classification not found'],
-                        200);
-
-                // Prevent setting "Undefined" classification via API
-                if ($classification->curie === 'GENCC:000000')
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3002,
-                        'message' => 'Undefined classification cannot be selected'],
+                        'status_code' => trim((string) $request->input('curie')) === 'GENCC:000000' ? 3002 : 3001,
+                        'message' => trim((string) $request->input('curie')) === 'GENCC:000000'
+                            ? $classificationValidation['error']
+                            : 'Classification not found'],
                         200);
 
                 // update the submission disease
@@ -238,16 +230,18 @@ class SubmissionController extends Controller
 
                 // One resolution yields both disease references the submission
                 // stores, under the same rules the upload path applies
-                $resolution = Disease::resolver()->resolveDetailed($uploadedCurie);
+                $diseaseValidation = SubmissionValueValidation::disease($uploadedCurie);
 
-                if ($resolution instanceof DiseaseMappingAmbiguity || $resolution === null || $resolution->original === null)
+                if ($diseaseValidation['error'] !== null || $diseaseValidation['original'] === null)
                     return response()->json(['success' => 'false',
                         'status_code' => 3001,
-                        'message' => $resolution instanceof DiseaseMappingAmbiguity ? $resolution->message($uploadedCurie) : 'Disease not found'],
+                        'message' => $diseaseValidation['ambiguity'] !== null
+                            ? $diseaseValidation['error']
+                            : 'Disease not found'],
                         200);
 
-                $originalDisease = $resolution->original;
-                $mondoDisease = $resolution->mondo;
+                $originalDisease = $diseaseValidation['original'];
+                $mondoDisease = $diseaseValidation['mondo'];
 
                 // Check for duplicate gene-disease-MOI combination
                 $duplicateCheck = SubmissionDuplicateDetection::checkForDuplicates(
@@ -282,7 +276,7 @@ class SubmissionController extends Controller
                     ];
                 }
 
-                $bags = ['disease_curie_id'];
+                $bags = ['disease_curie_id', 'duplicate_submission'];
                 break;
             case 'gene':
                 // Prevent gene changes on republished submissions
@@ -298,7 +292,8 @@ class SubmissionController extends Controller
                         200);
                 }
 
-                $gene = Gene::hgnc_id($request->input('curie'))->first();
+                $geneValidation = SubmissionValueValidation::gene($request->input('curie'));
+                $gene = $geneValidation['record'];
 
                 if ($gene === null)
                     return response()->json(['success' => 'false',
@@ -337,7 +332,7 @@ class SubmissionController extends Controller
                     ];
                 }
 
-                $bags = ['gene_hgnc_id'];
+                $bags = ['gene_hgnc_id', 'duplicate_submission'];
                 break;
             case 'mechanism_of_disease':
                 $curie = $request->input('curie');
@@ -399,40 +394,34 @@ class SubmissionController extends Controller
                 break;
             case 'evidence':
                 $submission_data = $submission->submission_data;
-                $newevidence = [];
-                $subevidence = [];
-                if ($request->input('evidence') !== null)
-                {
-                    foreach ($request->input('evidence') as $pmid)
-                    {
-                        if (empty($pmid))
-                            continue;
+                $rawPmids = array_map(
+                    fn ($pmid) => trim((string) $pmid),
+                    (array) ($request->input('evidence', []) ?? [])
+                );
+                $rawPmids = array_values(array_filter($rawPmids, fn ($pmid) => $pmid !== ''));
+                $normResult = SubmissionValueValidation::pmids($rawPmids);
 
-                        $pmid =  (stripos($pmid, "PMID:") === 0 ? substr($pmid, 5) : $pmid);
-
-                        $pmid = trim($pmid);
-            
-                        if (!is_numeric($pmid))
-                        {
-                            // add to error bag
-                            continue;
-                        }
-            
-                        $newevidence[] = ['pmid' => $pmid];
-                        $subevidence[] = $pmid;
-
-                        // if pmid is not in pubmed table, add it.
-                        $pmid = Pubmed::firstOrCreate(['pmid' => $pmid, 'uid' => $pmid],
-                                                    ['status' => Pubmed::STATUS_INITIALIZING ]);
-
-
-                    }
+                if ($normResult['error'] !== null) {
+                    return response()->json(['success' => 'false',
+                        'status_code' => 3006,
+                        'message' => $normResult['error']],
+                        200);
                 }
 
-                // Store normalized PMID data
-                $allPmids = implode(',', $pmids);
-                $normResult = \App\Services\PmidNormalizer::normalize($allPmids);
-                $submission->normalized_pmids = !empty($normResult['pmids']) ? implode(',', $normResult['pmids']) : null;
+                $subevidence = $normResult['pmids'];
+                $newevidence = array_map(
+                    fn ($pmid) => ['pmid' => $pmid],
+                    $subevidence
+                );
+
+                foreach ($subevidence as $pmid) {
+                    Pubmed::firstOrCreate(
+                        ['pmid' => $pmid, 'uid' => $pmid],
+                        ['status' => Pubmed::STATUS_INITIALIZING]
+                    );
+                }
+
+                $submission->normalized_pmids = !empty($subevidence) ? implode(',', $subevidence) : null;
                 $submission->pmid_issues = !empty($normResult['issues']) ? $normResult['issues'] : null;
 
                 $submission->evidence = $subevidence;
@@ -464,28 +453,42 @@ class SubmissionController extends Controller
                 $bags = ['invalid_pmid'];
                 break;
             case 'report':
-                $reportDate = SubmittedDate::usable($request->input('date'));
+                $dateValidation = SubmissionValueValidation::reportDate($request->input('date'));
 
-                if ($reportDate === null)
+                if ($dateValidation['error'] !== null)
                     return response()->json(['success' => 'false',
                         'status_code' => 3003,
-                        'message' => 'Invalid report date: '.SubmittedDate::rejectionReason($request->input('date'))],
+                        'message' => $dateValidation['error']],
                         200);
 
-                $submission->report_url = $request->input('curie');
-                $submission->report_date = $reportDate;
+                $reportUrlValidation = SubmissionValueValidation::url($request->input('curie'), 'Report URL', false);
+                if ($reportUrlValidation['error'] !== null)
+                    return response()->json(['success' => 'false',
+                        'status_code' => 3004,
+                        'message' => $reportUrlValidation['error']],
+                        200);
+
+                $submission->report_url = $reportUrlValidation['value'];
+                $submission->report_date = $dateValidation['value'];
                 $submission_data = $submission->submission_data;
                 $report = $submission_data->report;
-                $report->ext_url = $request->input('curie');
+                $report->ext_url = $reportUrlValidation['value'];
                 $report->display_date = $request->input('date');
                 $submission_data->report = $report;
                 $submission->submission_data = $submission_data;
                 $bags = ['report_url' , 'report_date'];
                 break;
             case 'criteria':
+                $criteriaUrlValidation = SubmissionValueValidation::url($request->input('url'), 'Criteria URL', true);
+                if ($criteriaUrlValidation['error'] !== null)
+                    return response()->json(['success' => 'false',
+                        'status_code' => 3005,
+                        'message' => $criteriaUrlValidation['error']],
+                        200);
+
                 $submission_data = $submission->submission_data;
                 $criteria = $submission_data->criteria;
-                $criteria->url = $request->input('url');
+                $criteria->url = $criteriaUrlValidation['value'];
                 $criteria->name = $request->input('name');
                 $submission_data->criteria = $criteria;
                 $submission->submission_data = $submission_data;

@@ -165,7 +165,9 @@ const ISSUE_LABELS = {
     mechanism_of_disease: 'Mechanism of Disease',
     report_date: 'Evaluated Date',
     report_url: 'Public Report',
+    criteria_url: 'Assertion Criteria',
     invalid_pmid: 'PMIDs',
+    duplicate_submission: 'Duplicate Submission',
 };
 
 // Issues recorded on this job's submissions, grouped by field and then by

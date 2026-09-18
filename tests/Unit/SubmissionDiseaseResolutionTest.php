@@ -157,6 +157,40 @@ class SubmissionDiseaseResolutionTest extends TestCase
         }
     }
 
+    public function test_record_validation_uses_the_same_url_rules_as_portal_edits(): void
+    {
+        $packet = $this->submissionPacket('MONDO:0000001');
+        $packet->report->ext_url = 'not-a-url';
+        $packet->criteria->url = 'also-not-a-url';
+
+        $result = (new Submission())->load_from_json($packet);
+
+        $this->assertSame('Invalid Report URL', $result['report_url']);
+        $this->assertSame('Invalid Criteria URL', $result['criteria_url']);
+    }
+
+    public function test_record_validation_rejects_non_web_urls(): void
+    {
+        $packet = $this->submissionPacket('MONDO:0000001');
+        $packet->report->ext_url = 'ftp://example.com/report';
+        $packet->criteria->url = 'ftp://example.com/criteria';
+
+        $result = (new Submission())->load_from_json($packet);
+
+        $this->assertSame('Invalid Report URL', $result['report_url']);
+        $this->assertSame('Invalid Criteria URL', $result['criteria_url']);
+    }
+
+    public function test_missing_criteria_url_is_a_record_error(): void
+    {
+        $packet = $this->submissionPacket('MONDO:0000001');
+        $packet->criteria->url = '';
+
+        $result = (new Submission())->load_from_json($packet);
+
+        $this->assertSame('Missing Criteria URL', $result['criteria_url']);
+    }
+
     /**
      * Every reference field that does not resolve is left empty, with an error
      * naming what was submitted.  No stand-in record is stored: HP:0000005 in
@@ -229,6 +263,7 @@ class SubmissionDiseaseResolutionTest extends TestCase
             'moi' => ['id' => 'HP:0000006'],
             'classification' => ['id' => 'GENCC:100001'],
             'report' => ['display_date' => '2024-01-15', 'ext_url' => 'https://example.com/report'],
+            'criteria' => ['url' => 'https://example.com/criteria'],
         ]));
     }
 }

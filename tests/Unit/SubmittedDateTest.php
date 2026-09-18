@@ -57,6 +57,8 @@ class SubmittedDateTest extends TestCase
             'invalid minute' => ['2024-01-15T12:60:00', 'Not a date'],
             'invalid second' => ['2024-01-15T12:30:99', 'Not a date'],
             'invalid offset hour' => ['2024-01-15T12:30:00+99:00', 'Not a date'],
+            'offset beyond ISO limit' => ['2024-01-15T12:30:00+15:00', 'Not a date'],
+            'offset beyond fourteen exactly' => ['2024-01-15T12:30:00-14:01', 'Not a date'],
             'invalid offset minute' => ['2024-01-15T12:30:00+01:60', 'Not a date'],
             'trailing junk' => ['2024-01-15T12:30:00Zjunk', 'Not a date'],
             'incomplete seconds' => ['2024-01-15T12:30:', 'Not a date'],

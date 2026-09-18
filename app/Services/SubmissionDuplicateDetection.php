@@ -26,7 +26,7 @@ class SubmissionDuplicateDetection
      * @param int|null $geneId The gene ID to check
      * @param int|null $originalDiseaseId The original disease ID to check
      * @param int|null $inheritanceId The inheritance/MOI ID to check
-     * @param int|null $excludeSubmissionId Exclude this submission from check (for updates)
+     * @param int|array<int, int>|null $excludeSubmissionId Exclude one or more submissions from the check
      * @return array ['has_blocking_duplicate' => bool, 'has_unpublished_duplicate' => bool, 'duplicates' => Collection]
      */
     public static function checkForDuplicates(
@@ -34,7 +34,7 @@ class SubmissionDuplicateDetection
         ?int $geneId,
         ?int $originalDiseaseId,
         ?int $inheritanceId,
-        ?int $excludeSubmissionId = null
+        int|array|null $excludeSubmissionId = null
     ): array {
         // If any key field is null, we can't have a meaningful duplicate
         if ($geneId === null || $originalDiseaseId === null || $inheritanceId === null) {
@@ -64,7 +64,10 @@ class SubmissionDuplicateDetection
 
         // Exclude self when checking for updates
         if ($excludeSubmissionId !== null) {
-            $query->where('id', '!=', $excludeSubmissionId);
+            $excludedIds = array_values(array_filter((array) $excludeSubmissionId, fn ($id) => $id !== null));
+            if (!empty($excludedIds)) {
+                $query->whereNotIn('id', $excludedIds);
+            }
         }
 
         $duplicates = $query->get(['id', 'sid', 'status', 'gene_id', 'original_disease_id', 'inheritance_id']);
@@ -167,6 +170,18 @@ class SubmissionDuplicateDetection
         }
 
         return $results;
+    }
+
+    /**
+     * Return duplicate gene-disease-MOI row groups within one incoming batch.
+     * This performs no query against existing submissions and is therefore
+     * suitable for the file-structure gate.
+     *
+     * @return array<int, array<int, int>>
+     */
+    public static function intraBatchDuplicateGroups(array $submissions): array
+    {
+        return array_values(self::findIntraBatchDuplicates($submissions));
     }
 
     /**

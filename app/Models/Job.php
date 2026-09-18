@@ -359,9 +359,8 @@ class Job extends Model
      */
     public function addEvent($str)
     {
-        $activity = $this->activity;
-
-        array_push($activity, $str);
+        $activity = (array) ($this->activity ?? []);
+        $activity[] = $str;
 
         $this->activity = $activity;
     }

@@ -10,8 +10,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 
 use App\Jobs\ProcessPubmed;
-use App\Services\DiseaseMappingAmbiguity;
-use App\Services\SubmittedDate;
+use App\Services\SubmissionValueValidation;
 
 use Auth;
 
@@ -795,15 +794,15 @@ class Submission extends Model
         /**
          * Assert the gene lookup by HGNC ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['genes']) && isset($obj->gene->id)) {
-            // Use cache lookup for performance
-            $gene = $lookupCaches['genes']->get($obj->gene->id);
-        } else {
-            // Fallback to database query
-            $gene = isset($obj->gene->id) ? Gene::hgnc_id($obj->gene->id)->first() : null;
-        }
-        $this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id',
-            self::unresolvedMessage('HGNC ID', $obj->gene->id ?? null));
+        $geneValidation = SubmissionValueValidation::gene(
+            $obj->gene->id ?? null,
+            $lookupCaches['genes'] ?? null
+        );
+        $this->gene_id = $this->asserterrors(
+            $geneValidation['record']?->id,
+            'gene_hgnc_id',
+            $geneValidation['error']
+        );
 
         /**
          * Assert the disease lookup by ID.  If invalid, add to the errors_bag
@@ -823,33 +822,26 @@ class Submission extends Model
          * `disease_curie_id` error naming the code that was submitted, and is
          * fixed in place through the portal's disease dialog.
          */
-        $uploadedDiseaseId = $obj->disease->id ?? null;
-
-        $outcome = $uploadedDiseaseId
-            ? ($lookupCaches['disease_resolver'] ?? Disease::resolver())->resolveDetailed($uploadedDiseaseId)
-            : null;
-        $ambiguity = $outcome instanceof DiseaseMappingAmbiguity ? $outcome : null;
-        $resolution = $ambiguity ? null : $outcome;
-
-        $originalDisease = $resolution?->original;
-        $mondoDisease = $resolution?->mondo;
-
-        $submittedCurie = trim((string) ($uploadedDiseaseId ?? ''));
-        $unresolvedMessage = $submittedCurie === ''
-            ? 'Missing Disease ID'
-            : "No MONDO term found for Disease ID '{$submittedCurie}' (unknown ID, or no exact MONDO match)";
-        if ($ambiguity !== null) {
-            $unresolvedMessage = $ambiguity->message($submittedCurie);
-        }
+        $diseaseValidation = SubmissionValueValidation::disease(
+            $obj->disease->id ?? null,
+            $lookupCaches['disease_resolver'] ?? null
+        );
+        $originalDisease = $diseaseValidation['original'];
+        $mondoDisease = $diseaseValidation['mondo'];
 
         // Set original_disease_id (the exact disease record for uploaded CURIE)
-        $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id',
-            $mondoDisease === null
-                ? $unresolvedMessage
-                : "Disease ID '{$submittedCurie}' has no record of its own; submit {$mondoDisease->curie} instead");
+        $this->original_disease_id = $this->asserterrors(
+            $originalDisease?->id,
+            'disease_curie_id',
+            $diseaseValidation['original_error']
+        );
 
         // Set disease_id (normalized to MONDO)
-        $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', $unresolvedMessage);
+        $this->disease_id = $this->asserterrors(
+            $mondoDisease?->id,
+            'disease_curie_id',
+            $diseaseValidation['error']
+        );
 
         // Note: Deprecated diseases are allowed in submissions
         // The UI shows a warning symbol (⚠) to indicate deprecated status
@@ -857,28 +849,28 @@ class Submission extends Model
         /**
          * Assert the inheritance lookup by ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['moi']) && isset($obj->moi->id)) {
-            // Use cache lookup for performance
-            $moi = $lookupCaches['moi']->get($obj->moi->id);
-        } else {
-            // Fallback to database query
-            $moi = isset($obj->moi->id) ? Inheritance::curie($obj->moi->id)->first() : null;
-        }
-        $this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id',
-            self::unresolvedMessage('MOI ID', $obj->moi->id ?? null));
+        $inheritanceValidation = SubmissionValueValidation::inheritance(
+            $obj->moi->id ?? null,
+            $lookupCaches['moi'] ?? null
+        );
+        $this->inheritance_id = $this->asserterrors(
+            $inheritanceValidation['record']?->id,
+            'moi_curie_id',
+            $inheritanceValidation['error']
+        );
 
         /**
          * Assert the classification lookup by ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['classifications']) && isset($obj->classification->id)) {
-            // Use cache lookup for performance
-            $classification = $lookupCaches['classifications']->get($obj->classification->id);
-        } else {
-            // Fallback to database query
-            $classification = isset($obj->classification->id) ? Classification::curie($obj->classification->id)->first() : null;
-        }
-        $this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id',
-            self::unresolvedMessage('Classification ID', $obj->classification->id ?? null));
+        $classificationValidation = SubmissionValueValidation::classification(
+            $obj->classification->id ?? null,
+            $lookupCaches['classifications'] ?? null
+        );
+        $this->classification_id = $this->asserterrors(
+            $classificationValidation['record']?->id,
+            'classification_curie_id',
+            $classificationValidation['error']
+        );
 
         /**
          * Assert the mechanism lookup by ID.  If invalid, add to the errors_bag
@@ -902,31 +894,31 @@ class Submission extends Model
         /**
          * Assert the report date is present.  If not, add to the errors_bag
          */
-        $submittedDate = $obj->report->display_date ?? null;
-        $this->report_date = $this->asserterrors($submittedDate, 'report_date', 'Missing Report Date');
-        if ($this->report_date !== null)
-        {
-            // One reading of a submitted date, shared with file validation
-            $this->report_date = SubmittedDate::usable($submittedDate);
-            if ($this->report_date === null) {
-                $this->asserterrors(null, 'report_date',
-                    'Invalid Report Date: '.SubmittedDate::rejectionReason($submittedDate));
-            }
-        }
+        $dateValidation = SubmissionValueValidation::reportDate($obj->report->display_date ?? null);
+        $this->report_date = $this->asserterrors(
+            $dateValidation['value'],
+            'report_date',
+            $dateValidation['error']
+        );
         
         /**
          * Assert the report url if present.  If not, add to the errors_bag
          */
         //$this->report_url = $this->asserterrors($obj->report->ext_url ?? null, 'report_url', 'Missing Report URL');
-        $this->report_url = $obj->report->ext_url ?? null;
-        if (!empty($this->report_url))
-        {
-            // we confirm that this is a valid URL, at least in format
-            if(!filter_var($this->report_url, FILTER_VALIDATE_URL))
-            {
-                $this->report_url = null;
-                $this->asserterrors(null, 'report_url', 'Invalid Report URL');
-            }
+        $reportUrlValidation = SubmissionValueValidation::url(
+            $obj->report->ext_url ?? null,
+            'Report URL',
+            false
+        );
+        $this->report_url = $reportUrlValidation['value'];
+        if ($reportUrlValidation['error'] !== null) {
+            $this->asserterrors(null, 'report_url', $reportUrlValidation['error']);
+        }
+
+        $criteriaUrl = $obj->criteria->url ?? null;
+        $criteriaUrlValidation = SubmissionValueValidation::url($criteriaUrl, 'Criteria URL', true);
+        if ($criteriaUrlValidation['error'] !== null) {
+            $this->asserterrors(null, 'criteria_url', $criteriaUrlValidation['error']);
         }
 
         /**
@@ -938,6 +930,12 @@ class Submission extends Model
         /**
          * We also save a copy which can be edited by the user
          */
+        if ($reportUrlValidation['error'] === null && isset($obj->report)) {
+            $obj->report->ext_url = $reportUrlValidation['value'];
+        }
+        if ($criteriaUrlValidation['error'] === null && isset($obj->criteria)) {
+            $obj->criteria->url = $criteriaUrlValidation['value'];
+        }
         $this->submission_data = $obj;
 
 
@@ -953,14 +951,13 @@ class Submission extends Model
             // Collect all raw PMID values from the evidence array
             $rawPmids = [];
             foreach ($this->submission_data->evidence as $evidence) {
-                if (!empty($evidence->pmid)) {
+                if (isset($evidence->pmid) && trim((string) $evidence->pmid) !== '') {
                     $rawPmids[] = $evidence->pmid;
                 }
             }
 
             // Normalize all PMIDs at once
-            $rawString = implode(',', $rawPmids);
-            $normResult = \App\Services\PmidNormalizer::normalize($rawString);
+            $normResult = SubmissionValueValidation::pmids($rawPmids);
 
             // Store normalization results
             $this->normalized_pmids = !empty($normResult['pmids']) ? implode(',', $normResult['pmids']) : null;
@@ -968,8 +965,8 @@ class Submission extends Model
 
             // Only flag as error if there were issues that resulted in lost PMIDs
             // (not just formatting cleanup like [PMID] suffix removal)
-            if (!empty($normResult['issues']) && empty($normResult['pmids']) && !empty($rawPmids)) {
-                $this->asserterrors(null, 'invalid_pmid', 'No valid PMIDs found after normalization');
+            if ($normResult['error'] !== null) {
+                $this->asserterrors(null, 'invalid_pmid', $normResult['error']);
             }
 
             // Build the evidence array and submission_data from normalized PMIDs
@@ -1001,7 +998,12 @@ class Submission extends Model
             }
 
             // Update submission_data->evidence with normalized values
-            $this->submission_data->evidence = $normalizedEvidence;
+            // JSON-cast attributes are returned through Eloquent's magic
+            // accessor; mutate a local value and assign it back so the
+            // normalized evidence is actually persisted.
+            $submissionData = $this->submission_data;
+            $submissionData->evidence = $normalizedEvidence;
+            $this->submission_data = $submissionData;
 
             // note: we leave the parent to make changes to the pivot table
         }
@@ -1015,17 +1017,6 @@ class Submission extends Model
         return true;
     }
 
-
-    /**
-     * The error for a reference field that did not resolve, naming what was
-     * submitted so the portal can show it in place of the missing record.
-     */
-    private static function unresolvedMessage(string $label, $submitted): string
-    {
-        $submitted = trim((string) $submitted);
-
-        return $submitted === '' ? "Missing {$label}" : "Invalid {$label} '{$submitted}'";
-    }
 
     /**
      * Assert that the passed element is a non-zero, or non-zero equivalent.
