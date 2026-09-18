@@ -12,8 +12,7 @@ when it cannot be applied safely:
 - the workbook or first worksheet cannot be read;
 - row 6 is missing the exact, ordered set of 18 template headers, or a data row
   contains populated cells beyond those columns;
-- there are no submission rows from row 13 onward, or a submission action is
-  found in the instruction area above row 13;
+- there are no submission rows from row 13 onward;
 - an action cannot be routed (`N`, `R`, or `U`), including its SGC-ID and state
   requirements;
 - a republish row supplies valid relationship identifiers that do not match the

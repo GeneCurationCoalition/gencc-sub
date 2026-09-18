@@ -11,6 +11,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
@@ -110,6 +111,40 @@ class DocumentUploadGateTest extends TestCase
         ]);
         $this->assertSame('invalid_header_columns', $response->json('errors.0.error_type'));
         Queue::assertNotPushed(ProcessSubmissionsUpload::class);
+    }
+
+    public function test_official_template_examples_do_not_block_a_row_thirteen_submission(): void
+    {
+        $spreadsheet = IOFactory::load(public_path('documents/GenCC Submission Spreadsheet.xlsx'));
+        $sheet = $spreadsheet->getActiveSheet();
+
+        $this->assertSame('R', $sheet->getCell('B9')->getValue());
+        $this->assertSame('U', $sheet->getCell('B10')->getValue());
+        $this->assertSame('N', $sheet->getCell('B11')->getValue());
+
+        $row = array_fill(0, count(self::COLUMNS), '');
+        $row[1] = 'N';
+        $row[3] = 'NOT-AN-HGNC-ID';
+        $row[5] = 'NOT-A-DISEASE';
+        $row[7] = 'NOT-AN-MOI';
+        $row[9] = $this->submitter->curie;
+        $row[11] = 'NOT-A-CLASSIFICATION';
+        $row[13] = 'not-a-date';
+        $row[17] = 'not-a-url';
+        $sheet->fromArray($row, null, 'A13');
+
+        $path = tempnam(sys_get_temp_dir(), 'official-upload-gate-');
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        $response = $this->upload($path);
+
+        $response->assertOk()->assertJson([
+            'success' => 'true',
+            'status_code' => 200,
+            'row_count' => 1,
+        ]);
+        Queue::assertPushed(ProcessSubmissionsUpload::class);
     }
 
     private function upload(string $path)

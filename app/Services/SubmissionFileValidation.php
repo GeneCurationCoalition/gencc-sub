@@ -537,23 +537,6 @@ class SubmissionFileValidation
         }
 
         $validation_results = [];
-        $action_index = self::get_index('action');
-
-        // Rows 7-12 belong to the template instructions. A routable action in
-        // that area is strong evidence that submission data was pasted above
-        // the row the parser reads, so reject instead of silently ignoring it.
-        for ($offset = self::HEADER_ROW_NUM; $offset < self::FIRST_DATA_ROW - 1; $offset++) {
-            $action = strtoupper(trim((string) ($worksheet[$offset][$action_index] ?? '')));
-            if (in_array($action, ['N', 'R', 'U'], true)) {
-                $validation_results[] = [
-                    'error_type' => 'data_before_first_submission_row',
-                    'severity' => self::SEVERITY_ERROR,
-                    'validation_type' => self::FILE_FORMAT_VALIDATION,
-                    'row' => $offset + 1,
-                    'message' => 'Submission data must start on row 13; a submission action was found above row 13.',
-                ];
-            }
-        }
 
         $data_row_count = 0;
         foreach ($worksheet as $offset => $raw_row) {

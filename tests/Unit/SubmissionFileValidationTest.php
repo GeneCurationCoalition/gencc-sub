@@ -1227,17 +1227,14 @@ class SubmissionFileValidationTest extends TestCase
         $this->assertNotNull(collect($errors)->firstWhere('error_type', 'unexpected_data_columns'));
     }
 
-    public function test_upload_gate_rejects_submission_data_above_row_thirteen(): void
+    public function test_upload_gate_ignores_template_content_above_row_thirteen(): void
     {
-        $worksheet = $this->createValidSpreadsheet([]);
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
         $worksheet[7] = $this->createValidDataRow();
-        $worksheet[] = array_fill(0, 18, '');
 
         $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
-        $earlyData = collect($errors)->firstWhere('error_type', 'data_before_first_submission_row');
-        $this->assertNotNull($earlyData);
-        $this->assertSame('8', $earlyData['rows']);
+        $this->assertSame([], $errors);
     }
 
     public function test_upload_gate_rejects_a_file_without_submission_rows(): void
