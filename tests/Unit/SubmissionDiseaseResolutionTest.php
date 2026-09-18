@@ -10,6 +10,7 @@ use App\Models\Submission;
 use App\Services\DiseaseResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
+use Tests\Support\SeedsDiseaseWorld;
 
 /**
  * Phase 2 of an upload: the disease references Submission::load_from_json()
@@ -24,6 +25,7 @@ use Tests\TestCase;
 class SubmissionDiseaseResolutionTest extends TestCase
 {
     use RefreshDatabase;
+    use SeedsDiseaseWorld;
 
     protected Disease $mondo;
 
@@ -103,6 +105,25 @@ class SubmissionDiseaseResolutionTest extends TestCase
                 $this->assertNull($submission->disease_id, "'{$submitted}' ({$mode}) stores no disease");
                 $this->assertNull($submission->original_disease_id, "'{$submitted}' ({$mode}) stores no original disease");
             }
+        }
+    }
+
+    public function test_ambiguous_disease_reports_candidates_and_preserves_the_submitted_id(): void
+    {
+        self::seedJuvenileAbsenceMappings(false);
+
+        foreach ($this->resolverModes() as $mode => $lookupCaches) {
+            $submission = new Submission();
+            $result = $submission->load_from_json($this->submissionPacket('ORPHA:1941'), $lookupCaches);
+
+            $this->assertIsArray($result, $mode);
+            $this->assertStringContainsString("Disease ID 'ORPHA:1941' cannot be mapped uniquely", $result['disease_curie_id']);
+            $this->assertStringContainsString('MONDO:0011876 — obsolete juvenile absence epilepsy [deprecated]', $result['disease_curie_id']);
+            $this->assertStringContainsString('MONDO:0800453 — juvenile absence epilepsy', $result['disease_curie_id']);
+            $this->assertStringNotContainsString('MONDO:0020772', $result['disease_curie_id']);
+            $this->assertNull($submission->disease_id);
+            $this->assertNull($submission->original_disease_id);
+            $this->assertSame('ORPHA:1941', $submission->submission_data->disease->id);
         }
     }
 

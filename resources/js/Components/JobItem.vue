@@ -439,7 +439,8 @@ const downloadErrors = () => {
     // If error has details (grouped with unique values), output one row per detail
     if (error.details && error.details.length > 0) {
       error.details.forEach(detail => {
-        csvRows.push(`"${errorType}","${severity}","${column}","${message.replace(/"/g, '""')}","${(detail.value || '').replace(/"/g, '""')}","${detail.rows}"`);
+        const detailMessage = detail.reason ? `${message} ${detail.reason}` : message;
+        csvRows.push(`"${errorType}","${severity}","${column}","${detailMessage.replace(/"/g, '""')}","${String(detail.value ?? '').replace(/"/g, '""')}","${detail.rows}"`);
       });
     } else {
       csvRows.push(`"${errorType}","${severity}","${column}","${message.replace(/"/g, '""')}","","${error.rows || ''}"`);
@@ -1442,7 +1443,10 @@ const formatDate = (dateString) => {
                                         <tbody>
                                             <tr v-for="(detail, dIdx) in slotProps.data.details" :key="dIdx"
                                                 class="border-b border-gray-100 last:border-b-0">
-                                                <td class="py-1 pr-4 font-mono text-red-700">{{ detail.value }}</td>
+                                                <td class="py-1 pr-4 text-red-700">
+                                                    <div class="font-mono">{{ detail.value }}</div>
+                                                    <div v-if="detail.reason" class="mt-1 text-gray-600">{{ detail.reason }}</div>
+                                                </td>
                                                 <td class="py-1 pr-4 text-gray-600">{{ detail.count }}</td>
                                                 <td class="py-1 font-mono text-gray-500">{{ detail.rows }}</td>
                                             </tr>
@@ -1471,7 +1475,10 @@ const formatDate = (dateString) => {
                                         <table class="w-full text-xs mt-1">
                                             <tbody>
                                                 <tr v-for="(detail, dIdx) in warning.details" :key="dIdx" class="border-b border-orange-100 last:border-b-0">
-                                                    <td class="py-1 pr-4 font-mono">{{ detail.value }}</td>
+                                                    <td class="py-1 pr-4">
+                                                        <div class="font-mono">{{ detail.value }}</div>
+                                                        <div v-if="detail.reason" class="mt-1 text-gray-600">{{ detail.reason }}</div>
+                                                    </td>
                                                     <td class="py-1 font-mono text-gray-500">Row(s) {{ detail.rows }}</td>
                                                 </tr>
                                             </tbody>

@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Disease;
+use App\Services\DiseaseMappingAmbiguity;
 use App\Services\DiseaseResolution;
 use App\Services\DiseaseResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -99,6 +100,90 @@ class DiseaseResolverTest extends TestCase
                 $this->assertSame(Disease::TYPE_MONDO, $resolution->mondo->type, "'{$input}' resolved to a non-MONDO term");
             }
         }
+    }
+
+    public function test_real_orphanet_assertions_use_the_higher_priority_match(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings();
+        $result = (new DiseaseResolver())->resolveDetailed('Orphanet:1941');
+
+        $this->assertInstanceOf(DiseaseResolution::class, $result);
+        $this->assertSame($world['current']->id, $result->mondo->id);
+        $this->assertSame(DiseaseResolution::VIA_MONDO_EXACT_MATCH, $result->via);
+    }
+
+    public function test_orphanet_ambiguity_stops_before_the_omim_bridge(): void
+    {
+        self::seedJuvenileAbsenceMappings(false);
+        $resolver = new DiseaseResolver();
+
+        foreach (['ORPHA:1941', 'Orphanet:1941', 'ORPHA:1941'] as $input) {
+            $result = $resolver->resolveDetailed($input);
+            $this->assertCandidates($result, DiseaseResolution::VIA_ORPHANET_EXACT_MATCH, ['MONDO:0011876', 'MONDO:0800453']);
+            $message = $result->message($input);
+            $this->assertStringContainsString($input, $message);
+            $this->assertStringContainsString('obsolete juvenile absence epilepsy [deprecated]', $message);
+            $this->assertStringNotContainsString('MONDO:0020772', $message);
+            $this->assertNull($resolver->resolve($input));
+            $this->assertNull($resolver->resolveDetailed('Orphanet:999999'));
+            $this->assertInstanceOf(DiseaseResolution::class, $resolver->resolveDetailed('MONDO:0000001'));
+        }
+    }
+
+    public function test_mondo_side_ambiguity_stops_before_an_orphanet_fallback(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings();
+        $world['obsolete']->update(['xrefs' => ['orpha_id' => ['1941']]]);
+        $world['orphanet']->update(['xrefs' => ['mondo_id' => ['MONDO:0800453'], 'omim_id' => ['607631']]]);
+        $resolver = new DiseaseResolver();
+
+        for ($i = 0; $i < 2; $i++) {
+            $this->assertCandidates($resolver->resolveDetailed('Orphanet:1941'), DiseaseResolution::VIA_MONDO_EXACT_MATCH,
+                ['MONDO:0011876', 'MONDO:0800453']);
+            $this->assertNull($resolver->resolve('Orphanet:1941'));
+        }
+    }
+
+    public function test_ambiguous_omim_bridge_keeps_all_candidates_alongside_a_unique_bridge(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings(false);
+        $world['obsolete']->update(['xrefs' => ['omim_id' => ['607631']]]);
+        $world['current']->update(['xrefs' => ['omim_id' => ['607632']]]);
+        $world['orphanet']->update(['xrefs' => ['omim_id' => ['607632', '607631']]]);
+        $resolver = new DiseaseResolver();
+
+        for ($i = 0; $i < 2; $i++) {
+            $this->assertCandidates($resolver->resolveDetailed('OMIM:607631'), DiseaseResolution::VIA_MONDO_EXACT_MATCH,
+                ['MONDO:0011876', 'MONDO:0020772']);
+            $this->assertCandidates($resolver->resolveDetailed('Orphanet:1941'), DiseaseResolution::VIA_OMIM_BRIDGE,
+                ['MONDO:0011876', 'MONDO:0020772', 'MONDO:0800453']);
+            $this->assertNull($resolver->resolve('Orphanet:1941'));
+        }
+    }
+
+    public function test_separate_omim_bridges_with_distinct_targets_are_ambiguous(): void
+    {
+        $this->assertCandidates((new DiseaseResolver())->resolveDetailed('Orphanet:700777'), DiseaseResolution::VIA_OMIM_BRIDGE,
+            ['MONDO:0000002', 'MONDO:0000007']);
+    }
+
+    public function test_multiple_references_to_the_same_mondo_are_not_ambiguous(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings(false);
+        $world['bridge']->update(['xrefs' => ['omim_id' => ['607631', '607632']]]);
+        $world['orphanet']->update(['xrefs' => ['omim_id' => ['607632', '607631', '607631']]]);
+
+        $result = (new DiseaseResolver())->resolveDetailed('Orphanet:1941');
+        $this->assertInstanceOf(DiseaseResolution::class, $result);
+        $this->assertSame($world['bridge']->id, $result->mondo->id);
+        $this->assertSame(DiseaseResolution::VIA_OMIM_BRIDGE, $result->via);
+    }
+
+    private function assertCandidates($result, string $step, array $curies): void
+    {
+        $this->assertInstanceOf(DiseaseMappingAmbiguity::class, $result);
+        $this->assertSame($step, $result->step);
+        $this->assertSame($curies, array_map(fn (Disease $candidate) => $candidate->curie, $result->candidates));
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use Tests\TestCase;
+use Tests\Support\SeedsDiseaseWorld;
 use App\Services\SubmissionFileValidation;
 use App\Models\Gene;
 use App\Models\Disease;
@@ -17,6 +18,7 @@ use Mockery;
 class SubmissionFileValidationTest extends TestCase
 {
     use RefreshDatabase;
+    use SeedsDiseaseWorld;
 
     protected function setUp(): void
     {
@@ -466,6 +468,32 @@ class SubmissionFileValidationTest extends TestCase
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
+    }
+
+    public function test_grouped_dates_preserve_each_rejection_reason(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['date' => '2999-01-01']),
+            $this->createValidDataRow(['date' => '2999-01-01', 'local_key' => 'TEST002']),
+            $this->createValidDataRow(['date' => '2024-01-15T99:99garbage', 'local_key' => 'TEST003']),
+            $this->createValidDataRow(['date' => '2026', 'local_key' => 'TEST004']),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $dates = collect($errors)->where('column', 'date');
+        $this->assertCount(1, $dates);
+        $date = $dates->first();
+        $this->assertSame("Invalid date for column 'date' (4 rows).", $date['message']);
+        $this->assertCount(3, $date['details']);
+        $details = collect($date['details'])->keyBy('value');
+        $this->assertSame('13, 14', $details['2999-01-01']['rows']);
+        $this->assertSame(2, $details['2999-01-01']['count']);
+        $this->assertStringContainsString('outside the allowed date range', $details['2999-01-01']['reason']);
+        $this->assertStringContainsString('one-day allowance', $details['2999-01-01']['reason']);
+        $this->assertStringContainsString('Not a date.', $details['2024-01-15T99:99garbage']['reason']);
+        $this->assertStringContainsString('YYYY-MM-DD', $details['2024-01-15T99:99garbage']['reason']);
+        $this->assertStringContainsString('outside the allowed date range', $details['2026']['reason']);
+        $this->assertArrayNotHasKey('_reasons', $date);
     }
 
     /**
@@ -1016,6 +1044,30 @@ class SubmissionFileValidationTest extends TestCase
             $this->assertArrayHasKey('rows', $detail);
             $this->assertArrayHasKey('count', $detail);
         }
+    }
+
+    public function test_grouped_disease_warnings_keep_ambiguity_candidates_separate_from_missing_mappings(): void
+    {
+        self::seedJuvenileAbsenceMappings(false);
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'ORPHA:1941']),
+            $this->createValidDataRow(['disease_id' => 'ORPHA:1941', 'local_key' => 'TEST002']),
+            $this->createValidDataRow(['disease_id' => 'Orphanet:999999', 'local_key' => 'TEST003']),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $group = collect($errors)->firstWhere('column', 'disease_id');
+        $this->assertSame('warning', $group['severity']);
+        $this->assertTrue($group['blocks_submission']);
+        $this->assertStringContainsString('could not be resolved to a unique MONDO term', $group['message']);
+        $this->assertCount(2, $group['details']);
+        $details = collect($group['details'])->keyBy('value');
+        $this->assertSame('13, 14', $details['ORPHA:1941']['rows']);
+        $this->assertStringContainsString('MONDO:0011876', $details['ORPHA:1941']['reason']);
+        $this->assertStringContainsString('MONDO:0800453', $details['ORPHA:1941']['reason']);
+        $this->assertStringNotContainsString('MONDO:0020772', $details['ORPHA:1941']['reason']);
+        $this->assertStringContainsString('No MONDO term found', $details['Orphanet:999999']['reason']);
+        $this->assertStringNotContainsString('MONDO:0011876', $details['Orphanet:999999']['reason']);
     }
 
     /**

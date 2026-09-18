@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 
 use App\Jobs\ProcessPubmed;
+use App\Services\DiseaseMappingAmbiguity;
 use App\Services\SubmittedDate;
 
 use Auth;
@@ -824,9 +825,11 @@ class Submission extends Model
          */
         $uploadedDiseaseId = $obj->disease->id ?? null;
 
-        $resolution = $uploadedDiseaseId
-            ? ($lookupCaches['disease_resolver'] ?? Disease::resolver())->resolve($uploadedDiseaseId)
+        $outcome = $uploadedDiseaseId
+            ? ($lookupCaches['disease_resolver'] ?? Disease::resolver())->resolveDetailed($uploadedDiseaseId)
             : null;
+        $ambiguity = $outcome instanceof DiseaseMappingAmbiguity ? $outcome : null;
+        $resolution = $ambiguity ? null : $outcome;
 
         $originalDisease = $resolution?->original;
         $mondoDisease = $resolution?->mondo;
@@ -835,6 +838,9 @@ class Submission extends Model
         $unresolvedMessage = $submittedCurie === ''
             ? 'Missing Disease ID'
             : "No MONDO term found for Disease ID '{$submittedCurie}' (unknown ID, or no exact MONDO match)";
+        if ($ambiguity !== null) {
+            $unresolvedMessage = $ambiguity->message($submittedCurie);
+        }
 
         // Set original_disease_id (the exact disease record for uploaded CURIE)
         $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id',

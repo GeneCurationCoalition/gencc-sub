@@ -10,6 +10,9 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
+use Tests\Support\SeedsDiseaseWorld;
+use App\Services\DiseaseResolver;
+use App\Services\JobStateMachine;
 
 /**
  * The non-blocking warning for a submission curated against an obsolete MONDO
@@ -18,6 +21,7 @@ use Tests\TestCase;
 class DiseasePolicyPortalTest extends TestCase
 {
     use RefreshDatabase;
+    use SeedsDiseaseWorld;
 
     protected User $user;
 
@@ -100,6 +104,50 @@ class DiseasePolicyPortalTest extends TestCase
         $this->actingAs($this->user)
             ->get('/submissions/'.$submission->ident)
             ->assertInertia(fn (AssertableInertia $page) => $page->where('deprecatedDiseaseWarning', null));
+    }
+
+    public function test_ambiguous_lookup_and_manual_update_show_candidates_without_modifying_the_record(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings(false);
+        $submission = $this->submissionFor($world['current']);
+        $before = $submission->fresh()->getAttributes();
+        $message = (new DiseaseResolver())->resolveDetailed('ORPHA:1941')->message('ORPHA:1941');
+
+        $this->actingAs($this->user)->getJson('/api/lookup/disease/ORPHA:1941')
+            ->assertOk()->assertJson(['status_code' => 3001, 'success' => 'false', 'message' => $message]);
+
+        $this->actingAs($this->user)->postJson('/api/submissions/'.$submission->ident, [
+            'type' => 'disease', 'curie' => 'ORPHA:1941',
+        ])->assertOk()->assertJson(['status_code' => 3001, 'success' => 'false', 'message' => $message]);
+
+        $this->assertSame($before, $submission->fresh()->getAttributes());
+    }
+
+    public function test_candidate_message_survives_reload_and_blocks_job_submission(): void
+    {
+        $world = self::seedJuvenileAbsenceMappings(false);
+        $submission = $this->submissionFor($world['current']);
+        $packet = (object) ['disease' => (object) ['id' => 'ORPHA:1941']];
+        $errors = $submission->load_from_json($packet);
+        $message = $errors['disease_curie_id'];
+        $submission->submission_errors = $errors;
+        $submission->save();
+
+        $this->assertNull($submission->fresh()->disease_id);
+        $this->assertSame('ORPHA:1941', $submission->fresh()->submission_data->disease->id);
+        $this->assertStringContainsString('MONDO:0011876', $message);
+        $this->assertStringContainsString('MONDO:0800453', $message);
+        $this->actingAs($this->user)->get('/submissions/'.$submission->ident)
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->where('submission.submission_errors.disease_curie_id', $message)
+            );
+
+        // Isolate the disease error so the job cannot be blocked by another field.
+        $submission->submission_errors = ['disease_curie_id' => $message];
+        $submission->save();
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('Cannot submit job with submissions that have errors');
+        JobStateMachine::submit($this->job->fresh());
     }
 
     private function submissionFor(Disease $disease): Submission

@@ -77,7 +77,7 @@ class DiseaseResolver
      */
     private ?array $xrefIndex = null;
 
-    /** @var array<string, ?Disease> "field:value" => exact-matching MONDO record, memoized */
+    /** @var array<string, Disease|DiseaseMappingAmbiguity|null> Exact-match outcomes, memoized. */
     private array $exactMatch = [];
 
     /**
@@ -91,6 +91,17 @@ class DiseaseResolver
      */
     public function resolve(?string $submitted): ?DiseaseResolution
     {
+        $result = $this->resolveDetailed($submitted);
+
+        return $result instanceof DiseaseResolution ? $result : null;
+    }
+
+    /**
+     * Resolve with candidate details when an evaluated step is ambiguous.
+     * Only an absent mapping permits fallback; a unique earlier match still wins.
+     */
+    public function resolveDetailed(?string $submitted): DiseaseResolution|DiseaseMappingAmbiguity|null
+    {
         $curie = Disease::normalizeCurie($submitted);
 
         if ($curie === null) {
@@ -99,12 +110,22 @@ class DiseaseResolver
 
         [$prefix, $number] = explode(':', $curie, 2);
 
-        return match ($prefix) {
+        $result = match ($prefix) {
             'MONDO' => $this->mondo($curie),
             'OMIM', 'OMIMPS' => $this->omim($curie, $number),
             'Orphanet' => $this->orphanet($curie, $number),
             default => null,
         };
+
+        if ($result instanceof DiseaseMappingAmbiguity) {
+            Log::warning('DiseaseResolver: ambiguous MONDO mapping', [
+                'submitted' => $submitted,
+                'step' => $result->step,
+                'mondo' => array_map(fn (Disease $disease) => $disease->curie, $result->candidates),
+            ]);
+        }
+
+        return $result;
     }
 
     /**
@@ -126,25 +147,29 @@ class DiseaseResolver
      * OMIM asserts nothing about MONDO, so this single step is what makes the
      * mapping reciprocal by construction.
      */
-    private function omim(string $curie, string $number): ?DiseaseResolution
+    private function omim(string $curie, string $number): DiseaseResolution|DiseaseMappingAmbiguity|null
     {
         $mondo = $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_OMIM, $number);
 
-        return $mondo === null
-            ? null
-            : new DiseaseResolution($this->byCurie($curie), $mondo, DiseaseResolution::VIA_MONDO_EXACT_MATCH);
+        return $mondo instanceof Disease
+            ? new DiseaseResolution($this->byCurie($curie), $mondo, DiseaseResolution::VIA_MONDO_EXACT_MATCH)
+            : $mondo;
     }
 
     /**
      * An Orphanet identifier resolves through the first of the three steps that
      * yields a MONDO term.
      */
-    private function orphanet(string $curie, string $number): ?DiseaseResolution
+    private function orphanet(string $curie, string $number): DiseaseResolution|DiseaseMappingAmbiguity|null
     {
         $original = $this->byCurie($curie);
 
         // Step 1: a MONDO term exact-matches this Orphanet code
         $mondo = $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_ORPHANET, $number);
+
+        if ($mondo instanceof DiseaseMappingAmbiguity) {
+            return $mondo;
+        }
 
         if ($mondo !== null) {
             return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_MONDO_EXACT_MATCH);
@@ -160,8 +185,12 @@ class DiseaseResolver
                 fn ($c) => $this->mondoByCurie($c),
                 self::xrefValues($original->xrefs, UpdateDiseases::FIELD_EXACT_MONDO)
             ),
-            "Orphanet {$curie} asserts more than one MONDO equivalent"
+            DiseaseResolution::VIA_ORPHANET_EXACT_MATCH
         );
+
+        if ($mondo instanceof DiseaseMappingAmbiguity) {
+            return $mondo;
+        }
 
         if ($mondo !== null) {
             return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_ORPHANET_EXACT_MATCH);
@@ -173,8 +202,12 @@ class DiseaseResolver
                 fn ($n) => $this->mondoByExactMatch(UpdateDiseases::FIELD_EXACT_OMIM, $n),
                 self::xrefValues($original->xrefs, UpdateDiseases::FIELD_EXACT_OMIM)
             ),
-            "Orphanet {$curie} reaches more than one MONDO term through its OMIM references"
+            DiseaseResolution::VIA_OMIM_BRIDGE
         );
+
+        if ($mondo instanceof DiseaseMappingAmbiguity) {
+            return $mondo;
+        }
 
         if ($mondo !== null) {
             return new DiseaseResolution($original, $mondo, DiseaseResolution::VIA_OMIM_BRIDGE);
@@ -187,26 +220,30 @@ class DiseaseResolver
      * The one distinct record among $candidates, or null when there is none.
      *
      * A step that reaches two different MONDO terms fails closed: the mapping is
-     * ambiguous and no choice between them is defensible.  Current upstream data
-     * produces no such case, but nothing guarantees that across releases, so the
-     * ambiguity is logged when it happens.
+     * ambiguous and must not be treated as an absent mapping. Conflicts in
+     * lower-priority steps are not evaluated after an earlier unique match.
      *
-     * @param  array<?Disease>  $candidates
+     * @param  array<Disease|DiseaseMappingAmbiguity|null>  $candidates
      */
-    private function only(array $candidates, string $ambiguity): ?Disease
+    private function only(array $candidates, string $step): Disease|DiseaseMappingAmbiguity|null
     {
         $found = [];
 
         foreach ($candidates as $candidate) {
-            if ($candidate !== null) {
-                $found[$candidate->id] = $candidate;
+            // A single OMIM bridge may already be ambiguous. Keep all its
+            // candidates, alongside the candidates from other references.
+            $records = $candidate instanceof DiseaseMappingAmbiguity ? $candidate->candidates : [$candidate];
+            foreach ($records as $record) {
+                if ($record !== null) {
+                    $found[$record->id] = $record;
+                }
             }
         }
 
         if (count($found) > 1) {
-            Log::warning('DiseaseResolver: '.$ambiguity, ['mondo' => array_column($found, 'curie')]);
+            usort($found, fn (Disease $a, Disease $b) => strcmp($a->curie, $b->curie) ?: $a->id <=> $b->id);
 
-            return null;
+            return new DiseaseMappingAmbiguity($step, $found);
         }
 
         return reset($found) ?: null;
@@ -250,13 +287,13 @@ class DiseaseResolver
     }
 
     /**
-     * The MONDO record that exact-matches $value under $field, or null when
-     * none does or more than one does.
+     * The MONDO record that exact-matches $value under $field, an ambiguity
+     * when several do, or null when none does.
      *
      * @param  string  $field  An equivalence key, e.g. UpdateDiseases::FIELD_EXACT_OMIM
      * @param  string  $value  The bare identifier, as the field records it
      */
-    private function mondoByExactMatch(string $field, string $value): ?Disease
+    private function mondoByExactMatch(string $field, string $value): Disease|DiseaseMappingAmbiguity|null
     {
         $key = $field.'/'.$value;
 
@@ -265,7 +302,7 @@ class DiseaseResolver
 
             $this->exactMatch[$key] = $this->only(
                 array_map(fn ($id) => $this->byId($id), $this->xrefIndex[$field][$value] ?? []),
-                "more than one MONDO term records {$field} {$value}"
+                DiseaseResolution::VIA_MONDO_EXACT_MATCH
             );
         }
 

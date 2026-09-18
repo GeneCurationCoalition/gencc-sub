@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Disease;
+use App\Services\DiseaseMappingAmbiguity;
 
 /**
  *
@@ -28,14 +29,14 @@ class DiseaseController extends Controller
      */
     public function show(string $id)
     {
-        $disease = Disease::resolver()->resolve($id)?->mondo;
+        $resolution = Disease::resolver()->resolveDetailed($id);
 
-        if ($disease === null)
+        if ($resolution === null || $resolution instanceof DiseaseMappingAmbiguity)
             return response()->json(['success' => 'false',
                 'status_code' => 3001,
-                'message' => 'Disease not found'],
+                'message' => $resolution instanceof DiseaseMappingAmbiguity ? $resolution->message($id) : 'Disease not found'],
                 200);
 
-        return $disease->only(['curie', 'name', 'description']);
+        return $resolution->mondo->only(['curie', 'name', 'description']);
     }
 }

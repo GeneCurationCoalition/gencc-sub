@@ -746,6 +746,11 @@
                     return; // Blocked by duplicate error - dialog stays open to show error
                 }
 
+                if (response.data.status_code !== 200) {
+                    duplicateError.value = response.data.message || 'Unable to update disease.';
+                    return;
+                }
+
                 if ( response.data.hasOwnProperty('status_code') &&  response.data.status_code == 200 )
                 {
                     // Close the dialog FIRST (on success only)
@@ -755,7 +760,7 @@
                     router.reload();
                 }
             } catch (error) {
-                console.error(error);
+                duplicateError.value = error.response?.data?.message || 'Unable to update disease. Please try again.';
             }
         }
     }

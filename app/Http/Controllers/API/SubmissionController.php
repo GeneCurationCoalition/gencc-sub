@@ -26,6 +26,7 @@ use App\Models\Action;
 use App\Jobs\ProcessPubmed;
 
 use App\Services\SubmissionStateMachine;
+use App\Services\DiseaseMappingAmbiguity;
 use App\Services\JobStateMachine;
 use App\Services\SubmittedDate;
 use App\Services\SubmissionDuplicateDetection;
@@ -237,12 +238,12 @@ class SubmissionController extends Controller
 
                 // One resolution yields both disease references the submission
                 // stores, under the same rules the upload path applies
-                $resolution = Disease::resolver()->resolve($uploadedCurie);
+                $resolution = Disease::resolver()->resolveDetailed($uploadedCurie);
 
-                if ($resolution === null || $resolution->original === null)
+                if ($resolution instanceof DiseaseMappingAmbiguity || $resolution === null || $resolution->original === null)
                     return response()->json(['success' => 'false',
                         'status_code' => 3001,
-                        'message' => 'Disease not found'],
+                        'message' => $resolution instanceof DiseaseMappingAmbiguity ? $resolution->message($uploadedCurie) : 'Disease not found'],
                         200);
 
                 $originalDisease = $resolution->original;

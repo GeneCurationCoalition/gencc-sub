@@ -22,6 +22,33 @@ use App\Models\Disease;
 trait SeedsDiseaseWorld
 {
     /**
+     * Real exact-match assertions from the audited upstream snapshots.
+     * Omitting MONDO's own Orphanet assertion models the regression trigger.
+     *
+     * @return array<string, Disease>
+     */
+    public static function seedJuvenileAbsenceMappings(bool $withMondoAssertion = true): array
+    {
+        return [
+            'obsolete' => Disease::factory()->mondo()->deprecated()->create([
+                'curie' => 'MONDO:0011876',
+                'name' => 'juvenile absence epilepsy',
+                'deprecated_name' => 'obsolete juvenile absence epilepsy',
+            ]),
+            'current' => Disease::factory()->mondo()->withXrefs([
+                'orpha_id' => $withMondoAssertion ? ['1941'] : [],
+            ])->create(['curie' => 'MONDO:0800453', 'name' => 'juvenile absence epilepsy']),
+            'bridge' => Disease::factory()->mondo()->withXrefs([
+                'omim_id' => ['607631'],
+            ])->create(['curie' => 'MONDO:0020772']),
+            'orphanet' => Disease::factory()->orphanet()->withXrefs([
+                'mondo_id' => ['MONDO:0800453', 'MONDO:0011876'],
+                'omim_id' => ['607631'],
+            ])->create(['curie' => 'Orphanet:1941', 'name' => 'Juvenile absence epilepsy']),
+        ];
+    }
+
+    /**
      * @return array<string, Disease> keyed by a short handle
      */
     public static function seedDiseaseWorld(): array

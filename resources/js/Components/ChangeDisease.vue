@@ -102,9 +102,8 @@
 
             <!-- API Error Display -->
             <div v-if="apiError" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-                <p class="font-bold">Duplicate Submission</p>
+                <p class="font-bold">Unable to update disease</p>
                 <p class="text-sm">{{ apiError }}</p>
-                <p class="text-sm mt-2 italic">Consider modifying the existing submission or selecting a different disease.</p>
             </div>
 
             <div class="grid grid-cols-4">

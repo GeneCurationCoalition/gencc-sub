@@ -107,7 +107,7 @@ class SubmissionFileValidation
                 // ...but each such row becomes a record error, which does block
                 // submitting the job
                 'blocks_submission' => true,
-                'message' => 'No MONDO term found for submitted disease id (unknown ID, or no exact MONDO match)',
+                'message' => 'Submitted disease IDs could not be resolved to a unique MONDO term',
             ],
         ],
         'disease_name' => [
@@ -310,11 +310,13 @@ class SubmissionFileValidation
      *
      * @param string $value The submitted disease identifier
      * @param DiseaseResolver $resolver The file's resolver
-     * @return Disease|null The resolved MONDO term, or null if it does not resolve
+     * @return Disease|DiseaseMappingAmbiguity|null The MONDO term, ambiguity details, or no match
      */
-    public static function resolve_disease_for_submission($value, DiseaseResolver $resolver): ?Disease
+    public static function resolve_disease_for_submission($value, DiseaseResolver $resolver): Disease|DiseaseMappingAmbiguity|null
     {
-        return $resolver->resolve($value)?->mondo;
+        $outcome = $resolver->resolveDetailed($value);
+
+        return $outcome instanceof DiseaseResolution ? $outcome->mondo : $outcome;
     }
 
     /**
@@ -420,13 +422,16 @@ class SubmissionFileValidation
             }
 
             // Track unique values for column-level errors
-            if (!empty($error['value'])) {
+            if (isset($error['value']) && (string) $error['value'] !== '') {
                 $val = $error['value'];
                 if (!isset($grouped[$key]['_values'][$val])) {
                     $grouped[$key]['_values'][$val] = [];
                 }
                 if (isset($error['row'])) {
                     $grouped[$key]['_values'][$val][] = $error['row'];
+                }
+                if (!empty($error['reason'])) {
+                    $grouped[$key]['_reasons'][$val] = $error['reason'];
                 }
             }
         }
@@ -461,11 +466,15 @@ class SubmissionFileValidation
                     $details = [];
                     foreach ($error['_values'] as $value => $valueRows) {
                         sort($valueRows, SORT_NUMERIC);
-                        $details[] = [
+                        $detail = [
                             'value' => $value,
                             'rows' => implode(', ', $valueRows),
                             'count' => count($valueRows),
                         ];
+                        if (isset($error['_reasons'][$value])) {
+                            $detail['reason'] = $error['_reasons'][$value];
+                        }
+                        $details[] = $detail;
                     }
                     // Sort details by count descending (most common first)
                     usort($details, fn($a, $b) => $b['count'] - $a['count']);
@@ -475,6 +484,7 @@ class SubmissionFileValidation
 
             // Clean up temporary and row-specific fields
             unset($error['_values']);
+            unset($error['_reasons']);
             unset($error['_group_message']);
             unset($error['row']);
             unset($error['sgc_id']);
@@ -853,6 +863,7 @@ class SubmissionFileValidation
 
                 // If date parsing failed but original value was not empty, report error
                 if ($value === null && !empty(trim((string) $original_value))) {
+                    $reason = SubmittedDate::rejectionReason($original_value);
                     $validation_results[] = [
                         'error_type' => 'invalid_field_format',
                         'severity' => self::SEVERITY_ERROR,
@@ -860,10 +871,12 @@ class SubmissionFileValidation
                         'row' => $row_num,
                         'column' => $column_name,
                         'value' => (string) $original_value,
+                        'reason' => $reason,
+                        'group_message' => "Invalid date for column '{$column_name}'",
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
                         'message' => "Invalid date for column '{$column_name}': '{$original_value}'. "
-                            . SubmittedDate::rejectionReason($original_value),
+                            . $reason,
                     ];
                     continue;
                 }
@@ -937,7 +950,7 @@ class SubmissionFileValidation
                     $validator_args[] = $disease_resolver;
                 }
                 $return = call_user_func_array($validator_method, $validator_args);
-                if ($return === null ) {
+                if ($return === null || $return instanceof DiseaseMappingAmbiguity) {
                     $custom_message = self::$COLUMN_MAP[$column_name]['validator_with_argument']['message'] ?? null;
                     $severity = self::$COLUMN_MAP[$column_name]['validator_with_argument']['severity'] ?? self::SEVERITY_ERROR;
                     $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
@@ -956,6 +969,12 @@ class SubmissionFileValidation
                     ];
                     if ($custom_message) {
                         $error['group_message'] = $custom_message;
+                    }
+                    if ($column_name === 'disease_id') {
+                        $error['reason'] = $return instanceof DiseaseMappingAmbiguity
+                            ? $return->message($value)
+                            : "No MONDO term found for Disease ID '{$value}' (unknown ID, or no exact MONDO match)";
+                        $error['message'] = $error['reason'];
                     }
                     if (!empty(self::$COLUMN_MAP[$column_name]['validator_with_argument']['blocks_submission'])) {
                         $error['blocks_submission'] = true;

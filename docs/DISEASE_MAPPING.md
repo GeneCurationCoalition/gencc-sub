@@ -147,7 +147,7 @@ Both fields are arrays, and an empty result is still an object (`{"mondo_id":[],
 
 ## Resolving an identifier
 
-All resolution is implemented by `DiseaseResolver::resolve($identifier)`. The return value is a `DiseaseResolution` containing:
+All resolution is implemented by `DiseaseResolver`. Its compatibility method `resolve($identifier)` returns a `DiseaseResolution` on success and null on failure. Callers that display validation errors use `resolveDetailed($identifier)`, which distinguishes an absent mapping (null) from a `DiseaseMappingAmbiguity` containing the resolution step and candidate MONDO records. Successful results contain:
 
 - `original`: the eligible row for the normalized input CURIE, or null if that namespace has no row for it;
 - `mondo`: the MONDO term it normalizes to, which is never null on a successful resolution; and
@@ -191,7 +191,9 @@ Requiring the first hop to be exact is what does the work here. Orphanet subtype
 
 ### Ambiguity
 
-If any step reaches more than one distinct MONDO term, resolution fails closed and logs a warning. No choice between two exact claims to the same concept is defensible, and silently taking the first would make the answer depend on row order. Current upstream data produces no such case at any step.
+If an evaluated step reaches more than one distinct MONDO term, resolution stops with an ambiguity result and logs the submitted identifier, step and candidate CURIEs. Only an absent mapping permits fallback. An ambiguity inside an OMIM bridge is preserved, including all its candidates alongside those from other OMIM references. Repeated references to the same MONDO record count as one candidate. Cached lookups retain the distinction between absence and ambiguity.
+
+This is a source-priority policy, not a requirement that all exact-match paths agree. The audited local snapshots contain 43 Orphanet records with multiple exact MONDO equivalents; each has a unique higher-priority MONDO-side match, so its lower-priority alternatives are not evaluated. For example, Orphanet:1941 has paths to three distinct MONDO terms, but MONDO's own exact-match assertion selects MONDO:0800453 at step 1. No evaluated step is ambiguous in those complete snapshots. See the [local audit](../issue-132-orphanet-id-upload-bug/exact-match-multiplicity-audit.md) for source versions and examples.
 
 ### Eligibility
 
@@ -215,6 +217,8 @@ The index maps each stored identifier to every MONDO row that lists it, so an am
 
 `Submission::load_from_json()` records a `disease_curie_id` entry in `submission_errors` and leaves both disease columns empty when resolution fails. The message names the code that was submitted, and the portal shows that code, marked as not resolved, wherever the disease is displayed. The row is created, and from there the existing machinery applies: the red indicator in `SubmissionsListing.vue`, the "Show Errors" filter, the field highlighting in `SubmissionItem.vue`, the `ChangeDisease` dialog, and `JobStateMachine::submit()` refusing to submit a job that still has errored records.
 
+For an ambiguous mapping, the error lists every candidate at the failing step, sorted by CURIE, with its label and a deprecated marker where applicable. The original submitted payload is preserved. Spreadsheet warnings retain this explanation per value; disease lookup and manual edits return the same explanation, and a rejected edit leaves the existing record unchanged. Candidates are explanatory text only: there is no automatic choice, mapping picker, or per-record override. Users can discuss the mapping with the GenCC team without replacing their original identifier. Existing submissions are not automatically revalidated.
+
 This is deliberate: whether a disease identifier maps to MONDO is checked per record, after the rows exist, where the submitter can fix it in place, rather than as an upload-blocking check that rejects a whole file over a handful of rows.
 
 Spreadsheet validation still resolves every `disease_id` and still reports what it finds, but as a **warning** — one grouped result for the column, listing each unresolvable value and the rows that used it — so the outcome is visible before the rows are processed rather than only after. What the job page shows depends on the outcome. For a rejected file, the warnings are stored with the errors on the document and shown alongside them, whatever their type. For an accepted file, the job page instead summarises the errors and PMID issues recorded on the job's submissions, grouped by field and message, so the summary survives a reload and stays current as records are fixed. The `disease_id` format check (`MONDO|OMIM|ORPHA|Orphanet` followed by digits) remains a blocking error.
@@ -229,7 +233,7 @@ Because it is derived rather than stored, the warning applies retroactively to s
 
 ## Application contexts
 
-Every context calls `resolve($id)` and gets the same answer. The contexts differ only in what they do with it.
+Every context uses the same resolver policy. Validation and user-facing lookup/edit paths call `resolveDetailed($id)` to retain ambiguity explanations; callers needing only a match use `resolve($id)`. The contexts differ only in what they do with the outcome.
 
 | Context | Consequence |
 | --- | --- |
