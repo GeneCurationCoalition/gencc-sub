@@ -63,14 +63,15 @@
         return props.submission.status === 20 || ![2, 4].includes(props.submission.job?.status);
     });
 
-    // Gene field has additional restrictions: cannot be edited for republished submissions
-    const isGeneNotEditable = computed(() => {
+    // Gene, disease, and mode of inheritance identify the relationship and
+    // cannot be changed on a republished submission.
+    const isRelationshipNotEditable = computed(() => {
         // Apply all standard editability rules first
         if (isNotEditable.value) {
             return true;
         }
 
-        // Additionally, block gene editing for republish status
+        // Additionally, block relationship editing for republish status
         // With simplified model: 'republish' or legacy 'draft_republish', 'submitted_republish'
         if (props.submission.status) {
             return ['republish', 'draft_republish', 'submitted_republish'].includes(props.submission.status);
@@ -1379,8 +1380,8 @@ console.log(props.submission)
                             </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('gene_hgnc_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('gene_hgnc_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('gene_hgnc_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('gene_hgnc_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
                               <ChangeGene v-model:visible="showGeneDialog" v-bind:input="submission.gene?.hgnc_id || unresolvedField(submission, 'gene')?.id || ''" @input_dialog_close="showGeneDialog = false" @input_gene_item="updateGene" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeGene>
                           </div>
@@ -1426,8 +1427,8 @@ console.log(props.submission)
                             </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('disease_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('disease_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('disease_curie_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('disease_curie_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
                               <ChangeDisease v-model:visible="showDiseaseDialog" v-bind:input="unresolvedField(submission, 'disease')?.id || submission.original_disease?.curie || submission.disease?.curie || ''" @input_dialog_close="showDiseaseDialog = false" @input_disease_item="updateDisease" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeDisease>
                           </div>
@@ -1443,8 +1444,8 @@ console.log(props.submission)
                             </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('moi_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('moi_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('moi_curie_id')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('moi_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('moi_curie_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('moi_curie_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
                               <ChangeInheritance v-model:visible="showSelectDialog" v-bind:input="submission.inheritance?.curie || ''" @select_dialog_close="showSelectDialog = false" @select_moi_item="updateInheritance" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeInheritance>
                           </div>

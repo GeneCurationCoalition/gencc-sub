@@ -1090,12 +1090,6 @@ class DocumentController extends Controller
                     $submission->document_id = $document->id;
                     $submission->save();
 
-                    // For republish, mark the original submission as not most recent
-                    if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
-                        $originalSubmission->is_most_recent = false;
-                        $originalSubmission->save();
-                    }
-
                     $successfulSubmissions++;
                 }
                 else
@@ -1126,6 +1120,13 @@ class DocumentController extends Controller
                         'sgc_id' => $data->sgc_id,
                         'errors' => $status
                     ];
+                }
+
+                // A saved republish draft is the newest version even when it
+                // has record errors that must be fixed before submission.
+                if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
+                    $originalSubmission->is_most_recent = false;
+                    $originalSubmission->save();
                 }
             }
 

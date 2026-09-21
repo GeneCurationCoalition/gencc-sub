@@ -924,29 +924,30 @@ class SubmissionApiTest extends TestCase
         $this->assertSame('TEST-001', $additionalInformation->submitted_as_submission_id);
     }
 
-    /**
-     * Test cannot update gene on a republished submission (draft_republish status)
-     */
-    public function test_update_gene_blocked_for_draft_republish(): void
+    public function test_relationship_fields_are_blocked_for_draft_republish(): void
     {
-        // Set submission to draft_republish status
         $this->submission->update([
             'status' => Submission::STATUS_DRAFT_REPUBLISH,
             'publish_date' => now()
         ]);
 
-        $response = $this->actingAs($this->user)
-            ->postJson('/api/submissions/' . $this->submission->sid, [
-                'type' => 'gene',
-                'curie' => 'HGNC:5'
-            ]);
-
-        $response->assertStatus(200);
-        $response->assertJson([
-            'success' => 'false',
-            'status_code' => 3012,
-            'message' => 'Cannot change gene on a previously published submission. To submit a different gene-disease association, create a new submission instead.'
-        ]);
+        foreach ([
+            'gene' => 'HGNC:5',
+            'disease' => 'MONDO:0000001',
+            'inheritance' => 'HP:0000006',
+        ] as $type => $curie) {
+            $this->actingAs($this->user)
+                ->postJson('/api/submissions/' . $this->submission->sid, [
+                    'type' => $type,
+                    'curie' => $curie,
+                ])
+                ->assertOk()
+                ->assertJson([
+                    'success' => 'false',
+                    'status_code' => 3012,
+                    'message' => 'Cannot change the gene, disease, or mode of inheritance on a previously published submission. Create a new submission for a different relationship.',
+                ]);
+        }
     }
 
     /**

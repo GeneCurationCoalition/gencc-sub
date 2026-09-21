@@ -1562,7 +1562,7 @@ class SubmissionFileValidation
 
             // Store the submitted relationship values so the upload gate can
             // verify that a republish row identifies the relationship owned by
-            // its SGC ID. Field validity itself remains record-level work.
+            // its SGC ID.
             if (!isset($sgc_ids_to_check[$sgc_id])) {
                 $sgc_ids_to_check[$sgc_id] = [];
             }
@@ -1696,15 +1696,22 @@ class SubmissionFileValidation
                         ];
                     }
 
-                    // A valid gene must match the referenced relationship.
-                    // Invalid gene content is left for the shared record path.
                     $geneValidation = $require_matching_relationship
                         ? SubmissionValueValidation::gene($row_action['hgnc_id'], $geneCache)
                         : null;
                     $geneChanged = $require_matching_relationship
                         ? $geneValidation['error'] === null && $geneValidation['record']->id !== $submission->gene_id
                         : $existingHgncId !== null && $existingHgncId !== $newHgncId;
-                    if ($geneChanged) {
+                    if ($require_matching_relationship && $geneValidation['error'] !== null) {
+                        $validation_results[] = [
+                            'error_type' => 'republish_invalid_gene',
+                            'severity' => self::SEVERITY_ERROR,
+                            'validation_type' => self::DATA_VALIDATION,
+                            'row' => $row,
+                            'column' => 'hgnc_id',
+                            'message' => "Action 'R' (Republish) requires a valid gene matching the referenced SGC ID.",
+                        ];
+                    } elseif ($geneChanged) {
                         $validation_results[] = [
                             'error_type' => 'republish_gene_change',
                             'severity' => self::SEVERITY_ERROR,
@@ -1718,9 +1725,28 @@ class SubmissionFileValidation
                         $diseaseValidation = SubmissionValueValidation::disease($row_action['disease_id'], $diseaseResolver);
                         $inheritanceValidation = SubmissionValueValidation::inheritance($row_action['moi_id'], $inheritanceCache);
 
-                        // Invalid fields are deliberately left for record-level
-                        // validation. When all three resolve, however, the SGC
-                        // ID must identify this exact relationship.
+                        if ($diseaseValidation['error'] !== null || $diseaseValidation['original'] === null) {
+                            $validation_results[] = [
+                                'error_type' => 'republish_invalid_disease',
+                                'severity' => self::SEVERITY_ERROR,
+                                'validation_type' => self::DATA_VALIDATION,
+                                'row' => $row,
+                                'column' => 'disease_id',
+                                'message' => "Action 'R' (Republish) requires a valid disease matching the referenced SGC ID.",
+                            ];
+                        }
+
+                        if ($inheritanceValidation['error'] !== null) {
+                            $validation_results[] = [
+                                'error_type' => 'republish_invalid_moi',
+                                'severity' => self::SEVERITY_ERROR,
+                                'validation_type' => self::DATA_VALIDATION,
+                                'row' => $row,
+                                'column' => 'moi_id',
+                                'message' => "Action 'R' (Republish) requires a valid mode of inheritance matching the referenced SGC ID.",
+                            ];
+                        }
+
                         if ($geneValidation['error'] === null
                             && $diseaseValidation['error'] === null
                             && $diseaseValidation['original'] !== null

@@ -164,6 +164,16 @@ class SubmissionController extends Controller
         // Initialize warnings array for duplicate warnings
         $warnings = [];
 
+        if (in_array($type, ['gene', 'disease', 'inheritance'], true)
+            && ($submission->publish_date !== null
+                || $submission->status === Submission::STATUS_REPUBLISH)) {
+            return response()->json([
+                'success' => 'false',
+                'status_code' => 3012,
+                'message' => 'Cannot change the gene, disease, or mode of inheritance on a previously published submission. Create a new submission for a different relationship.',
+            ], 200);
+        }
+
         switch ($type)
         {
             case 'inheritance':
@@ -279,19 +289,6 @@ class SubmissionController extends Controller
                 $bags = ['disease_curie_id', 'duplicate_submission'];
                 break;
             case 'gene':
-                // Prevent gene changes on republished submissions
-                // Gene is immutable once a submission has been published (identified by publish_date or republish status)
-                if ($submission->publish_date !== null ||
-                    in_array($submission->status, [
-                        Submission::STATUS_DRAFT_REPUBLISH,
-                        Submission::STATUS_SUBMITTED_REPUBLISH
-                    ])) {
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3012,
-                        'message' => 'Cannot change gene on a previously published submission. To submit a different gene-disease association, create a new submission instead.'],
-                        200);
-                }
-
                 $geneValidation = SubmissionValueValidation::gene($request->input('curie'));
                 $gene = $geneValidation['record'];
 

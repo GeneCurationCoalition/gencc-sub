@@ -22,3 +22,6 @@ gencc_hsts_max_age: 300
 # Preserve deliberate password and 2FA login after a production snapshot
 # restore, but remove copied sessions, bearer tokens, and reset/activation state.
 gencc_sanitize_restored_auth: true
+
+# Exercise the deploy-time disease rebuild during the 2.2.0 staging rollout.
+gencc_run_disease_update_on_deploy: true

@@ -159,6 +159,21 @@ class DocumentParserPubmedLinksTest extends TestCase
         ], array_keys((array) $created->submission_errors));
     }
 
+    public function test_an_errored_republish_draft_becomes_the_most_recent_version(): void
+    {
+        $original = $this->publishedSubmission('SGC-100004', ['333']);
+
+        $this->parse([$this->row('R', sgcId: 'SGC-100004', overrides: [
+            'classification_id' => 'GENCC:999999',
+        ])]);
+
+        $draft = Submission::where('sid', 'SGC-100004')->where('version_number', 2)->sole();
+
+        $this->assertArrayHasKey('classification_curie_id', (array) $draft->submission_errors);
+        $this->assertTrue($draft->is_most_recent);
+        $this->assertFalse($original->fresh()->is_most_recent);
+    }
+
     public function test_existing_duplicate_becomes_a_record_error_instead_of_preventing_creation(): void
     {
         $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();

@@ -146,14 +146,6 @@
     - gencc_deploy_with_maintenance_mode | bool
     - item.stdout | default('') | trim not in ['inactive', 'failed']
 
-- name: Back up the database that will be replaced
-  ansible.builtin.command: /opt/gencc/bin/backup-db.sh
-  register: gencc_pre_restore_backup_result
-  changed_when: true
-  when:
-    - gencc_db_bootstrap_mode == "restore_and_migrate"
-    - gencc_pre_restore_backup | bool
-
 - name: Put the current portal into maintenance mode and stop application work
   ansible.builtin.shell: |
     set -euo pipefail
@@ -162,7 +154,7 @@
       export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
       if podman container exists gencc-sub; then
         podman exec gencc-sub php artisan down --retry=60
-        podman exec gencc-sub pm2 stop gencc-queue-worker
+        podman exec gencc-sub pm2 stop gencc-queue-worker gencc-php-fpm
       fi
       search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
       if [[ "$search_load_state" != "not-found" ]]; then
@@ -172,3 +164,11 @@
   args:
     executable: /bin/bash
   when: gencc_deploy_with_maintenance_mode | bool
+
+- name: Back up the database that will be replaced
+  ansible.builtin.command: /opt/gencc/bin/backup-db.sh
+  register: gencc_pre_restore_backup_result
+  changed_when: true
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_pre_restore_backup | bool

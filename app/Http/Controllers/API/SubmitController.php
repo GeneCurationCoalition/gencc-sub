@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Models\Submitter;
 use App\Models\Job;
 use App\Models\Pubmed;
+use App\Services\DiseaseResolver;
 
 use Carbon\Carbon;
 
@@ -109,6 +110,10 @@ class SubmitController extends Controller
         switch ($packet->action)
         {
             case "create":
+                $lookupCaches = [
+                    'disease_resolver' => new DiseaseResolver(),
+                ];
+
                 foreach($packet->data as $data)
                 {
                     switch ($data->action)
@@ -125,7 +130,7 @@ class SubmitController extends Controller
                         default:
                             continue 2;
                     }
-                    $status = $submission->load_from_json($data);
+                    $status = $submission->load_from_json($data, $lookupCaches);
                     if ($status === true)
                     {
                         $submission->user_id = $user->id;

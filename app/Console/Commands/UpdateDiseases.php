@@ -166,8 +166,6 @@ class UpdateDiseases extends Command
                 AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Skipped - no changes');
             }
 
-            $this->info('Disease update complete');
-
             // Build summary
             $summary = sprintf(
                 "MONDO: %d, OMIM: %d, Orphanet: %d diseases processed",
@@ -175,8 +173,18 @@ class UpdateDiseases extends Command
                 count($this->seenOmimIds),
                 count($this->seenOrphanetIds)
             );
+
+            if (!empty($failed)) {
+                $message = 'Disease update failed for: '.implode(', ', $failed);
+                AdminProgressTracker::fail(self::PROGRESS_OPERATION, $message);
+
+                return self::FAILURE;
+            }
+
+            $this->info('Disease update complete');
             AdminProgressTracker::complete(self::PROGRESS_OPERATION, $summary);
 
+            return self::SUCCESS;
         } catch (\Exception $e) {
             AdminProgressTracker::fail(self::PROGRESS_OPERATION, $e->getMessage());
             throw $e;

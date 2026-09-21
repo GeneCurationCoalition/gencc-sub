@@ -1335,7 +1335,13 @@ class SubmissionFileValidationTest extends TestCase
         $this->assertNotNull(collect($errors)->firstWhere('error_type', 'republish_relationship_mismatch'));
     }
 
-    public function test_upload_gate_leaves_an_invalid_republish_relationship_value_for_the_record_validator(): void
+    /**
+     * @dataProvider invalidRepublishRelationshipValues
+     */
+    public function test_upload_gate_rejects_an_invalid_republish_relationship_value(
+        array $override,
+        string $errorType
+    ): void
     {
         $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();
         $disease = Disease::where('curie', 'MONDO:0000001')->firstOrFail();
@@ -1358,16 +1364,26 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
+            $this->createValidDataRow(array_merge([
                 'sgc_id' => 'SGC-100098',
                 'action' => 'R',
-                'moi_id' => 'HP:9999999',
-            ]),
+            ], $override)),
         ]);
 
-        $this->assertSame([], SubmissionFileValidation::validate_upload_gate(
+        $errors = SubmissionFileValidation::validate_upload_gate(
             $worksheet,
             $this->testSubmitter->id
-        ));
+        );
+
+        $this->assertNotNull(collect($errors)->firstWhere('error_type', $errorType));
+    }
+
+    public static function invalidRepublishRelationshipValues(): array
+    {
+        return [
+            'gene' => [['hgnc_id' => 'NOT_A_GENE'], 'republish_invalid_gene'],
+            'disease' => [['disease_id' => 'NOT_A_DISEASE'], 'republish_invalid_disease'],
+            'mode of inheritance' => [['moi_id' => 'HP:9999999'], 'republish_invalid_moi'],
+        ];
     }
 }
