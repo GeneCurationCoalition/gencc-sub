@@ -17,12 +17,8 @@
       - >-
         (gencc_db_bootstrap_mode != "restore_and_migrate")
         or (gencc_deploy_with_maintenance_mode | bool)
-      - >-
-        not (gencc_run_disease_update_on_deploy | default(false) | bool)
-        or (gencc_deploy_with_maintenance_mode | bool)
     fail_msg: >-
-      Database restores and deploy-time disease updates require
-      gencc_deploy_with_maintenance_mode=true.
+      Database restores require gencc_deploy_with_maintenance_mode=true.
 
 - name: Refuse a sanitized restore while outbound application mail is enabled
   ansible.builtin.assert:

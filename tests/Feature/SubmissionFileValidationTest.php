@@ -873,7 +873,7 @@ class SubmissionFileValidationTest extends TestCase
      * When uploading a new submission that matches an existing published
      * submission's gene-disease-MOI combination, it should report an error.
      */
-    public function test_fails_when_new_submission_duplicates_published(): void
+    public function test_fails_when_bare_hgnc_id_duplicates_published(): void
     {
         // Create an existing published submission
         $job = Job::create([
@@ -909,7 +909,7 @@ class SubmissionFileValidationTest extends TestCase
             $this->createValidDataRow([
                 'action' => 'N',
                 'local_key' => 'TEST-NEW-001',
-                'hgnc_id' => 'HGNC:5', // Same gene as published
+                'hgnc_id' => '5', // Same gene, using the permitted bare form
                 'disease_id' => 'MONDO:0000001', // Same disease
                 'moi_id' => 'HP:0000006', // Same MOI = DUPLICATE!
             ])

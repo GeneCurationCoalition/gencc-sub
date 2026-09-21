@@ -1854,7 +1854,7 @@ class SubmissionFileValidation
             }
 
             // Collect unique IDs for batch loading
-            $uniqueHgncIds[$hgnc_id_raw] = true;
+            $uniqueHgncIds[SubmissionValueValidation::normalizeGeneId($hgnc_id_raw)] = true;
             $uniqueDiseaseIds[$disease_id_raw] = true;
             $uniqueMoiIds[$moi_id_raw] = true;
             if (!empty($sgc_id) && $action === 'R') {

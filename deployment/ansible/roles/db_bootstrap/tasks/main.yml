@@ -214,7 +214,6 @@
   async: 7200
   poll: 0
   register: gencc_disease_update_job
-  when: gencc_run_disease_update_on_deploy | bool
 
 - name: Wait for disease mapping rebuild to complete
   ansible.builtin.async_status:
@@ -226,7 +225,6 @@
   failed_when:
     - gencc_disease_update_status.finished | bool
     - (gencc_disease_update_status.rc | default(0)) != 0
-  when: gencc_run_disease_update_on_deploy | bool
 
 - name: Clear application caches after database transition
   ansible.builtin.shell: |

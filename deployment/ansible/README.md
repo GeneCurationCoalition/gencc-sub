@@ -52,6 +52,8 @@ GCP/instance identifiers are currently stored directly in the workflow `env`.
 ## Database bootstrap
 By default the playbook **does not reset** the MySQL database; it only runs Laravel migrations inside the `gencc-sub` container.
 
+After migrations, every deployment runs `update:diseases --no-interaction` and waits for it. Its cached source headers skip unchanged imports. For a `migrate_only` rollout with disruptive migrations, pass `gencc_deploy_with_maintenance_mode=true` as a local extra variable; do not leave one-off rollout settings in the checked-in environment inventory. Restore deployments enable maintenance mode by default.
+
 To restore a database dump and then migrate:
 - Set `gencc_db_bootstrap_mode: restore_and_migrate`
 - Set `gencc_db_restore_force: true` (required safety switch)

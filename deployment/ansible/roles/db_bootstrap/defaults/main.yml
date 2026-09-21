@@ -11,10 +11,6 @@ gencc_db_restore_force: false
 # Keep the restore input outside the rollback-backup retention directory.
 gencc_db_restore_tmp_path: /var/lib/gencc/restore/gencc_sub_restore.sql.gz
 
-# Ordinarily the scheduled timer refreshes disease data. Enable this explicitly
-# for a release whose database transition requires an immediate rebuild.
-gencc_run_disease_update_on_deploy: false
-
 # Staging restores from production may preserve password login while clearing
 # copied sessions, bearer tokens, and reset/activation state. Two-factor
 # authentication remains intact so staging keeps the production login flow.
