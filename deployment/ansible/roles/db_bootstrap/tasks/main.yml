@@ -13,37 +13,91 @@
       - gencc_db_restore_force | bool
       - gencc_db_restore_source is defined
       - gencc_db_restore_source | length > 0
+      - gencc_db_restore_source is match('^(https?://|gs://).+\.sql\.gz$')
     fail_msg: >-
       Refusing to restore DB without explicit opt-in.
       Set gencc_db_restore_force=true and gencc_db_restore_source to an https:// or gs:// .sql.gz URL.
   when: gencc_db_bootstrap_mode == "restore_and_migrate"
 
-- name: Ensure restore directory exists
-  ansible.builtin.file:
-    path: "{{ gencc_db_restore_tmp_path | dirname }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
+- name: Wait for PM2 processes after restarting the application container
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      podman exec gencc-sub pm2 pid {{ item }}
+    '
+  args:
+    executable: /bin/bash
+  register: gencc_pm2_process
+  changed_when: false
+  until: (gencc_pm2_process.stdout | trim) is match('^[1-9][0-9]*$')
+  retries: 30
+  delay: 2
+  loop:
+    - gencc-nginx
+    - gencc-php-fpm
+    - gencc-queue-worker
+  when: gencc_quiesce_application | bool
+
+- name: Put the restarted portal into maintenance mode
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      set -euo pipefail
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      podman exec gencc-sub php artisan down --retry=60
+    '
+  args:
+    executable: /bin/bash
+  when: gencc_quiesce_application | bool
+
+- name: Stop the restarted application queue worker
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      set -euo pipefail
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      podman exec gencc-sub pm2 stop gencc-queue-worker
+    '
+  args:
+    executable: /bin/bash
+  when: gencc_quiesce_application | bool
+
+- name: Verify the restarted application queue worker is stopped
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      podman exec gencc-sub pm2 pid gencc-queue-worker
+    '
+  args:
+    executable: /bin/bash
+  register: gencc_queue_worker_pid
+  changed_when: false
+  failed_when: >-
+    (gencc_queue_worker_pid.rc != 0)
+    or ((gencc_queue_worker_pid.stdout | trim) != '0')
+  when: gencc_quiesce_application | bool
+
+- name: Stop search after restarting application containers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      set -euo pipefail
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
+      if [[ "$search_load_state" != "not-found" ]]; then
+        systemctl --user stop gencc-search.service
+      fi
+    '
+  args:
+    executable: /bin/bash
+  when: gencc_quiesce_application | bool
+
+- name: Verify the prepared restore dump still exists and is readable
+  ansible.builtin.command: "gzip -t {{ gencc_db_restore_tmp_path | quote }}"
+  changed_when: false
   when: gencc_db_bootstrap_mode == "restore_and_migrate"
-
-- name: Download database dump over HTTPS
-  ansible.builtin.get_url:
-    url: "{{ gencc_db_restore_source }}"
-    dest: "{{ gencc_db_restore_tmp_path }}"
-    owner: root
-    group: root
-    mode: "0600"
-  when:
-    - gencc_db_bootstrap_mode == "restore_and_migrate"
-    - gencc_db_restore_source is match('^https?://')
-
-- name: Download database dump from GCS
-  ansible.builtin.command: "gsutil cp {{ gencc_db_restore_source | quote }} {{ gencc_db_restore_tmp_path | quote }}"
-  changed_when: true
-  when:
-    - gencc_db_bootstrap_mode == "restore_and_migrate"
-    - gencc_db_restore_source is match('^gs://')
 
 - name: Drop and recreate database (destructive)
   ansible.builtin.shell: |
@@ -78,6 +132,60 @@
     - (gencc_db_restore_status.rc | default(0)) != 0
   when: gencc_db_bootstrap_mode == "restore_and_migrate"
 
+- name: Remove executable queue work copied from the source database
+  ansible.builtin.command:
+    argv:
+      - mysql
+      - "{{ gencc_mysql_database }}"
+      - -e
+      - TRUNCATE TABLE workers;
+  changed_when: true
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Clear transferable production authentication state on a sanitized restore
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mysql "{{ gencc_mysql_database }}" <<'SQL'
+    UPDATE users
+       SET remember_token = NULL,
+           api_token = NULL,
+           api_token_renewed_at = NULL,
+           device_token = NULL,
+           activation_token = NULL,
+           two_factor_secret = NULL,
+           two_factor_recovery_codes = NULL,
+           two_factor_confirmed_at = NULL;
+    TRUNCATE TABLE personal_access_tokens;
+    TRUNCATE TABLE password_reset_tokens;
+    TRUNCATE TABLE sessions;
+    SQL
+  args:
+    executable: /bin/bash
+  no_log: true
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_sanitize_restored_auth | bool
+
+- name: Find persisted web sessions after a sanitized restore
+  ansible.builtin.find:
+    paths: "{{ gencc_data_dir }}/gencc-sub/storage/framework/sessions"
+    file_type: file
+  register: gencc_restored_session_files
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_sanitize_restored_auth | bool
+
+- name: Remove persisted web sessions after a sanitized restore
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ gencc_restored_session_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_sanitize_restored_auth | bool
+
 - name: Run Laravel migrations inside gencc-sub container
   ansible.builtin.shell: |
     set -euo pipefail
@@ -99,6 +207,36 @@
   failed_when:
     - gencc_db_migrate_status.finished | bool
     - (gencc_db_migrate_status.rc | default(0)) != 0
+
+- name: Rebuild disease mappings from current upstream sources
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan update:diseases --no-interaction'
+  args:
+    executable: /bin/bash
+  async: 7200
+  poll: 0
+  register: gencc_disease_update_job
+  when: gencc_run_disease_update_on_deploy | bool
+
+- name: Wait for disease mapping rebuild to complete
+  ansible.builtin.async_status:
+    jid: "{{ gencc_disease_update_job.ansible_job_id }}"
+  register: gencc_disease_update_status
+  until: gencc_disease_update_status.finished
+  retries: 720
+  delay: 10
+  failed_when:
+    - gencc_disease_update_status.finished | bool
+    - (gencc_disease_update_status.rc | default(0)) != 0
+  when: gencc_run_disease_update_on_deploy | bool
+
+- name: Clear application caches after database transition
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan optimize:clear'
+  args:
+    executable: /bin/bash
 
 - name: Bootstrap initial release after database restore
   ansible.builtin.shell: |
@@ -159,7 +297,9 @@
   args:
     executable: /bin/bash
   register: gencc_clear_release_cache
-  when: gencc_should_regenerate_exports | bool
+  when:
+    - gencc_should_regenerate_exports | bool
+    - not (gencc_quiesce_application | bool)
   # Non-fatal: this only deletes cache markers, and gencc-search's 600s TTL
   # self-heals if it's skipped. A marker cleanup must not block nginx/timers
   # convergence in the roles that run after db_bootstrap.

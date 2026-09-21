@@ -1,0 +1,150 @@
+---
+- name: Validate restore settings before preparing the deployment
+  ansible.builtin.assert:
+    that:
+      - gencc_db_restore_force | bool
+      - gencc_db_restore_source is defined
+      - gencc_db_restore_source | length > 0
+      - gencc_db_restore_source is match('^(https?://|gs://).+\.sql\.gz$')
+    fail_msg: >-
+      Refusing to restore without an explicit force flag and an https:// or
+      gs:// source ending in .sql.gz.
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Refuse a sanitized restore while outbound application mail is enabled
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('MAIL_MAILER=log' in gencc_sub_env)
+        or ('MAIL_MAILER=array' in gencc_sub_env)
+    fail_msg: >-
+      A production database copy contains real user email addresses. Set the
+      staging gencc-sub MAIL_MAILER to log or array before restoring it.
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_sanitize_restored_auth | bool
+
+- name: Ensure restore download directory exists
+  ansible.builtin.file:
+    path: "{{ gencc_db_restore_tmp_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Download restore dump over HTTPS before downtime
+  ansible.builtin.get_url:
+    url: "{{ gencc_db_restore_source }}"
+    dest: "{{ gencc_db_restore_tmp_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_db_restore_source is match('^https?://')
+
+- name: Download restore dump from GCS before downtime
+  ansible.builtin.command: "gsutil cp {{ gencc_db_restore_source | quote }} {{ gencc_db_restore_tmp_path | quote }}"
+  changed_when: true
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_db_restore_source is match('^gs://')
+
+- name: Verify the downloaded gzip stream
+  ansible.builtin.command: "gzip -t {{ gencc_db_restore_tmp_path | quote }}"
+  changed_when: false
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Read prepared restore dump metadata
+  ansible.builtin.stat:
+    path: "{{ gencc_db_restore_tmp_path }}"
+    get_checksum: true
+    checksum_algorithm: md5
+  register: gencc_prepared_restore_dump
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Verify pinned restore dump size and checksum
+  ansible.builtin.assert:
+    that:
+      - >-
+        (gencc_db_restore_expected_size | int == 0)
+        or (gencc_prepared_restore_dump.stat.size | int == gencc_db_restore_expected_size | int)
+      - >-
+        (gencc_db_restore_expected_md5 | length == 0)
+        or (gencc_prepared_restore_dump.stat.checksum == gencc_db_restore_expected_md5)
+    fail_msg: >-
+      The downloaded restore dump does not match the approved size/checksum.
+      Refusing to replace the database.
+  when: gencc_db_bootstrap_mode == "restore_and_migrate"
+
+- name: Stop installed scheduled timers during a quiesced deployment
+  ansible.builtin.shell: |
+    set -euo pipefail
+    timer_load_state="$(systemctl show "{{ item }}" --property=LoadState --value)"
+    if [[ "$timer_load_state" != "not-found" ]] \
+        && systemctl is-active --quiet "{{ item }}"; then
+      systemctl stop "{{ item }}"
+      echo stopped
+    fi
+  args:
+    executable: /bin/bash
+  loop:
+    - gencc-sub-pubmed-sync.timer
+    - gencc-sub-update-genes.timer
+    - gencc-sub-update-diseases.timer
+    - gencc-sub-release.timer
+    - gencc-backup-db.timer
+  register: gencc_stopped_timer
+  changed_when: gencc_stopped_timer.stdout | trim == 'stopped'
+  when: gencc_quiesce_application | bool
+
+- name: Check for active scheduled services after stopping timers
+  ansible.builtin.command: "systemctl is-active {{ item }}"
+  loop:
+    - gencc-sub-pubmed-sync.service
+    - gencc-sub-update-genes.service
+    - gencc-sub-update-diseases.service
+    - gencc-sub-release.service
+    - gencc-backup-db.service
+  register: gencc_quiesced_service_states
+  changed_when: false
+  failed_when: false
+  when: gencc_quiesce_application | bool
+
+- name: Refuse database work while a scheduled service is active
+  ansible.builtin.fail:
+    msg: "Refusing database work while {{ item.item }} is active. Let it finish, then retry."
+  loop: "{{ gencc_quiesced_service_states.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - gencc_quiesce_application | bool
+    - item.stdout | default('') | trim == 'active'
+
+- name: Back up the database that will be replaced
+  ansible.builtin.command: /opt/gencc/bin/backup-db.sh
+  register: gencc_pre_restore_backup_result
+  changed_when: true
+  when:
+    - gencc_db_bootstrap_mode == "restore_and_migrate"
+    - gencc_pre_restore_backup | bool
+
+- name: Put the current portal into maintenance mode and stop application work
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc '
+      set -euo pipefail
+      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
+      if podman container exists gencc-sub; then
+        podman exec gencc-sub php artisan down --retry=60
+        podman exec gencc-sub pm2 stop gencc-queue-worker
+      fi
+      search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
+      if [[ "$search_load_state" != "not-found" ]]; then
+        systemctl --user stop gencc-search.service
+      fi
+    '
+  args:
+    executable: /bin/bash
+  when: gencc_quiesce_application | bool

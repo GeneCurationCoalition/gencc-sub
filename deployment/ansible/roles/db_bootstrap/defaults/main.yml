@@ -11,3 +11,12 @@ gencc_db_restore_force: false
 # Where to store the downloaded dump on the VM (must end with .sql.gz for clarity)
 gencc_db_restore_tmp_path: /var/backups/gencc/gencc_sub_restore.sql.gz
 
+# Run the ontology refresh as a required deploy step. A migration on this
+# branch expires the old source headers so the first run rebuilds exact-only
+# disease mappings even when the upstream files have not changed.
+gencc_run_disease_update_on_deploy: true
+
+# Staging restores from production may preserve password login while clearing
+# copied sessions, bearer tokens, reset/activation state, and 2FA material.
+# Keep false for production restores.
+gencc_sanitize_restored_auth: false
