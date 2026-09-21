@@ -16,7 +16,7 @@
   post_tasks:
     # A failure before post-tasks leaves the portal in maintenance mode, search
     # stopped, and the queue worker stopped for inspection.
-    - name: Restart search after a quiesced deployment
+    - name: Restart search after a maintenance-mode deployment
       ansible.builtin.shell: |
         set -euo pipefail
         sudo -iu {{ gencc_deploy_user }} bash -lc '
@@ -25,7 +25,7 @@
         '
       args:
         executable: /bin/bash
-      when: gencc_quiesce_application | bool
+      when: gencc_deploy_with_maintenance_mode | bool
 
     - name: Clear search release cache markers after restarting search
       ansible.builtin.shell: |
@@ -35,18 +35,18 @@
         executable: /bin/bash
       failed_when: false
       when:
-        - gencc_quiesce_application | bool
+        - gencc_deploy_with_maintenance_mode | bool
         - gencc_should_regenerate_exports | bool
 
-    - name: Restart the application queue worker after a quiesced deployment
+    - name: Restart the application queue worker after a maintenance-mode deployment
       ansible.builtin.shell: |
         set -euo pipefail
         sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub pm2 restart gencc-queue-worker'
       args:
         executable: /bin/bash
-      when: gencc_quiesce_application | bool
+      when: gencc_deploy_with_maintenance_mode | bool
 
-    - name: Start scheduled timers after a quiesced deployment
+    - name: Start scheduled timers after a maintenance-mode deployment
       ansible.builtin.systemd:
         name: "{{ item }}"
         enabled: true
@@ -58,7 +58,7 @@
         - gencc-sub-release.timer
         - gencc-backup-db.timer
       when:
-        - gencc_quiesce_application | bool
+        - gencc_deploy_with_maintenance_mode | bool
         - gencc_enable_timers | bool
 
     - name: Leave application maintenance mode after a successful deployment
@@ -67,4 +67,4 @@
         sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan up'
       args:
         executable: /bin/bash
-      when: gencc_quiesce_application | bool
+      when: gencc_deploy_with_maintenance_mode | bool

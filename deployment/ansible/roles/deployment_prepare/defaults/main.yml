@@ -1,8 +1,8 @@
 ---
-# A destructive restore always quiesces the application. Set this explicitly
-# for a migrate-only production deployment when its migrations require a
-# maintenance window.
-gencc_quiesce_application: "{{ gencc_db_bootstrap_mode == 'restore_and_migrate' }}"
+# A destructive restore always requires a maintenance window. Set this
+# explicitly for a migrate-only deployment when its migrations also require
+# the portal and background work to be stopped.
+gencc_deploy_with_maintenance_mode: "{{ gencc_db_bootstrap_mode == 'restore_and_migrate' }}"
 
 # Preserve the database being replaced so a failed restore can be rolled back.
 gencc_pre_restore_backup: true

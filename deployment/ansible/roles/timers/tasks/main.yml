@@ -118,4 +118,4 @@
     - gencc-backup-db.timer
   when:
     - gencc_enable_timers | bool
-    - not (gencc_quiesce_application | bool)
+    - not (gencc_deploy_with_maintenance_mode | bool)
