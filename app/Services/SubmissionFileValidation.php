@@ -323,7 +323,7 @@ class SubmissionFileValidation
 
     /**
      * The submitted date as YYYY-MM-DD, or null when it is not one this system
-     * accepts.  See ReportDate for which spellings and which range are allowed.
+     * accepts.  See SubmittedDate for which spellings and which range are allowed.
      */
     private static function parse_as_date($submitted_date): ?string
     {

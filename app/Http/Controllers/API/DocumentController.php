@@ -20,6 +20,7 @@ use App\Models\Inheritance;
 use App\Models\Classification;
 use App\Models\Mechanism;
 use App\Services\DiseaseResolver;
+use App\Services\SubmittedDate;
 use App\Services\SubmissionFileValidation;
 use App\Services\SubmissionDuplicateDetection;
 
@@ -956,10 +957,11 @@ class DocumentController extends Controller
             $data->hp_id = $row['moi_id'];
             $data->moi_name = $row['moi_name'];
 
-            // Pass the raw cell through the shared record validator. It accepts
-            // Excel day counts and supported text forms while retaining invalid
-            // input in submission_data for an actionable record error.
-            $data->report_date = $row['date'];
+            // Normalize every valid spreadsheet date before it enters the
+            // submission JSON. Keep invalid input unchanged so record
+            // validation can show the submitter what needs correction.
+            $submittedDate = SubmittedDate::usable($row['date']);
+            $data->report_date = $submittedDate?->format('Y-m-d') ?? $row['date'];
             $data->report_url = $row['public_report_url'];
             $data->gencc_classification_id = $row['classification_id'];
             $data->gencc_classification_name = $row['classification_name'];

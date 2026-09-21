@@ -14,6 +14,7 @@ use App\Models\Submission;
 use App\Models\Submitter;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Tests\TestCase;
@@ -192,6 +193,20 @@ class DocumentParserPubmedLinksTest extends TestCase
         );
     }
 
+    public function test_a_date_formatted_excel_cell_is_normalized_in_stored_submission_data(): void
+    {
+        $this->parse(
+            [$this->row('N', overrides: ['date' => ExcelDate::stringToExcel('2023-07-13')])],
+            fn ($sheet) => $sheet->getStyle('N13')->getNumberFormat()->setFormatCode('yyyy-mm-dd')
+        );
+
+        $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame('2023-07-13', substr((string) $created->report_date, 0, 10));
+        $this->assertSame('2023-07-13', $created->submission_data->report->display_date);
+        $this->assertSame('2023-07-13', $created->original_submission_data->report->display_date);
+        $this->assertArrayNotHasKey('report_date', (array) $created->submission_errors);
+    }
+
     private function publishedSubmission(string $sid, array $pmids): Submission
     {
         $submission = Submission::factory()->create([
@@ -243,7 +258,7 @@ class DocumentParserPubmedLinksTest extends TestCase
      * Write the rows into the template layout (headings on row 6, data from
      * row 13) and run the upload parser over them.
      */
-    private function parse(array $rows): void
+    private function parse(array $rows, ?callable $configureSheet = null): void
     {
         $sheet = (new Spreadsheet)->getActiveSheet();
         $sheet->fromArray(self::COLUMNS, null, 'A6');
@@ -251,6 +266,7 @@ class DocumentParserPubmedLinksTest extends TestCase
             $sheet->setCellValue("A{$r}", 'help text');
         }
         $sheet->fromArray(array_map(fn ($row) => array_values(array_merge(array_fill_keys(self::COLUMNS, ''), $row)), $rows), null, 'A13');
+        $configureSheet?->__invoke($sheet);
 
         $path = tempnam(sys_get_temp_dir(), 'upload');
         (new Xlsx($sheet->getParent()))->save($path);
