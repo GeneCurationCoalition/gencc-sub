@@ -228,7 +228,7 @@ Uses Ably for real-time updates (SpreadsheetUpdate event)
 
 The submission model validates against:
 - **Gene**: Must match HGNC ID in genes table
-- **Disease**: Must resolve through `DiseaseResolver` (MONDO, OMIM, Orphanet/ORPHA), to a MONDO term by exact match only (see `docs/DISEASE_MAPPING.md`)
+- **Disease**: Must resolve through `DiseaseResolver` (MONDO, OMIM, Orphanet/ORPHA), to a MONDO term by exact match only; the public policy is available at `/help/disease-mapping`
 - **MOI** (Mode of Inheritance): Must match HP term in inheritances table
 - **Classification**: Must match GENCC classification term
 - **Report Date**: Required, must be valid date format

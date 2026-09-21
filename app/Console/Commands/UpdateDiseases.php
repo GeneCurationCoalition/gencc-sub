@@ -35,8 +35,6 @@ use Illuminate\Support\Str;
  * `omim_id` and `orpha_id` keep the names they had before this policy, when
  * they also held non-exact identifiers, so that gencc-search, which reads them,
  * needs no change.
- *
- * See docs/DISEASE_MAPPING.md.
  */
 class UpdateDiseases extends Command
 {

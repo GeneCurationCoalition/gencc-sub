@@ -5,7 +5,7 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Remove legacy disease mappings and make update:diseases re-read MONDO and
- * Orphanet in full (docs/DISEASE_MAPPING.md).
+ * Orphanet in full under the exact-only mapping policy.
  *
  * Disease `xrefs` now hold exact-only equivalences, under the same `omim_id` /
  * `orpha_id` names the earlier importer filled with non-exact identifiers too,

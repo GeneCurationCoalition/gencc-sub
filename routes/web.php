@@ -41,6 +41,10 @@ Route::get('/', function () {
 // Download GenCC submission template with dynamic submitter IDs (public - no auth required)
 Route::get('/download/template', TemplateDownloadController::class)->name('download.template');
 
+// Public so it can be linked from uploaded spreadsheets and external instructions.
+Route::inertia('/help/disease-mapping', 'Help/DiseaseMapping')
+    ->name('help.disease-mapping');
+
 // Download User Guide PDF (with proper cache validation)
 Route::get('/download/user-guide', function () {
     $path = public_path('documents/UserGuide.pdf');

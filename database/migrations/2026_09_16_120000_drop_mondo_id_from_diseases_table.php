@@ -8,10 +8,10 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Drop diseases.mondo_id.
  *
- * The column linked an OMIM or Orphanet row to a MONDO row.  Under the
- * exact-only mapping policy (docs/DISEASE_MAPPING.md) equivalences are read from
- * each row's own `xrefs`, so nothing writes or reads the column any more, and
- * its values were partly derived from non-exact mappings.
+ * The column linked an OMIM or Orphanet row to a MONDO row. Under the exact-only
+ * mapping policy, equivalences are read from each row's own `xrefs`, so nothing
+ * writes or reads the column any more, and its values were partly derived from
+ * non-exact mappings.
  */
 return new class extends Migration
 {

@@ -249,7 +249,8 @@ null → validating → validation_failed OR validated → uploading → upload_
 - `name` = preserved (last active name)
 - `deprecated_name` = new obsolete name or "REMOVED-" prefix
 
-**See:** `docs/DISEASE_MAPPING.md` for full details
+The user-facing policy is published by the portal at `/help/disease-mapping`.
+`DiseaseResolver` and its focused tests are the implementation reference.
 
 ---
 

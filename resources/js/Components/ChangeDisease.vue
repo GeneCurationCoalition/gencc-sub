@@ -104,6 +104,7 @@
             <div v-if="apiError" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
                 <p class="font-bold">Unable to update disease</p>
                 <p class="text-sm">{{ apiError }}</p>
+                <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">How disease mapping works</a>
             </div>
 
             <div class="grid grid-cols-4">
@@ -121,7 +122,10 @@
                     <div class="font-sm ml-2 italic">&nbsp;</div>
                 </div>
                 <div v-else class="flex items-center col-span-3">
-                    <small id="username-help" class="text-red-600">{{ errors.disease }}</small>
+                    <small id="username-help" class="text-red-600">
+                        {{ errors.disease }}
+                        <a :href="route('help.disease-mapping')" target="_blank" class="ml-1 font-medium text-sky-800 underline">Accepted disease identifiers</a>
+                    </small>
                 </div>
             </div>
 

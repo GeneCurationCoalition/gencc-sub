@@ -1163,6 +1163,7 @@ console.log(props.submission)
                 <ul v-if="errorMessages().length > 0" class="list-disc list-inside mt-1">
                     <li v-for="(message, index) in errorMessages()" :key="index">{{ message }}</li>
                 </ul>
+                <a v-if="hasProperty('disease_curie_id')" :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">How disease mapping works</a>
                 <p class="mt-1">
                     Fields with errors are highlighted below in red.  Click on the field edit button to correct.
                     For a submission to be published to GenCC, all errors must be resolved.
@@ -1176,6 +1177,7 @@ console.log(props.submission)
                     Obsolete Disease Term
                 </p>
                 <p class="mt-1">{{ deprecatedDiseaseWarning.message }}</p>
+                <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">Learn more about deprecated disease terms</a>
             </div>
             <!-- Unpublished duplicate warning banner -->
             <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
