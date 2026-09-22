@@ -15,7 +15,7 @@
     import UnresolvedField from './UnresolvedField.vue';
 
 
-    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus'])
+    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus', 'embedded'])
 
     // Fields the keyword search matches, including the submitted ids of
     // reference fields that did not resolve
@@ -1499,7 +1499,7 @@ table tbody tr:hover {
             </div>
         </div>
 
-        <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
+        <div class="py-6 lg:py-8 bg-white border-b border-gray-200" :class="embedded ? 'px-0' : 'px-6 lg:px-8'">
 
             <div v-if="errors" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">There are submission errors present</p>
@@ -1767,20 +1767,23 @@ table tbody tr:hover {
                 </Column>
                 <Column field="status" header="Status" sortable>
                      <template #body="{ data }">
-                        <div class="flex items-center gap-2">
+                        <div class="flex flex-col items-center gap-1">
                             <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getStatusClass(data.status, data.is_archived)]" />
                             <span v-else>{{ displayStatus(data.status) }}</span>
-                            <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
-                               class="pi pi-exclamation-triangle text-red-500 text-xl"
-                               v-tooltip.top="errorSummary(data)"></i>
-                            <!-- Indicator for archived versions (superseded by newer release) -->
-                            <i v-if="data.is_archived"
-                               class="pi pi-history text-gray-400"
-                               v-tooltip.top="'Archived (superseded by newer release)'"></i>
+                            <div v-if="(data.submission_errors && Object.keys(data.submission_errors).length > 0) || data.is_archived"
+                                 class="flex items-center justify-center gap-1">
+                                <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
+                                   class="pi pi-exclamation-triangle text-red-500 text-xl"
+                                   v-tooltip.top="errorSummary(data)"></i>
+                                <!-- Indicator for archived versions (superseded by newer release) -->
+                                <i v-if="data.is_archived"
+                                   class="pi pi-history text-gray-400"
+                                   v-tooltip.top="'Archived (superseded by newer release)'"></i>
+                            </div>
                         </div>
                      </template>
                 </Column>
-                <Column header="Action" style="width: 10%; min-width: 8rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
+                <Column header="Action" style="width: 10%; min-width: 7rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
                     <template #body="slotProps">
                         <!-- Archived versions (superseded by newer release): Only show View button (no other actions) -->
                         <template v-if="slotProps.data.is_archived">

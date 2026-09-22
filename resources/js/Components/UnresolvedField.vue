@@ -14,7 +14,7 @@ defineProps({
 
 <template>
     <div v-tooltip.top="unresolved.message" class="cursor-help">
-        <div class="font-medium text-red-700">
+        <div class="font-medium text-red-700" :style="compact ? { overflowWrap: 'anywhere' } : null">
             <i class="pi pi-exclamation-circle text-xs mr-1"></i>{{ unresolved.id || 'None submitted' }}
         </div>
         <div class="text-xs text-red-600">

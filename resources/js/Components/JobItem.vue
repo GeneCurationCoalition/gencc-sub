@@ -1523,7 +1523,7 @@ const formatDate = (dateString) => {
                 No submissions: the uploaded file was not loaded.
             </div>
 
-            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" />
+            <SubmissionsListing :submissions="submissions" :errors="errors" :favorites="favorites" :hasSubmittedJob="hasSubmittedJob" :jobStatus="job?.status" :embedded="true" />
         </div>
 
     </div>

@@ -1540,7 +1540,7 @@ console.log(props.submission)
                           <div v-if="hasProperty('report_url') || hasProperty('report_date')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('report')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
                           <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('report')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeReport v-model:visible="showReportDialog" @input_report_close="showReport = false" @input_report_item="updateReport" v-bind:input="submission.submission_data?.report" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeReport>
+                              <ChangeReport v-model:visible="showReportDialog" @input_report_close="showReport = false" @input_report_item="updateReport" v-bind:input="submission.submission_data?.report" :normalized-date="submission.report_date" :date-error="submission.submission_errors?.report_date" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeReport>
                           </div>
                         </div>
 

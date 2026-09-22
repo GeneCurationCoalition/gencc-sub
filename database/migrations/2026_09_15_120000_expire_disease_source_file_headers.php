@@ -20,6 +20,13 @@ use Illuminate\Support\Facades\DB;
  * The import itself is left to update:diseases, which the deploy invokes after
  * migrations and the nightly timer invokes thereafter, so this migration needs
  * no network access.
+ *
+ * After this transition, update:diseases intentionally retains the last known
+ * exact-only xrefs when a disease disappears from an upstream release. This
+ * lets later submissions continue resolving through that deprecated term, with
+ * the portal's deprecation warning. If upstream identifiers are reassigned,
+ * those retained mappings may instead make resolution ambiguous; revisit this
+ * policy if current-release-only mappings become preferable.
  */
 return new class extends Migration
 {

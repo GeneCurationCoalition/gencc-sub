@@ -914,9 +914,14 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Mark a disease as removed/deprecated
-     * Set deprecated_name with REMOVED- prefix, leaving xrefs untouched so
-     * historical submissions keep their relationships.
+     * Mark a disease as removed/deprecated.
+     *
+     * Set deprecated_name with a REMOVED- prefix and intentionally retain the
+     * last exact-only xrefs. Existing submissions already retain their disease
+     * foreign keys; keeping the xrefs additionally allows future identifiers to
+     * resolve through the deprecated term and receive the portal warning. This
+     * may be revisited if mappings absent from the current release should stop
+     * participating in resolution.
      *
      * All three sources mark retired terms in their own files, and those are
      * stored as DEPRECATED by the phases above.  This only catches rows a

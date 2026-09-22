@@ -3,7 +3,7 @@
     import { useForm } from 'vee-validate';
     import * as yup from 'yup';
 
-    const props = defineProps(['visible', 'input', 'input2', 'header', 'title', 'label']);
+    const props = defineProps(['visible', 'input', 'input2', 'header', 'title', 'label', 'normalizedDate', 'dateError']);
 
     // component side validations
     const schema = yup.object({
@@ -11,7 +11,7 @@
         date: yup.date('Invalid date').required('Date is a required field').label('Date'),
     });
 
-    const { defineField, handleSubmit, resetForm, errors } = useForm({
+    const { defineField, handleSubmit, resetForm, errors, validateField, setFieldError } = useForm({
         validationSchema: schema,
     });
 
@@ -56,12 +56,21 @@
     /**
      * Function to initialize the local models used in child components with props values
      */
-    function initializeInput()
+    async function initializeInput()
     {
-        url.value = props.input.ext_url;
+        url.value = props.input?.ext_url ?? '';
+        date.value = props.normalizedDate
+            ? String(props.normalizedDate).slice(0, 10)
+            : String(props.input?.display_date ?? '');
 
-        // transform date to YYYY-mm-dd
-        date.value = props.input.display_date ? new Date(Date.parse(props.input.display_date)).toISOString().split('T')[0] : '';
+        await Promise.all([validateField('url'), validateField('date')]);
+
+        // Keep the server's explanation on an imported value that was rejected.
+        // Calendar supports string values, so the raw input remains visible
+        // until the submitter selects or enters a valid replacement.
+        if (props.dateError) {
+            setFieldError('date', props.dateError);
+        }
     }
 
 </script>
@@ -94,7 +103,7 @@
                     <label for="newInput" class="flex items-center font-semibold w-6rem">Evaluated Date</label>
                 </div>
                 <div class="flex items-center col-span-3 gap-3 mt-3">
-                    <Calendar v-model="date" showIcon iconDisplay="input" dateFormat="yy-mm-dd" placeholder="Select or enter a date" class="w-full md:w-14rem" />
+                    <Calendar v-model="date" showIcon iconDisplay="input" dateFormat="yy-mm-dd" placeholder="Select or enter a date" class="w-full md:w-14rem" :invalid="!!errors.date" />
                 </div>
                 <div class="flex items-center gap-3">
                     &nbsp;
