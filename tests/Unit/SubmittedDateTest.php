@@ -29,6 +29,7 @@ class SubmittedDateTest extends TestCase
             'timestamp on leap day' => ['2024-02-29T12:30:00Z', '2024-02-29'],
             'surrounding spaces' => ['  2024-01-15  ', '2024-01-15'],
             'spreadsheet date cell' => [ExcelDate::stringToExcel('2024-01-15'), '2024-01-15'],
+            'spreadsheet date cell with time' => [ExcelDate::stringToExcel('2024-01-15') + 0.5, '2024-01-15'],
             'the earliest allowed day' => [SubmittedDate::EARLIEST, SubmittedDate::EARLIEST],
         ];
     }
@@ -49,6 +50,10 @@ class SubmittedDateTest extends TestCase
         return [
             // A year typed into a date column is Excel day 2026, which is in 1905
             'a bare year' => [2026, 'outside the allowed date range'],
+            'zero Excel serial' => [0, 'Not a date'],
+            'fractional zero Excel serial' => [0.5, 'Not a date'],
+            'oversized Excel serial' => [10000000000, 'Not a date'],
+            'non-finite numeric string' => ['1e309', 'Not a date'],
             'US month first' => ['08/26/2024', 'Not a date'],
             'day first' => ['26/08/2024', 'Not a date'],
             'long form' => ['Aug 26, 2024', 'Not a date'],

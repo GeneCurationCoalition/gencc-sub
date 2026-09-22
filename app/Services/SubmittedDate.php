@@ -51,7 +51,20 @@ class SubmittedDate
         }
 
         if (is_numeric($value)) {
-            return CarbonImmutable::instance(ExcelDate::excelToDateTimeObject((float) $value))->startOfDay();
+            $serial = (float) $value;
+
+            // PhpSpreadsheet treats serials below 1 as Unix timestamps, so 0
+            // unexpectedly becomes 1970-01-01. Other unusable values are
+            // allowed to fail conversion or the shared allowed-range check.
+            if (! is_finite($serial) || $serial < 1) {
+                return null;
+            }
+
+            try {
+                return CarbonImmutable::instance(ExcelDate::excelToDateTimeObject($serial))->startOfDay();
+            } catch (\Throwable) {
+                return null;
+            }
         }
 
         if (! is_string($value)) {

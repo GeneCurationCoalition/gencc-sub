@@ -208,6 +208,15 @@ class DocumentParserPubmedLinksTest extends TestCase
         );
     }
 
+    public function test_oversized_numeric_date_becomes_an_editable_record_error(): void
+    {
+        $this->parse([$this->row('N', overrides: ['date' => 10000000000])]);
+
+        $created = Submission::where('job_id', $this->job->id)->sole();
+        $this->assertSame(10000000000.0, (float) $created->submission_data->report->display_date);
+        $this->assertStringContainsString('Not a date', $created->submission_errors->report_date);
+    }
+
     public function test_a_date_formatted_excel_cell_is_normalized_in_stored_submission_data(): void
     {
         $this->parse(
