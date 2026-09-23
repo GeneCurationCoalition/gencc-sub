@@ -300,7 +300,6 @@ cleanup_gcs_backups() {
     local old_objects_file delete_list_file
     old_objects_file=$(mktemp)
     delete_list_file=$(mktemp)
-    trap 'rm -f "$old_objects_file" "$delete_list_file"' RETURN
 
     local kept=0 monthly_kept=0
 
@@ -362,6 +361,8 @@ cleanup_gcs_backups() {
             failed=$((failed + 1))
         fi
     done < "$delete_list_file"
+
+    rm -f "$old_objects_file" "$delete_list_file"
 
     log_info "GCS retention cleanup: kept-recent=${kept}, kept-monthly=${monthly_kept}, deleted=${deleted}, failed=${failed}"
 }
