@@ -112,10 +112,14 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         // Create test diseases
-        Disease::create([
+        $mondo = Disease::create([
             'curie' => 'MONDO:0000001',
             'name' => 'disease',
             'description' => 'Test disease',
+            'type' => Disease::TYPE_MONDO,
+            // The identifiers MONDO itself exact-matches, which is the only way
+            // an OMIM or Orphanet code reaches a MONDO term
+            'xrefs' => ['omim_id' => ['123456'], 'orpha_id' => ['700001'], 'replaced_by' => null],
             'status' => Disease::STATUS_ACTIVE
         ]);
 
@@ -123,7 +127,26 @@ class SubmissionFileValidationTest extends TestCase
             'curie' => 'OMIM:123456',
             'name' => 'Test OMIM Disease',
             'description' => 'Test OMIM disease',
-            'mondo_id' => 'MONDO:0000001',
+            'type' => Disease::TYPE_OMIM,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        // An Orphanet term MONDO has ingested
+        Disease::create([
+            'curie' => 'Orphanet:700001',
+            'name' => 'Test Orphanet Disease',
+            'description' => 'Test Orphanet disease',
+            'type' => Disease::TYPE_ORPHANET,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        // An Orphanet term with no exact MONDO equivalent from any direction.
+        // Warned about at upload, then rejected per record.
+        Disease::create([
+            'curie' => 'Orphanet:723146',
+            'name' => 'Unmapped Orphanet Disease',
+            'description' => 'Orphanet term with no MONDO equivalent',
+            'type' => Disease::TYPE_ORPHANET,
             'status' => Disease::STATUS_ACTIVE
         ]);
 
@@ -452,6 +475,136 @@ class SubmissionFileValidationTest extends TestCase
     }
 
     /**
+     * Issue 132: an Orphanet identifier validates whichever accepted prefix the
+     * submitter wrote.  'ORPHA:' used to miss the exact-CURIE cache (which is
+     * keyed 'Orphanet:') and 'Orphanet:' used to miss the MONDO mapping cache
+     * (which was keyed 'ORPHA:'), so both spellings errored.
+     */
+    public function test_accepts_both_orpha_and_orphanet_prefixes(): void
+    {
+        foreach (['Orphanet:700001', 'ORPHANET:700001', 'ORPHA:700001', 'orpha:700001'] as $submitted) {
+            $worksheet = $this->createValidSpreadsheet([
+                $this->createValidDataRow(['disease_id' => $submitted])
+            ]);
+
+            SubmissionFileValidation::set_submitter_id($this->submitter->id);
+            $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+            $this->assertEmpty(
+                $errors,
+                "'{$submitted}' should validate cleanly, got: ".json_encode(array_column($errors, 'message'))
+            );
+        }
+    }
+
+    /**
+     * A disease identifier with no exact MONDO equivalent does not block the
+     * upload.  Whether an identifier resolves is now reported per record, after
+     * the rows exist, where the submitter can fix it in place; the upload only
+     * warns, so it is not a surprise.  validateFile() returns 422 for results
+     * whose severity is not 'warning'.
+     */
+    public function test_warns_but_does_not_error_for_disease_without_mondo(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'Orphanet:723146'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $blocking = array_filter($results, fn ($r) => ($r['severity'] ?? 'error') !== SubmissionFileValidation::SEVERITY_WARNING);
+        $this->assertEmpty(
+            $blocking,
+            'An unmapped disease term must not block the upload, got: '.json_encode(array_column($blocking, 'message'))
+        );
+
+        $warnings = array_values(array_filter($results, fn ($r) => ($r['severity'] ?? null) === SubmissionFileValidation::SEVERITY_WARNING));
+        $this->assertCount(1, $warnings);
+        $this->assertEquals('disease_id', $warnings[0]['column']);
+        $this->assertEquals('13', $warnings[0]['rows']);
+        $this->assertEquals('Orphanet:723146', $warnings[0]['details'][0]['value']);
+
+        // The rows would become record errors, which block submitting the job
+        $this->assertTrue($warnings[0]['blocks_submission'] ?? false);
+    }
+
+    /**
+     * The warning is grouped: one result for the column, with the affected rows
+     * broken out per submitted value, not one result per row.
+     */
+    public function test_groups_disease_without_mondo_warnings(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'Orphanet:723146', 'local_key' => 'TEST001']),
+            $this->createValidDataRow(['disease_id' => 'ORPHA:723146', 'local_key' => 'TEST002', 'hgnc_id' => 'HGNC:9673', 'hgnc_symbol' => 'BRCA1']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:0000001', 'local_key' => 'TEST003', 'hgnc_id' => 'HGNC:1234', 'hgnc_symbol' => 'TEST1']),
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $warnings = array_values(array_filter($results, fn ($r) => ($r['column'] ?? null) === 'disease_id'));
+
+        $this->assertCount(1, $warnings);
+        $this->assertEquals(SubmissionFileValidation::SEVERITY_WARNING, $warnings[0]['severity']);
+        $this->assertEquals('13, 14', $warnings[0]['rows']);
+        $this->assertEqualsCanonicalizing(
+            ['Orphanet:723146', 'ORPHA:723146'],
+            array_column($warnings[0]['details'], 'value')
+        );
+    }
+
+    /**
+     * An OMIM identifier MONDO exact-matches is submittable.
+     */
+    public function test_accepts_omim_id_asserted_by_mondo(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'OMIM:123456'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $this->assertEmpty($errors, 'Got: '.json_encode(array_column($errors, 'message')));
+    }
+
+    /**
+     * OMIM reciprocity: an OMIM identifier no MONDO term exact-matches does not
+     * resolve, however many other rows point at it.  MONDO listing the id is the
+     * whole of the mapping, because OMIM's own source asserts nothing.
+     */
+    public function test_rejects_omim_id_mondo_does_not_claim(): void
+    {
+        Disease::create([
+            'curie' => 'MONDO:0000009',
+            'name' => 'Unclaiming target',
+            'type' => Disease::TYPE_MONDO,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        Disease::create([
+            'curie' => 'OMIM:621570',
+            'name' => 'Unmapped OMIM disease',
+            'type' => Disease::TYPE_OMIM,
+            'status' => Disease::STATUS_ACTIVE
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'OMIM:621570'])
+        ]);
+
+        SubmissionFileValidation::set_submitter_id($this->submitter->id);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+
+        $diseaseResults = array_values(array_filter($results, fn ($e) => ($e['column'] ?? null) === 'disease_id'));
+        $this->assertCount(1, $diseaseResults);
+        $this->assertEquals('invalid_field_value', $diseaseResults[0]['error_type']);
+        $this->assertEquals(SubmissionFileValidation::SEVERITY_WARNING, $diseaseResults[0]['severity']);
+    }
+
+    /**
      * Test 12: Date format validation
      *
      * Tests that invalid date formats are properly caught by the validator.
@@ -720,7 +873,7 @@ class SubmissionFileValidationTest extends TestCase
      * When uploading a new submission that matches an existing published
      * submission's gene-disease-MOI combination, it should report an error.
      */
-    public function test_fails_when_new_submission_duplicates_published(): void
+    public function test_fails_when_bare_hgnc_id_duplicates_published(): void
     {
         // Create an existing published submission
         $job = Job::create([
@@ -756,7 +909,7 @@ class SubmissionFileValidationTest extends TestCase
             $this->createValidDataRow([
                 'action' => 'N',
                 'local_key' => 'TEST-NEW-001',
-                'hgnc_id' => 'HGNC:5', // Same gene as published
+                'hgnc_id' => '5', // Same gene, using the permitted bare form
                 'disease_id' => 'MONDO:0000001', // Same disease
                 'moi_id' => 'HP:0000006', // Same MOI = DUPLICATE!
             ])

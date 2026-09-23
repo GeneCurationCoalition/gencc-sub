@@ -100,7 +100,7 @@ const logout = () => {
                                 </div>
                             </template>
                             <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
-                                <NavLink :href="route('help')" :active="route().current('help')">
+                                <NavLink :href="route('help')" :active="route().current('help*')">
                                     Help  & Documentation
                                 </NavLink>
                             </div>

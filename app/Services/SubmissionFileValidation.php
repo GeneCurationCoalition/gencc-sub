@@ -4,8 +4,6 @@ namespace App\Services;
 
 use App\Models\Disease;
 use App\Models\Gene;
-use Carbon\Carbon;
-use Carbon\Exceptions\InvalidFormatException;
 
 use App\Models\Classification;
 use App\Models\Inheritance;
@@ -13,6 +11,8 @@ use App\Models\Submitter;
 use App\Models\Pubmed;
 use App\Models\Submission;
 use App\Services\SubmissionDuplicateDetection;
+use App\Services\DiseaseResolver;
+use App\Services\SubmittedDate;
 
 class SubmissionFileValidation
 {
@@ -49,6 +49,15 @@ class SubmissionFileValidation
      *          'is_date' = boolean indicating that the field is a date field (optional)
      *          'validator_method' = callable reference to a validation method that returns valid values (optional)
      *              Use either 'regexp' or 'validator_method' but not both.
+     *          'validator_with_argument' = an associative array of
+     *              'method' = callable reference to a validator taking the cell value and
+     *                  returning null when it is invalid (required)
+     *              'passes_resolver' = boolean indicating that the file's DiseaseResolver
+     *                  is passed to the validator as a second argument (optional)
+     *              'severity' = severity of a rejection; defaults to SEVERITY_ERROR,
+     *                  which blocks the upload.  SEVERITY_WARNING lets the rows
+     *                  through to per-record validation (optional)
+     *              'message' = string message used when the validator rejects a value (optional)
      */
     private static array $COLUMN_MAP = [
         'sgc_id' => [
@@ -88,8 +97,16 @@ class SubmissionFileValidation
             # MONDO:#####, OMIM:#### or ORPHA:######/Orphanet:######
             'regexp' => '/^(MONDO|OMIM|ORPHA|Orphanet):\d+$/i',
             'validator_with_argument' => [
-                'method' => [Disease::class, 'rosettaForSubmission'],
-                'message' => 'No MONDO associated disease value for submitted OMIM or ORPHA disease id',
+                'method' => [self::class, 'resolve_disease_for_submission'],
+                'passes_resolver' => true,
+                // Not blocking: an identifier with no exact MONDO equivalent is
+                // reported per record once the rows exist, where the submitter
+                // can fix it in place through the disease dialog.
+                'severity' => self::SEVERITY_WARNING,
+                // ...but each such row becomes a record error, which does block
+                // submitting the job
+                'blocks_submission' => true,
+                'message' => 'Submitted disease IDs could not be resolved to a unique MONDO term',
             ],
         ],
         'disease_name' => [
@@ -126,8 +143,7 @@ class SubmissionFileValidation
         'date' => [
             'desc' => 'Report Date',
             'required' => true,
-            # YYYY/MM/DD or YYYY-MM-DD
-            'regexp' => '/^\d{4}[\/-]\d{2}[\/\-]\d{2}$/',
+            # No regexp: SubmittedDate is the only rule for which dates are accepted
             'is_date' => true,
         ],
         'public_report_url' => [
@@ -180,6 +196,9 @@ class SubmissionFileValidation
 
     public static function set_submitter_id($submitter_id): void
     {
+        if (self::$submitter_id !== $submitter_id) {
+            self::$valid_submitters = null;
+        }
         self::$submitter_id = $submitter_id;
     }
 
@@ -283,22 +302,32 @@ class SubmissionFileValidation
         return array_search($column, array_keys(self::$COLUMN_MAP));
     }
 
-    private static function parse_as_date($numeric_date): ?string
+    /**
+     * The 'disease_id' column validator.
+     *
+     * Resolves through the file's resolver, so the column check and the later
+     * row processing reach the same verdict from the same code.  A failure here
+     * is a warning, not a blocking error: the row is still imported and carries
+     * a per-record `disease_curie_id` error the submitter fixes in the portal.
+     *
+     * @param string $value The submitted disease identifier
+     * @param DiseaseResolver $resolver The file's resolver
+     * @return Disease|DiseaseMappingAmbiguity|null The MONDO term, ambiguity details, or no match
+     */
+    public static function resolve_disease_for_submission($value, DiseaseResolver $resolver): Disease|DiseaseMappingAmbiguity|null
     {
-        // the date can get tricky due to excels auto format
-        if (is_numeric($numeric_date)) {
-            $date = Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($numeric_date));
-            $date = $date->format('Y-m-d');
-        }
-        else
-        {
-            try {
-                $date = Carbon::parse($numeric_date)->format('Y-m-d');
-            } catch (InvalidFormatException $_) {
-                $date = null;
-            }
-        }
-        return $date;
+        $outcome = $resolver->resolveDetailed($value);
+
+        return $outcome instanceof DiseaseResolution ? $outcome->mondo : $outcome;
+    }
+
+    /**
+     * The submitted date as YYYY-MM-DD, or null when it is not one this system
+     * accepts.  See SubmittedDate for which spellings and which range are allowed.
+     */
+    private static function parse_as_date($submitted_date): ?string
+    {
+        return SubmittedDate::usable($submitted_date)?->format('Y-m-d');
     }
 
     /**
@@ -317,7 +346,7 @@ class SubmissionFileValidation
             'action' => 'Must be one of: N (New), R (Republish), or U (Unpublish).',
             'public_report_url' => 'Must be a valid URL starting with http:// or https://',
             'assertion_criteria_url' => 'Must be a valid URL to the assertion criteria documentation.',
-            'date' => 'Must be a valid date in format YYYY-MM-DD or MM/DD/YYYY.',
+            'date' => SubmittedDate::GUIDANCE,
         ];
 
         return $guidance[$column_name] ?? 'Please check the value and refer to https://thegencc.org/submission-directions';
@@ -376,6 +405,11 @@ class SubmissionFileValidation
                     $grouped[$key]['_group_message'] = $error['group_message'];
                 }
 
+                // Preserve whether the affected rows would block submitting the job
+                if (!empty($error['blocks_submission'])) {
+                    $grouped[$key]['blocks_submission'] = true;
+                }
+
                 // Preserve file format error fields
                 if (!empty($error['is_file_format_error'])) {
                     $grouped[$key]['is_file_format_error'] = $error['is_file_format_error'];
@@ -390,13 +424,16 @@ class SubmissionFileValidation
             }
 
             // Track unique values for column-level errors
-            if (!empty($error['value'])) {
+            if (isset($error['value']) && (string) $error['value'] !== '') {
                 $val = $error['value'];
                 if (!isset($grouped[$key]['_values'][$val])) {
                     $grouped[$key]['_values'][$val] = [];
                 }
                 if (isset($error['row'])) {
                     $grouped[$key]['_values'][$val][] = $error['row'];
+                }
+                if (!empty($error['reason'])) {
+                    $grouped[$key]['_reasons'][$val] = $error['reason'];
                 }
             }
         }
@@ -422,8 +459,12 @@ class SubmissionFileValidation
                     $error['message'] = "{$error['_group_message']} ({$rowLabel}).";
                 } else {
                     $guidance = self::get_column_guidance($column);
-                    $errorVerb = ($error['error_type'] === 'invalid_field_format') ? 'Invalid format' : 'Invalid value';
-                    $error['message'] = "{$errorVerb} for column '{$column}' ({$rowLabel}). {$guidance}";
+                    if ($error['error_type'] === 'missing_required_field') {
+                        $error['message'] = "Required field '{$column}' is missing ({$rowLabel}). {$guidance}";
+                    } else {
+                        $errorVerb = ($error['error_type'] === 'invalid_field_format') ? 'Invalid format' : 'Invalid value';
+                        $error['message'] = "{$errorVerb} for column '{$column}' ({$rowLabel}). {$guidance}";
+                    }
                 }
 
                 // Build details array from unique values
@@ -431,11 +472,15 @@ class SubmissionFileValidation
                     $details = [];
                     foreach ($error['_values'] as $value => $valueRows) {
                         sort($valueRows, SORT_NUMERIC);
-                        $details[] = [
+                        $detail = [
                             'value' => $value,
                             'rows' => implode(', ', $valueRows),
                             'count' => count($valueRows),
                         ];
+                        if (isset($error['_reasons'][$value])) {
+                            $detail['reason'] = $error['_reasons'][$value];
+                        }
+                        $details[] = $detail;
                     }
                     // Sort details by count descending (most common first)
                     usort($details, fn($a, $b) => $b['count'] - $a['count']);
@@ -445,6 +490,7 @@ class SubmissionFileValidation
 
             // Clean up temporary and row-specific fields
             unset($error['_values']);
+            unset($error['_reasons']);
             unset($error['_group_message']);
             unset($error['row']);
             unset($error['sgc_id']);
@@ -455,6 +501,150 @@ class SubmissionFileValidation
         }
 
         return $result;
+    }
+
+    /**
+     * Validate only what must be true before rows can be interpreted safely.
+     * Content errors belong on the records created from an accepted file and
+     * are handled by Submission::load_from_json().
+     */
+    public static function validate_upload_gate($worksheet, int $submitter_id, $progressCallback = null): array
+    {
+        self::set_submitter_id($submitter_id);
+
+        $total_rows = count($worksheet);
+        if ($total_rows < self::FIRST_DATA_ROW) {
+            return [[
+                'error_type' => 'invalid_file_format',
+                'severity' => self::SEVERITY_FATAL,
+                'validation_type' => self::FILE_FORMAT_VALIDATION,
+                'is_file_format_error' => true,
+                'user_title' => 'Invalid File Format',
+                'user_message' => 'The uploaded file does not appear to be a valid GenCC submission template. '
+                    .'Please download the official template and ensure submission data starts on row 13.',
+                'message' => "The spreadsheet contains {$total_rows} rows, but data must start on row 13.",
+            ]];
+        }
+
+        if ($progressCallback) {
+            $progressCallback('Checking spreadsheet structure...');
+        }
+
+        $header = $worksheet[self::HEADER_ROW_NUM - 1] ?? [];
+        $header_validation = self::validate_header_row($header);
+        if (!empty($header_validation)) {
+            return [$header_validation];
+        }
+
+        $validation_results = [];
+
+        $data_row_count = 0;
+        foreach ($worksheet as $offset => $raw_row) {
+            $row_num = $offset + 1;
+            if ($row_num < self::FIRST_DATA_ROW || empty(implode('', $raw_row))) {
+                continue;
+            }
+            $data_row_count++;
+
+            $unexpected_values = array_filter(
+                array_slice($raw_row, count(self::$COLUMN_MAP)),
+                fn ($value) => trim((string) $value) !== ''
+            );
+            if (!empty($unexpected_values)) {
+                $validation_results[] = [
+                    'error_type' => 'unexpected_data_columns',
+                    'severity' => self::SEVERITY_ERROR,
+                    'validation_type' => self::FILE_FORMAT_VALIDATION,
+                    'row' => $row_num,
+                    'message' => 'Submission rows contain data beyond the 18 columns declared by the template header.',
+                ];
+            }
+
+            $row = array_pad(
+                array_slice($raw_row, 0, count(self::$COLUMN_MAP)),
+                count(self::$COLUMN_MAP),
+                ''
+            );
+            $sgc_id = trim((string) $row[self::get_index('sgc_id')]);
+            $local_key = $row[self::get_index('local_key')];
+            $action_value = trim((string) $row[self::get_index('action')]);
+            $action = strtoupper($action_value);
+
+            if ($action === '') {
+                $validation_results[] = [
+                    'error_type' => 'missing_required_field',
+                    'severity' => self::SEVERITY_ERROR,
+                    'validation_type' => self::DATA_VALIDATION,
+                    'row' => $row_num,
+                    'column' => 'action',
+                    'message' => "Required field 'action' is missing.",
+                ];
+            } elseif (!preg_match(self::$COLUMN_MAP['action']['regexp'], $action_value)) {
+                $validation_results[] = [
+                    'error_type' => 'invalid_field_format',
+                    'severity' => self::SEVERITY_ERROR,
+                    'validation_type' => self::DATA_VALIDATION,
+                    'row' => $row_num,
+                    'column' => 'action',
+                    'value' => $action_value,
+                    'message' => "Invalid format for column 'action': '{$action_value}'. ".self::get_column_guidance('action'),
+                ];
+            }
+
+            // The submitter is supplied by the authenticated upload context,
+            // but an N/R row must agree with it so the file cannot claim a
+            // different organization. U rows intentionally contain only SGC ID
+            // and action.
+            if ($action !== 'U') {
+                $submitted_submitter = trim((string) $row[self::get_index('submitter_id')]);
+                if ($submitted_submitter === '') {
+                    $validation_results[] = [
+                        'error_type' => 'missing_required_field',
+                        'severity' => self::SEVERITY_ERROR,
+                        'validation_type' => self::DATA_VALIDATION,
+                        'row' => $row_num,
+                        'column' => 'submitter_id',
+                        'message' => "Required field 'submitter_id' is missing.",
+                    ];
+                } elseif (!in_array($submitted_submitter, self::get_valid_submitters(), true)) {
+                    $validation_results[] = [
+                        'error_type' => 'invalid_field_value',
+                        'severity' => self::SEVERITY_ERROR,
+                        'validation_type' => self::DATA_VALIDATION,
+                        'row' => $row_num,
+                        'column' => 'submitter_id',
+                        'value' => $submitted_submitter,
+                        'group_message' => 'Submitter IDs do not match the organization receiving this upload',
+                        'message' => "Submitter ID '{$submitted_submitter}' does not match the organization receiving this upload.",
+                    ];
+                }
+            }
+
+            array_push($validation_results, ...self::validate_action_rules($row, $row_num, $sgc_id, $local_key));
+        }
+
+        if ($data_row_count === 0) {
+            $validation_results[] = [
+                'error_type' => 'missing_submission_rows',
+                'severity' => self::SEVERITY_ERROR,
+                'validation_type' => self::FILE_FORMAT_VALIDATION,
+                'message' => 'File contains no submission rows. Submission data must start on row 13.',
+            ];
+        }
+
+        // These are file-wide conflicts: the application cannot safely apply
+        // two operations to the same SGC ID or create duplicate relationship
+        // keys in one batch.
+        array_push($validation_results, ...self::validate_duplicate_sgc_ids($worksheet));
+        array_push($validation_results, ...self::validate_sgc_ids_batch($worksheet, $submitter_id, true));
+
+        $disease_resolver = new DiseaseResolver();
+        array_push(
+            $validation_results,
+            ...self::validate_duplicate_submissions_batch($worksheet, $submitter_id, $disease_resolver, true)
+        );
+
+        return self::group_validation_errors($validation_results);
     }
 
     public static function validate_spreadsheet($worksheet, $submitter_id, $skipPmidFetch = false, $progressCallback = null): array
@@ -500,6 +690,12 @@ class SubmissionFileValidation
             $progressCallback('Validating column headers...');
         }
 
+        // One disease resolver for the whole file, threaded explicitly into every
+        // step that resolves a disease identifier.  Explicit rather than static:
+        // the queue worker runs up to 1000 jobs, and the nightly update:diseases
+        // run can change the table underneath a resolver held between uploads.
+        $disease_resolver = new DiseaseResolver();
+
         // validate the header row and data rows
         $row_num = 0;
         foreach ($worksheet as $row) {
@@ -530,7 +726,7 @@ class SubmissionFileValidation
 
                 // skip empty data rows
                 if (!empty(implode('', $row)))
-                    array_push($validation_results, ...self::validate_data_row($row, $row_num));
+                    array_push($validation_results, ...self::validate_data_row($row, $row_num, $disease_resolver));
 
                 // accumulate unique values - for those columns marked with 'unique => true'
                 foreach ($unique_columns as $unique_column_key) {
@@ -586,7 +782,7 @@ class SubmissionFileValidation
         }
 
         // Batch validate for duplicate gene-disease-MOI combinations
-        $duplicate_submission_validation = self::validate_duplicate_submissions_batch($worksheet, $submitter_id);
+        $duplicate_submission_validation = self::validate_duplicate_submissions_batch($worksheet, $submitter_id, $disease_resolver);
         if (!empty($duplicate_submission_validation)) {
             array_push($validation_results, ...$duplicate_submission_validation);
         }
@@ -661,14 +857,20 @@ class SubmissionFileValidation
                 ? 'none'
                 : implode(', ', $validation['extra_columns']);
 
+            $duplicateStr = empty($validation['duplicate_columns'])
+                ? 'none'
+                : implode(', ', $validation['duplicate_columns']);
+
             $message = sprintf(
                 'Header validation failed in row 6. Found %d fields, missing %d required fields, %d extra fields. ' .
-                    'Missing fields: %s. Extra fields: %s.',
+                    'Missing fields: %s. Extra fields: %s. Duplicate fields: %s. Ordered correctly: %s.',
                 $validation['total_found'],
                 count($validation['missing_columns']),
                 count($validation['extra_columns']),
                 $missingStr,
-                $extraStr
+                $extraStr,
+                $duplicateStr,
+                $validation['ordered'] ? 'yes' : 'no'
             );
 
             // Determine user message based on what's wrong
@@ -678,6 +880,12 @@ class SubmissionFileValidation
             }
             if (!empty($validation['extra_columns'])) {
                 $userMessage .= 'Unexpected columns: ' . $extraStr . '. ';
+            }
+            if (!empty($validation['duplicate_columns'])) {
+                $userMessage .= 'Duplicate columns: ' . $duplicateStr . '. ';
+            }
+            if (!$validation['ordered']) {
+                $userMessage .= 'Columns must appear in the exact order used by the template. ';
             }
             $userMessage .= 'Please download and use the official template from the GenCC website.';
 
@@ -702,15 +910,20 @@ class SubmissionFileValidation
      */
     public static function validate_header_columns(array $actual_headers): array
     {
-        // filter nulls and make associative array
-        $actual_headers = array_values(array_filter($actual_headers));
+        // Spreadsheet readers pad rows to the worksheet's widest used column.
+        // Ignore trailing blank cells, but preserve internal blanks so shifted
+        // headers cannot be compressed into an apparently valid sequence.
+        while (!empty($actual_headers) && trim((string) end($actual_headers)) === '') {
+            array_pop($actual_headers);
+        }
+        $actual_headers = array_values($actual_headers);
         $required_columns = self::get_column_names();
         $missing_columns = [];
         $extra_columns = [];
 
         // Normalize headers (trim spaces, convert to lowercase for comparison)
         $normalized_actual = array_map(function($header) {
-            return strtolower(trim($header));
+            return strtolower(trim((string) $header));
         }, $actual_headers);
 
         $normalized_required = array_map('strtolower', $required_columns);
@@ -733,10 +946,23 @@ class SubmissionFileValidation
             }
         }
 
+        $counts = array_count_values($normalized_actual);
+        $duplicate_columns = array_keys(array_filter(
+            $counts,
+            fn ($count, $header) => $header !== '' && $count > 1,
+            ARRAY_FILTER_USE_BOTH
+        ));
+        $ordered = $normalized_actual === $normalized_required;
+
         return [
-            'valid' => empty($missing_columns),
+            'valid' => empty($missing_columns)
+                && empty($extra_columns)
+                && empty($duplicate_columns)
+                && $ordered,
             'missing_columns' => $missing_columns,
             'extra_columns' => $extra_columns,
+            'duplicate_columns' => $duplicate_columns,
+            'ordered' => $ordered,
             'total_required' => count($required_columns),
             'total_found' => count($actual_headers)
         ];
@@ -747,11 +973,15 @@ class SubmissionFileValidation
      *
      * @param $data_row - data row
      * @param $row_num - row number
+     * @param $disease_resolver - the file's disease resolver; when omitted a
+     *      database-backed one is built, which is fine for a single row but far
+     *      too slow to leave to chance on a whole file
      * @return array - vslidation error array
      */
-    public static function validate_data_row($data_row, $row_num): array
+    public static function validate_data_row($data_row, $row_num, ?DiseaseResolver $disease_resolver = null): array
     {
         $validation_results = [];
+        $disease_resolver ??= Disease::resolver();
 
         // get just the number of columns we expect
         $data_row = array_slice($data_row, 0, count(self::$COLUMN_MAP));
@@ -812,15 +1042,21 @@ class SubmissionFileValidation
                 $value = self::parse_as_date($original_value);
 
                 // If date parsing failed but original value was not empty, report error
-                if ($value === null && !empty(trim($original_value))) {
+                if ($value === null && !empty(trim((string) $original_value))) {
+                    $reason = SubmittedDate::rejectionReason($original_value);
                     $validation_results[] = [
                         'error_type' => 'invalid_field_format',
                         'severity' => self::SEVERITY_ERROR,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
+                        'column' => $column_name,
+                        'value' => (string) $original_value,
+                        'reason' => $reason,
+                        'group_message' => "Invalid date for column '{$column_name}'",
                         'sgc_id' => $sgc_id,
                         'local_key' => $local_key,
-                        'message' => "Invalid date format for column '{$column_name}'. Expected format: YYYY-MM-DD (e.g., 2024-01-15). Got: '{$original_value}'"
+                        'message' => "Invalid date for column '{$column_name}': '{$original_value}'. "
+                            . $reason,
                     ];
                     continue;
                 }
@@ -889,13 +1125,18 @@ class SubmissionFileValidation
             // Step 3: check value against validator_with_argument (database lookup)
             if (!$field_validation_failed && array_key_exists('validator_with_argument', self::$COLUMN_MAP[$column_name])) {
                 $validator_method = self::$COLUMN_MAP[$column_name]['validator_with_argument']['method'];
-                $return = call_user_func($validator_method, $value);
-                if ($return === null ) {
+                $validator_args = [$value];
+                if (!empty(self::$COLUMN_MAP[$column_name]['validator_with_argument']['passes_resolver'])) {
+                    $validator_args[] = $disease_resolver;
+                }
+                $return = call_user_func_array($validator_method, $validator_args);
+                if ($return === null || $return instanceof DiseaseMappingAmbiguity) {
                     $custom_message = self::$COLUMN_MAP[$column_name]['validator_with_argument']['message'] ?? null;
+                    $severity = self::$COLUMN_MAP[$column_name]['validator_with_argument']['severity'] ?? self::SEVERITY_ERROR;
                     $truncated_value = mb_strlen($value) > 80 ? mb_substr($value, 0, 80) . '...' : $value;
                     $error = [
                         'error_type' => 'invalid_field_value',
-                        'severity' => self::SEVERITY_ERROR,
+                        'severity' => $severity,
                         'validation_type' => self::DATA_VALIDATION,
                         'row' => $row_num,
                         'column' => $column_name,
@@ -908,6 +1149,15 @@ class SubmissionFileValidation
                     ];
                     if ($custom_message) {
                         $error['group_message'] = $custom_message;
+                    }
+                    if ($column_name === 'disease_id') {
+                        $error['reason'] = $return instanceof DiseaseMappingAmbiguity
+                            ? $return->message($value)
+                            : "No MONDO term found for Disease ID '{$value}' (unknown ID, or no exact MONDO match)";
+                        $error['message'] = $error['reason'];
+                    }
+                    if (!empty(self::$COLUMN_MAP[$column_name]['validator_with_argument']['blocks_submission'])) {
+                        $error['blocks_submission'] = true;
                     }
                     $validation_results[] = $error;
                     // No need to set flag here as this is the last check
@@ -1265,12 +1515,18 @@ class SubmissionFileValidation
      * @param int $submitter_id The submitter ID to validate against
      * @return array Array of validation errors for invalid SGC IDs
      */
-    private static function validate_sgc_ids_batch($worksheet, $submitter_id): array
+    private static function validate_sgc_ids_batch(
+        $worksheet,
+        $submitter_id,
+        bool $require_matching_relationship = false
+    ): array
     {
         $validation_results = [];
         $sgc_id_index = self::get_index('sgc_id');
         $action_index = self::get_index('action');
         $hgnc_id_index = self::get_index('hgnc_id');
+        $disease_id_index = self::get_index('disease_id');
+        $moi_id_index = self::get_index('moi_id');
 
         // Collect all SGC IDs from the worksheet with their row numbers, actions, and HGNC IDs
         $sgc_ids_to_check = []; // Format: ['SGC-100001' => [['row' => 7, 'action' => 'R', 'hgnc_id' => '1234'], ...]]
@@ -1295,15 +1551,28 @@ class SubmissionFileValidation
             $sgc_id = trim($sgc_id);
             $action = strtoupper(trim($row[$action_index] ?? ''));
             $hgnc_id_raw = trim($row[$hgnc_id_index] ?? '');
+            $disease_id_raw = trim($row[$disease_id_index] ?? '');
+            $moi_id_raw = trim($row[$moi_id_index] ?? '');
 
-            // Normalize HGNC ID format (remove "HGNC:" prefix if present)
-            $hgnc_id = (stripos($hgnc_id_raw, "HGNC:") === 0) ? substr($hgnc_id_raw, 5) : $hgnc_id_raw;
+            // New rows must not carry an SGC ID, and invalid actions cannot be
+            // routed. Their row-level action errors are reported elsewhere.
+            if (!in_array($action, ['R', 'U'], true)) {
+                continue;
+            }
 
-            // Store SGC ID with its row number, action, and HGNC ID for error reporting
+            // Store the submitted relationship values so the upload gate can
+            // verify that a republish row identifies the relationship owned by
+            // its SGC ID.
             if (!isset($sgc_ids_to_check[$sgc_id])) {
                 $sgc_ids_to_check[$sgc_id] = [];
             }
-            $sgc_ids_to_check[$sgc_id][] = ['row' => $row_num, 'action' => $action, 'hgnc_id' => $hgnc_id];
+            $sgc_ids_to_check[$sgc_id][] = [
+                'row' => $row_num,
+                'action' => $action,
+                'hgnc_id' => $hgnc_id_raw,
+                'disease_id' => $disease_id_raw,
+                'moi_id' => $moi_id_raw,
+            ];
         }
 
         if (empty($sgc_ids_to_check)) {
@@ -1314,7 +1583,7 @@ class SubmissionFileValidation
         // Use submission->submitter_id to support admin users acting as other submitters
         // For SIDs with multiple versions, only check against the live version (is_live=true)
         // or pending versions (draft/submitted statuses)
-        $submissions = \App\Models\Submission::with('gene')
+        $submissions = \App\Models\Submission::with(['gene', 'originalDisease', 'inheritance'])
             ->whereIn('sid', array_keys($sgc_ids_to_check))
             ->where('submitter_id', $submitter_id)
             ->where(function ($q) {
@@ -1332,6 +1601,28 @@ class SubmissionFileValidation
             })
             ->get()
             ->keyBy('sid');
+
+        $geneCache = collect();
+        $inheritanceCache = collect();
+        $diseaseResolver = null;
+        if ($require_matching_relationship) {
+            $geneIds = collect($sgc_ids_to_check)
+                ->flatten(1)
+                ->pluck('hgnc_id')
+                ->filter()
+                ->map(fn ($value) => SubmissionValueValidation::normalizeGeneId($value))
+                ->unique()
+                ->values();
+            $moiIds = collect($sgc_ids_to_check)
+                ->flatten(1)
+                ->pluck('moi_id')
+                ->filter()
+                ->unique()
+                ->values();
+            $geneCache = Gene::whereIn('hgnc_id', $geneIds)->get()->keyBy('hgnc_id');
+            $inheritanceCache = Inheritance::whereIn('curie', $moiIds)->get()->keyBy('curie');
+            $diseaseResolver = new DiseaseResolver();
+        }
 
         // Check each SGC ID
         foreach ($sgc_ids_to_check as $sgc_id => $row_actions) {
@@ -1362,16 +1653,14 @@ class SubmissionFileValidation
             foreach ($row_actions as $row_action) {
                 $row = $row_action['row'];
                 $action = $row_action['action'];
-                $newHgncIdRaw = $row_action['hgnc_id']; // Already has HGNC: prefix stripped
+                $newHgncIdRaw = $row_action['hgnc_id'];
 
                 // Normalize both to HGNC:#### format for comparison
                 // The spreadsheet value may have prefix stripped, so add it back
-                $newHgncId = (stripos($newHgncIdRaw, "HGNC:") === 0) ? $newHgncIdRaw : "HGNC:{$newHgncIdRaw}";
+                $newHgncId = SubmissionValueValidation::normalizeGeneId($newHgncIdRaw);
                 // The database value should already be in HGNC:#### format, but normalize just in case
-                $existingHgncId = $existingGeneHgncId;
-                if ($existingHgncId && stripos($existingHgncId, "HGNC:") !== 0) {
-                    $existingHgncId = "HGNC:{$existingHgncId}";
-                }
+                $existingHgncId = SubmissionValueValidation::normalizeGeneId($existingGeneHgncId);
+                $existingHgncId = $existingHgncId === '' ? null : $existingHgncId;
 
                 // Check if SGC_ID is already in a draft or submitted job
                 if (in_array($currentState, [
@@ -1407,9 +1696,22 @@ class SubmissionFileValidation
                         ];
                     }
 
-                    // Check that gene hasn't changed for Republish action
-                    // Compare normalized HGNC IDs (both in HGNC:#### format)
-                    if ($existingHgncId !== null && $existingHgncId !== $newHgncId) {
+                    $geneValidation = $require_matching_relationship
+                        ? SubmissionValueValidation::gene($row_action['hgnc_id'], $geneCache)
+                        : null;
+                    $geneChanged = $require_matching_relationship
+                        ? $geneValidation['error'] === null && $geneValidation['record']->id !== $submission->gene_id
+                        : $existingHgncId !== null && $existingHgncId !== $newHgncId;
+                    if ($require_matching_relationship && $geneValidation['error'] !== null) {
+                        $validation_results[] = [
+                            'error_type' => 'republish_invalid_gene',
+                            'severity' => self::SEVERITY_ERROR,
+                            'validation_type' => self::DATA_VALIDATION,
+                            'row' => $row,
+                            'column' => 'hgnc_id',
+                            'message' => "Action 'R' (Republish) requires a valid gene matching the referenced SGC ID.",
+                        ];
+                    } elseif ($geneChanged) {
                         $validation_results[] = [
                             'error_type' => 'republish_gene_change',
                             'severity' => self::SEVERITY_ERROR,
@@ -1417,6 +1719,49 @@ class SubmissionFileValidation
                             'row' => $row,
                             'message' => "Action 'R' (Republish) cannot change the gene of an existing submission. To submit a different gene-disease association, create a new submission instead.",
                         ];
+                    }
+
+                    if ($require_matching_relationship) {
+                        $diseaseValidation = SubmissionValueValidation::disease($row_action['disease_id'], $diseaseResolver);
+                        $inheritanceValidation = SubmissionValueValidation::inheritance($row_action['moi_id'], $inheritanceCache);
+
+                        if ($diseaseValidation['error'] !== null || $diseaseValidation['original'] === null) {
+                            $validation_results[] = [
+                                'error_type' => 'republish_invalid_disease',
+                                'severity' => self::SEVERITY_ERROR,
+                                'validation_type' => self::DATA_VALIDATION,
+                                'row' => $row,
+                                'column' => 'disease_id',
+                                'message' => "Action 'R' (Republish) requires a valid disease matching the referenced SGC ID.",
+                            ];
+                        }
+
+                        if ($inheritanceValidation['error'] !== null) {
+                            $validation_results[] = [
+                                'error_type' => 'republish_invalid_moi',
+                                'severity' => self::SEVERITY_ERROR,
+                                'validation_type' => self::DATA_VALIDATION,
+                                'row' => $row,
+                                'column' => 'moi_id',
+                                'message' => "Action 'R' (Republish) requires a valid mode of inheritance matching the referenced SGC ID.",
+                            ];
+                        }
+
+                        if ($geneValidation['error'] === null
+                            && $diseaseValidation['error'] === null
+                            && $diseaseValidation['original'] !== null
+                            && $inheritanceValidation['error'] === null
+                            && $geneValidation['record']->id === $submission->gene_id
+                            && ($diseaseValidation['original']->id !== ($submission->original_disease_id ?? $submission->disease_id)
+                                || $inheritanceValidation['record']->id !== $submission->inheritance_id)) {
+                            $validation_results[] = [
+                                'error_type' => 'republish_relationship_mismatch',
+                                'severity' => self::SEVERITY_ERROR,
+                                'validation_type' => self::DATA_VALIDATION,
+                                'row' => $row,
+                                'message' => "Action 'R' (Republish) must use the same gene, disease, and mode of inheritance as the referenced SGC ID.",
+                            ];
+                        }
                     }
                 }
 
@@ -1447,9 +1792,15 @@ class SubmissionFileValidation
      *
      * @param array $worksheet The worksheet data as an array of rows
      * @param int $submitter_id The submitter ID to check against
+     * @param DiseaseResolver $disease_resolver The file's disease resolver
      * @return array Array of validation errors/warnings
      */
-    private static function validate_duplicate_submissions_batch($worksheet, int $submitter_id): array
+    private static function validate_duplicate_submissions_batch(
+        $worksheet,
+        int $submitter_id,
+        DiseaseResolver $disease_resolver,
+        bool $intra_file_only = false
+    ): array
     {
         $validation_results = [];
 
@@ -1503,7 +1854,7 @@ class SubmissionFileValidation
             }
 
             // Collect unique IDs for batch loading
-            $uniqueHgncIds[$hgnc_id_raw] = true;
+            $uniqueHgncIds[SubmissionValueValidation::normalizeGeneId($hgnc_id_raw)] = true;
             $uniqueDiseaseIds[$disease_id_raw] = true;
             $uniqueMoiIds[$moi_id_raw] = true;
             if (!empty($sgc_id) && $action === 'R') {
@@ -1540,37 +1891,9 @@ class SubmissionFileValidation
             ->get()
             ->keyBy('curie');
 
-        // Batch load all diseases and build MONDO mapping cache (same approach as DocumentController)
-        // Only select needed columns to reduce memory usage (53K+ records)
-        $allDiseases = Disease::select('id', 'curie', 'name', 'type', 'xrefs')->get();
-        $diseaseCache = $allDiseases->keyBy('curie');
-        $mondoMappingCache = collect();
-
-        foreach ($allDiseases as $disease) {
-            if ($disease->type == Disease::TYPE_MONDO) {
-                $mondoMappingCache->put($disease->curie, $disease);
-
-                // Map OMIM xrefs to this MONDO disease
-                if (isset($disease->xrefs->omim_id)) {
-                    $omimIds = is_array($disease->xrefs->omim_id) ? $disease->xrefs->omim_id : [$disease->xrefs->omim_id];
-                    foreach ($omimIds as $omimId) {
-                        $mondoMappingCache->put('OMIM:' . $omimId, $disease);
-                    }
-                }
-                // Map Orphanet xrefs to this MONDO disease
-                if (isset($disease->xrefs->orpha_id)) {
-                    $orphaIds = is_array($disease->xrefs->orpha_id) ? $disease->xrefs->orpha_id : [$disease->xrefs->orpha_id];
-                    foreach ($orphaIds as $orphaId) {
-                        $mondoMappingCache->put('ORPHA:' . $orphaId, $disease);
-                        $mondoMappingCache->put('ORPHANET:' . $orphaId, $disease);
-                    }
-                }
-            }
-        }
-
         // Batch load existing submissions for republish SGC ID exclusion
         $existingSubmissionsCache = collect();
-        if (!empty($uniqueSgcIds)) {
+        if (!$intra_file_only && !empty($uniqueSgcIds)) {
             $existingSubmissionsCache = Submission::whereIn('sid', array_keys($uniqueSgcIds))
                 ->where('submitter_id', $submitter_id)
                 ->where('is_live', true)
@@ -1591,29 +1914,32 @@ class SubmissionFileValidation
             $moi_id_raw = $rowData['moi_id_raw'];
             $sgc_id = $rowData['sgc_id'];
 
-            // Look up from caches (O(1) operations)
-            $gene = $geneCache->get($hgnc_id_raw);
-            $inheritance = $inheritanceCache->get($moi_id_raw);
-
-            // For disease, try MONDO mapping first (handles OMIM/Orphanet -> MONDO)
-            $disease = $mondoMappingCache->get($disease_id_raw) ?? $diseaseCache->get($disease_id_raw);
+            // Resolve relationship keys through the same field validators used
+            // by imported records and portal edits.
+            $geneValidation = SubmissionValueValidation::gene($hgnc_id_raw, $geneCache);
+            $inheritanceValidation = SubmissionValueValidation::inheritance($moi_id_raw, $inheritanceCache);
+            $diseaseValidation = SubmissionValueValidation::disease($disease_id_raw, $disease_resolver);
+            $gene = $geneValidation['record'];
+            $inheritance = $inheritanceValidation['record'];
+            $originalDisease = $diseaseValidation['original'];
+            $mondoDisease = $diseaseValidation['mondo'];
 
             // Skip if any lookup failed (other validators will catch these)
-            if ($gene === null || $disease === null || $inheritance === null) {
+            if ($gene === null || $mondoDisease === null || $inheritance === null) {
                 continue;
             }
 
             // For republish, get the existing live submission ID to exclude from check
             $exclude_submission_id = null;
-            if ($action === 'R' && !empty($sgc_id)) {
+            if (!$intra_file_only && $action === 'R' && !empty($sgc_id)) {
                 $existing = $existingSubmissionsCache->get($sgc_id);
                 $exclude_submission_id = $existing?->id;
             }
 
-            // Look up the original_disease_id from the exact uploaded disease CURIE
-            // This is the disease record for what was uploaded (OMIM, Orphanet, or MONDO)
-            $originalDisease = $diseaseCache->get($disease_id_raw);
-            $original_disease_id = $originalDisease?->id ?? $disease->id;
+            // The original_disease_id is the record for what was uploaded (OMIM,
+            // Orphanet, or MONDO), falling back to the normalized record for the
+            // ontologies that have no records of their own
+            $original_disease_id = $originalDisease?->id ?? $mondoDisease->id;
 
             $submissions_to_check[] = [
                 'gene_id' => $gene->id,
@@ -1626,6 +1952,21 @@ class SubmissionFileValidation
         }
 
         if (empty($submissions_to_check)) {
+            return $validation_results;
+        }
+
+        if ($intra_file_only) {
+            $groups = SubmissionDuplicateDetection::intraBatchDuplicateGroups($submissions_to_check);
+
+            if (!empty($groups)) {
+                $validation_results[] = [
+                    'error_type' => 'duplicate_submission',
+                    'severity' => self::SEVERITY_ERROR,
+                    'validation_type' => self::DATA_VALIDATION,
+                    'message' => SubmissionDuplicateDetection::formatGroupedBatchDuplicateMessage($groups),
+                ];
+            }
+
             return $validation_results;
         }
 

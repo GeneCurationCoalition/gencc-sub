@@ -240,20 +240,17 @@ null → validating → validation_failed OR validated → uploading → upload_
 
 **MONDO-First Architecture:**
 
-1. **MONDO** diseases are canonical (type = 1, status = ACTIVE)
-2. **OMIM/Orphanet** diseases have `mondo_id` FK pointing to MONDO
-3. Equivalence determined by:
-   - **Priority 1**: `skos:exactMatch` (1:1 relationship)
-   - **Priority 2**: `xrefs` (may be 1:many, use first)
-   - **Priority 3**: OMIM equivalence in Orphanet uses Orphanet MONDO equivalence from Priority 1 or 2 if available.
+1. **MONDO** diseases are canonical (type = 1); a submission's `disease_id` is always a MONDO term
+2. Only exact upstream mappings relate terms across ontologies, and each row's `xrefs` records only what its own ontology asserts
+3. `DiseaseResolver` maps an OMIM or Orphanet identifier to MONDO from those `xrefs`, or rejects it
 
 **Deprecated Diseases:**
 - `status` = 8 (DEPRECATED)
 - `name` = preserved (last active name)
 - `deprecated_name` = new obsolete name or "REMOVED-" prefix
-- `mondo_id` = preserved forever (never cleared)
 
-**See:** Legacy `DISEASE_UPDATE_COMPREHENSIVE.md` for full details
+The user-facing policy is published by the portal at `/help/disease-mapping`.
+`DiseaseResolver` and its focused tests are the implementation reference.
 
 ---
 
@@ -435,7 +432,7 @@ php artisan test
 
 **Unit Tests:** (`tests/Unit/`)
 - Submission validation logic
-- Disease equivalence (rosetta methods)
+- Disease resolution (`DiseaseResolver`)
 - Status transitions
 - Data transformations
 
@@ -589,7 +586,7 @@ GET /api/jobs/{id}/upload-progress
 
 **diseases** - Disease ontology data
 - `id`, `curie`, `type`, `status`
-- `name`, `deprecated_name`, `mondo_id` (FK)
+- `name`, `deprecated_name`
 - `xrefs` (JSON)
 
 **genes** - HGNC gene data

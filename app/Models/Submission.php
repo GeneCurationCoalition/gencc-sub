@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 
 use App\Jobs\ProcessPubmed;
+use App\Services\SubmissionValueValidation;
 
 use Auth;
 
@@ -539,7 +540,7 @@ class Submission extends Model
                               'local_key', 'friendly', 'created_at', 'submitted_at', 'released_at', 'unpublished_at', 'publish_date',
                               // Include submission_data for display of "Submitted as" labels
                               // Removed: 'original_submission_data', 'evidence' - too large for listing
-                              'submission_data', 'submission_errors', 'status', 'origin_state')
+                              'submission_data', 'submission_errors', 'pmid_issues', 'status', 'origin_state')
                      ->with('gene:id,hgnc_id,symbol')
                      ->with('disease:id,curie,name,deprecated_name,status')
                      ->with('originalDisease:id,curie,name,deprecated_name,status')
@@ -783,61 +784,64 @@ class Submission extends Model
         // clear the errors
         $this->errors_bag = [];
 
+        /*
+         * A field that does not resolve is left null and recorded in the errors
+         * bag, with a message naming what was submitted.  No stand-in record is
+         * stored: the portal shows the submitted value from submission_data
+         * instead, so a record never appears to hold a value it does not have.
+         */
+
         /**
          * Assert the gene lookup by HGNC ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['genes']) && isset($obj->gene->id)) {
-            // Use cache lookup for performance
-            $gene = $lookupCaches['genes']->get($obj->gene->id);
-        } else {
-            // Fallback to database query
-            $gene = isset($obj->gene->id) ? Gene::hgnc_id($obj->gene->id)->first() : null;
-        }
-        $this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id', 'Invalid HGNC ID');
-        if ($this->gene_id === null)
-            $this->gene_id = $lookupCaches['defaults']['gene_id'] ?? Gene::symbol('-')->first()->id;
+        $geneValidation = SubmissionValueValidation::gene(
+            $obj->gene->id ?? null,
+            $lookupCaches['genes'] ?? null
+        );
+        $this->gene_id = $this->asserterrors(
+            $geneValidation['record']?->id,
+            'gene_hgnc_id',
+            $geneValidation['error']
+        );
 
         /**
          * Assert the disease lookup by ID.  If invalid, add to the errors_bag
-         * Logic:
-         * 1. Find the exact disease record for the uploaded CURIE (original_disease_id)
-         * 2. Find the MONDO mapping for normalization (disease_id)
-         * 3. If MONDO uploaded: both fields point to same record
-         * 4. If OMIM/Orphanet uploaded: original_disease_id = OMIM/Orphanet, disease_id = mapped MONDO
-         * 5. If no MONDO mapping exists, validation error
+         *
+         * A submission stores two disease references and DiseaseResolver
+         * produces both:
+         * - original_disease_id = the record for the CURIE exactly as submitted
+         * - disease_id          = that record normalized to MONDO
+         * For a submitted MONDO term the two are the same record.
+         *
+         * The resolver is threaded in for an uploaded file, where one instance
+         * serves every row; a single API submission builds its own.  Either way
+         * the resolution rules are the ones file validation already applied.
+         *
+         * An identifier with no exact MONDO equivalent is rejected here rather
+         * than at upload: the row is created, carries a blocking
+         * `disease_curie_id` error naming the code that was submitted, and is
+         * fixed in place through the portal's disease dialog.
          */
-        $uploadedDiseaseId = $obj->disease->id ?? null;
-        $originalDisease = null;
-        $mondoDisease = null;
-
-        if ($uploadedDiseaseId) {
-            // Step 1: Find the exact disease record that was uploaded
-            if (isset($lookupCaches['diseases'])) {
-                $originalDisease = $lookupCaches['diseases']->get($uploadedDiseaseId);
-            } else {
-                // Direct lookup by curie for exact match
-                $originalDisease = Disease::curie($uploadedDiseaseId)->first();
-            }
-
-            // Step 2: Find the MONDO mapping (normalized disease)
-            if (isset($lookupCaches['mondo_mappings'])) {
-                // Use MONDO mapping cache
-                $mondoDisease = $lookupCaches['mondo_mappings']->get($uploadedDiseaseId);
-            } else {
-                // Fallback: Use rosetta method which handles MONDO normalization
-                $mondoDisease = Disease::rosetta($uploadedDiseaseId);
-            }
-        }
+        $diseaseValidation = SubmissionValueValidation::disease(
+            $obj->disease->id ?? null,
+            $lookupCaches['disease_resolver'] ?? null
+        );
+        $originalDisease = $diseaseValidation['original'];
+        $mondoDisease = $diseaseValidation['mondo'];
 
         // Set original_disease_id (the exact disease record for uploaded CURIE)
-        $this->original_disease_id = $this->asserterrors($originalDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
-        if ($this->original_disease_id === null)
-            $this->original_disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
+        $this->original_disease_id = $this->asserterrors(
+            $originalDisease?->id,
+            'disease_curie_id',
+            $diseaseValidation['original_error']
+        );
 
         // Set disease_id (normalized to MONDO)
-        $this->disease_id = $this->asserterrors($mondoDisease->id ?? null, 'disease_curie_id', 'Invalid Disease ID - no MONDO mapping found');
-        if ($this->disease_id === null)
-            $this->disease_id = $lookupCaches['defaults']['disease_id'] ?? Disease::curie('MONDO:0000001')->first()->id;
+        $this->disease_id = $this->asserterrors(
+            $mondoDisease?->id,
+            'disease_curie_id',
+            $diseaseValidation['error']
+        );
 
         // Note: Deprecated diseases are allowed in submissions
         // The UI shows a warning symbol (⚠) to indicate deprecated status
@@ -845,29 +849,28 @@ class Submission extends Model
         /**
          * Assert the inheritance lookup by ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['moi']) && isset($obj->moi->id)) {
-            // Use cache lookup for performance
-            $moi = $lookupCaches['moi']->get($obj->moi->id);
-        } else {
-            // Fallback to database query
-            $moi = isset($obj->moi->id) ? Inheritance::curie($obj->moi->id)->first() : null;
-        }
-        $this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id', 'Invalid MOI ID');
-        if ($this->inheritance_id === null)
-            $this->inheritance_id = $lookupCaches['defaults']['moi_id'] ?? Inheritance::curie('HP:0000005')->first()->id;
+        $inheritanceValidation = SubmissionValueValidation::inheritance(
+            $obj->moi->id ?? null,
+            $lookupCaches['moi'] ?? null
+        );
+        $this->inheritance_id = $this->asserterrors(
+            $inheritanceValidation['record']?->id,
+            'moi_curie_id',
+            $inheritanceValidation['error']
+        );
 
         /**
          * Assert the classification lookup by ID.  If invalid, add to the errors_bag
          */
-        if (isset($lookupCaches['classifications']) && isset($obj->classification->id)) {
-            // Use cache lookup for performance
-            $classification = $lookupCaches['classifications']->get($obj->classification->id);
-        } else {
-            // Fallback to database query
-            $classification = isset($obj->classification->id) ? Classification::curie($obj->classification->id)->first() : null;
-        }
-        $this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id', 'Invalid Classification ID');
-        // classification_id can remain null if invalid - file validation prevents invalid data from being imported
+        $classificationValidation = SubmissionValueValidation::classification(
+            $obj->classification->id ?? null,
+            $lookupCaches['classifications'] ?? null
+        );
+        $this->classification_id = $this->asserterrors(
+            $classificationValidation['record']?->id,
+            'classification_curie_id',
+            $classificationValidation['error']
+        );
 
         /**
          * Assert the mechanism lookup by ID.  If invalid, add to the errors_bag
@@ -891,31 +894,31 @@ class Submission extends Model
         /**
          * Assert the report date is present.  If not, add to the errors_bag
          */
-        $this->report_date = $this->asserterrors($obj->report->display_date ?? null, 'report_date', 'Missing Report Date');
-        if ($this->report_date !== null)
-        {
-            // we let carbon try to parse the date, and if it can't we catch the exception and clean things up
-            try {
-                $this->report_date = Carbon::parse($this->report_date);
-            } catch (Exception $e) {
-                $this->report_date = null;
-                $this->asserterrors(null, 'report_date', 'Invalid Report Date');
-            }
-        }
+        $dateValidation = SubmissionValueValidation::reportDate($obj->report->display_date ?? null);
+        $this->report_date = $this->asserterrors(
+            $dateValidation['value'],
+            'report_date',
+            $dateValidation['error']
+        );
         
         /**
          * Assert the report url if present.  If not, add to the errors_bag
          */
         //$this->report_url = $this->asserterrors($obj->report->ext_url ?? null, 'report_url', 'Missing Report URL');
-        $this->report_url = $obj->report->ext_url ?? null;
-        if (!empty($this->report_url))
-        {
-            // we confirm that this is a valid URL, at least in format
-            if(!filter_var($this->report_url, FILTER_VALIDATE_URL))
-            {
-                $this->report_url = null;
-                $this->asserterrors(null, 'report_url', 'Invalid Report URL');
-            }
+        $reportUrlValidation = SubmissionValueValidation::url(
+            $obj->report->ext_url ?? null,
+            'Report URL',
+            false
+        );
+        $this->report_url = $reportUrlValidation['value'];
+        if ($reportUrlValidation['error'] !== null) {
+            $this->asserterrors(null, 'report_url', $reportUrlValidation['error']);
+        }
+
+        $criteriaUrl = $obj->criteria->url ?? null;
+        $criteriaUrlValidation = SubmissionValueValidation::url($criteriaUrl, 'Criteria URL', true);
+        if ($criteriaUrlValidation['error'] !== null) {
+            $this->asserterrors(null, 'criteria_url', $criteriaUrlValidation['error']);
         }
 
         /**
@@ -927,6 +930,12 @@ class Submission extends Model
         /**
          * We also save a copy which can be edited by the user
          */
+        if ($reportUrlValidation['error'] === null && isset($obj->report)) {
+            $obj->report->ext_url = $reportUrlValidation['value'];
+        }
+        if ($criteriaUrlValidation['error'] === null && isset($obj->criteria)) {
+            $obj->criteria->url = $criteriaUrlValidation['value'];
+        }
         $this->submission_data = $obj;
 
 
@@ -942,14 +951,13 @@ class Submission extends Model
             // Collect all raw PMID values from the evidence array
             $rawPmids = [];
             foreach ($this->submission_data->evidence as $evidence) {
-                if (!empty($evidence->pmid)) {
+                if (isset($evidence->pmid) && trim((string) $evidence->pmid) !== '') {
                     $rawPmids[] = $evidence->pmid;
                 }
             }
 
             // Normalize all PMIDs at once
-            $rawString = implode(',', $rawPmids);
-            $normResult = \App\Services\PmidNormalizer::normalize($rawString);
+            $normResult = SubmissionValueValidation::pmids($rawPmids);
 
             // Store normalization results
             $this->normalized_pmids = !empty($normResult['pmids']) ? implode(',', $normResult['pmids']) : null;
@@ -957,8 +965,8 @@ class Submission extends Model
 
             // Only flag as error if there were issues that resulted in lost PMIDs
             // (not just formatting cleanup like [PMID] suffix removal)
-            if (!empty($normResult['issues']) && empty($normResult['pmids']) && !empty($rawPmids)) {
-                $this->asserterrors(null, 'invalid_pmid', 'No valid PMIDs found after normalization');
+            if ($normResult['error'] !== null) {
+                $this->asserterrors(null, 'invalid_pmid', $normResult['error']);
             }
 
             // Build the evidence array and submission_data from normalized PMIDs
@@ -990,7 +998,12 @@ class Submission extends Model
             }
 
             // Update submission_data->evidence with normalized values
-            $this->submission_data->evidence = $normalizedEvidence;
+            // JSON-cast attributes are returned through Eloquent's magic
+            // accessor; mutate a local value and assign it back so the
+            // normalized evidence is actually persisted.
+            $submissionData = $this->submission_data;
+            $submissionData->evidence = $normalizedEvidence;
+            $this->submission_data = $submissionData;
 
             // note: we leave the parent to make changes to the pivot table
         }
@@ -1008,11 +1021,11 @@ class Submission extends Model
     /**
      * Assert that the passed element is a non-zero, or non-zero equivalent.
      * If not, add the errormsg to the errors_bag.
-     * 
+     *
      * @params string $element
      * @params string $errortype
      * @params string $errormsg
-     * @rerurn string 
+     * @rerurn string
      */
     protected function asserterrors($element, $errortype, $errormsg)
     {

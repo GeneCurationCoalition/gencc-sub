@@ -158,8 +158,11 @@ class UpdateOmim extends Command
         ]);
         $job->save();
 
+        // One resolver for the whole file, so the MONDO xref index is built once
+        $resolver = Disease::resolver();
+
         // skip over the copyright line
-        $line = strtok($results, "\n"); 
+        $line = strtok($results, "\n");
 
         //parse the rest
         while (($line = strtok("\n")) !== false)
@@ -202,7 +205,7 @@ class UpdateOmim extends Command
                         if ($phenotype['key'] != 3)
                             continue;
 
-                        $disease = Disease::rosetta('OMIM:' . $phenotype['mim']);
+                        $disease = $resolver->resolve('OMIM:' . $phenotype['mim'])?->mondo;
 
                         if ($disease === null)
                             continue;

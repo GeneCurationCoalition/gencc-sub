@@ -261,44 +261,37 @@ This is where the actual database lookups happen and data gets validated against
 
 a. **Gene Lookup**:
 ```php
-$gene = Gene::hgnc_id($obj->gene->id)->first();
-$this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id', 'Invalid HGNC ID');
+An unresolved gene, disease, MOI or classification leaves its column null and
+records an error naming the submitted value; no stand-in record is stored.
 
-// If not found, use placeholder
-if ($this->gene_id === null) {
-    $this->gene_id = Gene::symbol('-')->first()->id;
-    // Error added to errors_bag
-}
+```php
+$gene = Gene::hgnc_id($obj->gene->id)->first();
+$this->gene_id = $this->asserterrors($gene->id ?? null, 'gene_hgnc_id',
+    self::unresolvedMessage('HGNC ID', $obj->gene->id ?? null));   // "Invalid HGNC ID 'X'"
 ```
 
-b. **Disease Lookup** (supports multiple ID types):
+b. **Disease Lookup**:
 ```php
-// rosetta() method handles MONDO, OMIM, and ORPHA IDs
-$disease = Disease::rosetta($obj->disease->id);
-$this->disease_id = $this->asserterrors($disease->id ?? null, 'disease_curie_id', 'Invalid Disease ID');
-
-// If not found, use placeholder
-if ($this->disease_id === null) {
-    $this->disease_id = Disease::curie('MONDO:0000001')->first()->id;
-}
+// DiseaseResolver accepts MONDO, OMIM and Orphanet/ORPHA ids, and returns both
+// the record as submitted and its MONDO equivalent (exact matches only)
+$resolution = $resolver->resolve($obj->disease->id);
+$this->original_disease_id = $this->asserterrors($resolution?->original->id ?? null, 'disease_curie_id', ...);
+$this->disease_id = $this->asserterrors($resolution?->mondo->id ?? null, 'disease_curie_id',
+    "No MONDO term found for Disease ID 'X' (unknown ID, or no exact MONDO match)");
 ```
 
 c. **Mode of Inheritance Lookup**:
 ```php
 $moi = Inheritance::curie($obj->moi->id)->first();
-$this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id', 'Invalid MOI ID');
-
-// If not found, use placeholder
-if ($this->inheritance_id === null) {
-    $this->inheritance_id = Inheritance::curie('HP:0000005')->first()->id;
-}
+$this->inheritance_id = $this->asserterrors($moi->id ?? null, 'moi_curie_id',
+    self::unresolvedMessage('MOI ID', $obj->moi->id ?? null));
 ```
 
 d. **Classification Lookup**:
 ```php
 $classification = Classification::curie($obj->classification->id)->first();
-$this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id', 'Invalid Classification ID');
-// classification_id can remain null if invalid - file validation prevents invalid data from being imported
+$this->classification_id = $this->asserterrors($classification->id ?? null, 'classification_curie_id',
+    self::unresolvedMessage('Classification ID', $obj->classification->id ?? null));
 ```
 
 e. **Mechanism Lookup** (optional):
@@ -594,7 +587,7 @@ return true;
 - **Effect**: Partial success (other submissions continue)
 - **Storage**: `submission.submission_errors` JSON field
 - **User Impact**: Some submissions succeed, failed ones marked with errors
-- **Invalid Lookups**: Use placeholder values + record error in errors_bag
+- **Invalid Lookups**: Leave the reference column null + record an error naming the submitted value; the portal shows that value marked "Not resolved"
 
 ### Error Categories:
 1. **Structural**: Missing columns, invalid format

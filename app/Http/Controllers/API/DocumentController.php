@@ -8,8 +8,6 @@ use Maatwebsite\Excel\Facades\Excel;
 use App\Events\SpreadsheetUpdate;
 
 use Auth;
-use Carbon\Carbon;
-use Carbon\Exceptions\InvalidFormatException;
 
 use App\Models\Document;
 use App\Models\Nodal;
@@ -18,11 +16,13 @@ use App\Models\Job;
 use App\Models\Submission;
 use App\Models\Pubmed;
 use App\Models\Gene;
-use App\Models\Disease;
 use App\Models\Inheritance;
 use App\Models\Classification;
 use App\Models\Mechanism;
+use App\Services\DiseaseResolver;
+use App\Services\SubmittedDate;
 use App\Services\SubmissionFileValidation;
+use App\Services\SubmissionDuplicateDetection;
 
 use App\Jobs\ProcessUpload;
 use App\Jobs\ProcessSubmissionsUpload;
@@ -207,7 +207,7 @@ class DocumentController extends Controller
 
             $document->update([
                 'upload_state' => Document::UPLOAD_STATE_VALIDATION_FAILED,
-                'processing_errors' => $validationResult['errors']
+                'processing_errors' => $validationResult['errors'],
             ]);
 
             // Send validation error event
@@ -226,7 +226,7 @@ class DocumentController extends Controller
                 'results' => false,
                 'document_id' => $document->id,
                 'errors' => $validationResult['errors'],
-                'warnings' => $validationResult['warnings'] ?? []
+                'warnings' => [],
             ], 422);
         }
 
@@ -259,7 +259,7 @@ class DocumentController extends Controller
             'status_code' => 200,
             'message' => 'File validated successfully. Upload processing in background.',
             'document_id' => $document->id,
-            'row_count' => $validationResult['row_count']
+            'row_count' => $validationResult['row_count'],
         ], 200);
 
     }
@@ -492,7 +492,43 @@ class DocumentController extends Controller
         try {
             // Import raw data for header validation
             $rawWorksheets = Excel::toArray([], $tempPath);
+            if (empty($rawWorksheets) || !isset($rawWorksheets[0])) {
+                return [
+                    'has_errors' => true,
+                    'errors' => [[
+                        'error_type' => 'invalid_file_format',
+                        'severity' => 'fatal',
+                        'is_file_format_error' => true,
+                        'user_title' => 'Invalid File Format',
+                        'user_message' => 'The uploaded workbook does not contain a readable submission worksheet.',
+                        'message' => 'No readable first worksheet was found.',
+                        'rows' => 'N/A',
+                    ]],
+                    'warnings' => [],
+                    'row_count' => 0,
+                ];
+            }
             $rawFirstsheet = collect($rawWorksheets[0]);
+        } catch (\Throwable $e) {
+            \Log::warning('DocumentController@validateFile: Spreadsheet could not be parsed', [
+                'document_id' => $document->id,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return [
+                'has_errors' => true,
+                'errors' => [[
+                    'error_type' => 'invalid_file_format',
+                    'severity' => 'fatal',
+                    'is_file_format_error' => true,
+                    'user_title' => 'Invalid File Format',
+                    'user_message' => 'The uploaded file could not be read as a GenCC submission workbook.',
+                    'message' => 'The spreadsheet reader could not parse the uploaded file.',
+                    'rows' => 'N/A',
+                ]],
+                'warnings' => [],
+                'row_count' => 0,
+            ];
         } finally {
             // Always clean up temp file
             $this->cleanupTempFile($tempPath);
@@ -509,88 +545,53 @@ class DocumentController extends Controller
 
         \Log::info('DocumentController@validateFile: Row count (non-empty data rows after header): ' . $rowCount);
 
-        // Validate spreadsheet headers and data
-        // Skip PMID fetching during upload - PMIDs will be refreshed later
-        $validation_errors = SubmissionFileValidation::validate_spreadsheet($rawWorksheets[0], $document->submitter_id, true);
+        // Only reject files that cannot be interpreted safely. Content issues
+        // are attached to the individual records created by parser().
+        $validation_errors = SubmissionFileValidation::validate_upload_gate(
+            $rawWorksheets[0],
+            $document->submitter_id
+        );
 
         if (!empty($validation_errors)) {
-            // Separate blocking errors from warnings
-            // array_values() reindexes to ensure JSON serializes as array, not object
-            $errors = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') !== 'warning'));
-            $warnings = array_values(array_filter($validation_errors, fn($e) => ($e['severity'] ?? 'error') === 'warning'));
-
-            if (!empty($errors)) {
-                $formattedErrors = array_map(function($error) {
-                    $rows = $error['rows'] ?? ($error['row'] ?? 'N/A');
-                    $formatted = [
-                        'error_type' => $error['error_type'] ?? 'validation_error',
-                        'severity' => $error['severity'] ?? 'error',
-                        'message' => $error['message'] ?? 'Unknown validation error',
-                        'rows' => $rows,
-                    ];
-
-                    // Preserve column name for frontend grouping
-                    if (!empty($error['column'])) {
-                        $formatted['column'] = $error['column'];
-                    }
-
-                    // Preserve expandable details (unique values with their rows)
-                    if (!empty($error['details'])) {
-                        $formatted['details'] = $error['details'];
-                    }
-
-                    // Preserve file format error fields for frontend display
-                    if (!empty($error['is_file_format_error'])) {
-                        $formatted['is_file_format_error'] = true;
-                    }
-                    if (!empty($error['user_title'])) {
-                        $formatted['user_title'] = $error['user_title'];
-                    }
-                    if (!empty($error['user_message'])) {
-                        $formatted['user_message'] = $error['user_message'];
-                    }
-
-                    return $formatted;
-                }, $errors);
-
-                return [
-                    'has_errors' => true,
-                    'errors' => array_values($formattedErrors),
-                    'warnings' => array_values(array_map(function($w) {
-                        return [
-                            'error_type' => $w['error_type'] ?? 'warning',
-                            'severity' => 'warning',
-                            'message' => $w['message'] ?? '',
-                            'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
-                        ];
-                    }, $warnings)),
-                    'row_count' => $rowCount
+            // The upload gate emits blocking file/operation errors only. Keep
+            // grouped details and file-format guidance for the error display.
+            $format = function($result) {
+                $formatted = [
+                    'error_type' => $result['error_type'] ?? 'validation_error',
+                    'severity' => $result['severity'] ?? 'error',
+                    'message' => $result['message'] ?? 'Unknown validation error',
+                    'rows' => $result['rows'] ?? ($result['row'] ?? 'N/A'),
                 ];
-            }
 
-            // Only warnings, no blocking errors - format warnings for display
-            $formattedWarnings = array_values(array_map(function($w) {
-                return [
-                    'error_type' => $w['error_type'] ?? 'warning',
-                    'severity' => 'warning',
-                    'message' => $w['message'] ?? '',
-                    'rows' => $w['rows'] ?? ($w['row'] ?? 'N/A'),
-                ];
-            }, $warnings));
-        }
+                // Preserve column name for frontend grouping
+                if (!empty($result['column'])) {
+                    $formatted['column'] = $result['column'];
+                }
 
-        // Check for empty file (no valid submission rows)
-        if ($rowCount === 0) {
-            \Log::error('DocumentController@validateFile: File contains no valid submissions');
+                // Preserve expandable details (unique values with their rows)
+                if (!empty($result['details'])) {
+                    $formatted['details'] = $result['details'];
+                }
+
+                // Preserve file format error fields for frontend display
+                if (!empty($result['is_file_format_error'])) {
+                    $formatted['is_file_format_error'] = true;
+                }
+                if (!empty($result['user_title'])) {
+                    $formatted['user_title'] = $result['user_title'];
+                }
+                if (!empty($result['user_message'])) {
+                    $formatted['user_message'] = $result['user_message'];
+                }
+
+                return $formatted;
+            };
+
             return [
                 'has_errors' => true,
-                'errors' => [[
-                    'error_type' => 'validation_error',
-                    'severity' => 'error',
-                    'message' => 'File contains no valid submission rows',
-                    'rows' => 'N/A'
-                ]],
-                'row_count' => 0
+                'errors' => array_map($format, array_values($validation_errors)),
+                'warnings' => [],
+                'row_count' => $rowCount,
             ];
         }
 
@@ -599,7 +600,7 @@ class DocumentController extends Controller
         return [
             'has_errors' => false,
             'errors' => null,
-            'warnings' => $formattedWarnings ?? [],
+            'warnings' => [],
             'row_count' => $rowCount
         ];
     }
@@ -748,47 +749,14 @@ class DocumentController extends Controller
 
         // Build lookup caches to avoid repeated database queries for each row
         // This dramatically improves performance for large files (e.g., 3000+ rows)
-        \Log::info('DocumentController@parser: Loading diseases...');
-        $allDiseases = Disease::select('id', 'curie', 'name', 'type', 'xrefs')->get();
-        \Log::info('DocumentController@parser: Loaded ' . $allDiseases->count() . ' diseases');
-
-        // Build disease cache - this is keyed by exact CURIE for direct lookups
-        // Used to find the original disease record that was uploaded
-        $diseaseCache = $allDiseases->keyBy('curie');
-
-        // Build MONDO mapping cache - maps any disease ID (MONDO, OMIM, Orphanet) to its MONDO record
-        // Used to normalize all diseases to MONDO
-        \Log::info('DocumentController@parser: Building MONDO mapping cache...');
-        $mondoMappingCache = collect();
-
-        foreach ($allDiseases as $disease) {
-            // If it's a MONDO disease, it maps to itself
-            if ($disease->type == Disease::TYPE_MONDO) {
-                $mondoMappingCache->put($disease->curie, $disease);
-
-                // Also map any OMIM/Orphanet xrefs to this MONDO disease
-                if (isset($disease->xrefs->omim_id)) {
-                    $omimIds = is_array($disease->xrefs->omim_id) ? $disease->xrefs->omim_id : [$disease->xrefs->omim_id];
-                    foreach ($omimIds as $omimId) {
-                        $mondoMappingCache->put('OMIM:' . $omimId, $disease);
-                    }
-                }
-                if (isset($disease->xrefs->orpha_id)) {
-                    $orphaIds = is_array($disease->xrefs->orpha_id) ? $disease->xrefs->orpha_id : [$disease->xrefs->orpha_id];
-                    foreach ($orphaIds as $orphaId) {
-                        $mondoMappingCache->put('ORPHA:' . $orphaId, $disease);
-                        $mondoMappingCache->put('ORPHANET:' . $orphaId, $disease);
-                    }
-                }
-            }
-        }
-        \Log::info('DocumentController@parser: Built MONDO mapping cache with ' . $mondoMappingCache->count() . ' entries');
+        // The disease resolver is built per run and never held between uploads:
+        // the nightly update:diseases run can change the table under the worker.
+        $diseaseResolver = new DiseaseResolver();
 
         \Log::info('DocumentController@parser: Loading other lookup tables...');
         $lookupCaches = [
             'genes' => Gene::select('id', 'hgnc_id', 'symbol')->get()->keyBy('hgnc_id'),
-            'diseases' => $diseaseCache,  // Exact disease lookups by CURIE
-            'mondo_mappings' => $mondoMappingCache,  // MONDO normalization mappings
+            'disease_resolver' => $diseaseResolver,  // The single disease resolution path
             'moi' => Inheritance::select('id', 'curie', 'name')->get()->keyBy('curie'),
             'classifications' => Classification::select('id', 'curie', 'name')->get()->keyBy('curie'),
             'mechanisms' => Mechanism::select('id', 'curie', 'name')->get()->keyBy('curie'),
@@ -796,8 +764,6 @@ class DocumentController extends Controller
         ];
         \Log::info('DocumentController@parser: Built lookup caches', [
             'genes' => $lookupCaches['genes']->count(),
-            'diseases' => $lookupCaches['diseases']->count(),
-            'mondo_mappings' => $lookupCaches['mondo_mappings']->count(),
             'moi' => $lookupCaches['moi']->count(),
             'classifications' => $lookupCaches['classifications']->count(),
             'mechanisms' => $lookupCaches['mechanisms']->count(),
@@ -884,12 +850,10 @@ class DocumentController extends Controller
 
             // Get the action from the row (N, R, or U)
             $action = strtoupper(trim($row['action'] ?? 'N'));
-            \Log::info('DocumentController@parser: Processing row with action: ' . $action);
 
             // Handle based on action type
             if ($action === 'N') {
                 // New submission
-                \Log::info('DocumentController@parser creating new submission...');
                 $submission = new Submission();
                 $submission->submitter_id = $document->submitter_id;
                 $existingSubmissionState = null;
@@ -906,7 +870,6 @@ class DocumentController extends Controller
                     continue;
                 }
 
-                \Log::info('DocumentController@parser looking up submission sid by sgc_id: ' . $row['sgc_id']);
                 // Use pre-loaded cache for O(1) lookup instead of per-row database query
                 $originalSubmission = $existingSubmissionsCache->get($row['sgc_id']);
                 if ($originalSubmission === null) {
@@ -994,26 +957,21 @@ class DocumentController extends Controller
             $data->hp_id = $row['moi_id'];
             $data->moi_name = $row['moi_name'];
 
-            // the date can get tricky due to excels auto format
-            if (is_numeric($row['date']))
-                $date = Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($row['date']));
-            else
-            {
-                try {
-                    $date = Carbon::parse($row['date']);
-                } catch (InvalidFormatException $_) {
-                    $date = null;
-                }
-            }
-
-            $data->report_date = $date;
+            // Normalize every valid spreadsheet date before it enters the
+            // submission JSON. Keep invalid input unchanged so record
+            // validation can show the submitter what needs correction.
+            $submittedDate = SubmittedDate::usable($row['date']);
+            $data->report_date = $submittedDate?->format('Y-m-d') ?? $row['date'];
             $data->report_url = $row['public_report_url'];
             $data->gencc_classification_id = $row['classification_id'];
             $data->gencc_classification_name = $row['classification_name'];
             $data->criteria_url = $row['assertion_criteria_url'];
 
-            // deal with some accidental separators
-            $data->evidence_items = $this->process_pmids($row['pmids']);
+            // Preserve the raw cell through record validation. PmidNormalizer
+            // will retain valid IDs and attach cleanup/removal reasons to this
+            // submission; pre-cleaning here used to discard those warnings.
+            $rawPmids = trim((string) $row['pmids']);
+            $data->evidence_items = $rawPmids === '' ? [] : [$rawPmids];
 
             $data->notes_display = $row['notes'];
             $data->notes_private = "File " . $document->file_name . " Row " . $rownum;
@@ -1022,7 +980,9 @@ class DocumentController extends Controller
             $data->submitter_curie = $document->submitter->curie ?? '';
             $data->submitter_title = $document->submitter->name ?? '';
 
-            $check = $document->submitter->submissions()->sid($row['local_key'])->first();
+            $check = empty($row['local_key'])
+                ? null
+                : $document->submitter->submissions()->sid($row['local_key'])->first();
             if ($check === null)
             {
                 $data->version_display = "1.0";
@@ -1057,14 +1017,10 @@ class DocumentController extends Controller
                 continue;
             }
 
-            \Log::info("JSON object from template: " . json_encode($obj));
-
             $job = $document->job;
 
             // For Unpublish action, skip data loading and just set status
             if ($action === 'U') {
-                \Log::info('DocumentController@parser: Unpublish action - new version already created, setting status');
-
                 // Set status to draft_unpublish (new version record was already created above)
                 $submission->status = Submission::STATUS_DRAFT_UNPUBLISH;
 
@@ -1078,20 +1034,43 @@ class DocumentController extends Controller
                 if (isset($originalSubmission) && $originalSubmission->is_most_recent) {
                     $originalSubmission->is_most_recent = false;
                     $originalSubmission->save();
-                    \Log::info("DocumentController@parser: Marked original submission as not most recent");
                 }
 
-                // Copy pubmed associations from original submission
+                // The unpublish version keeps the original's PubMed links
                 if (isset($originalSubmission)) {
                     $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
                     $submission->pubmeds()->sync($pubmedIds);
-                    \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to unpublish version");
                 }
 
                 $successfulSubmissions++;
             } else {
                 // For New (N) and Republish (R) actions, load data from spreadsheet
                 $status = $submission->load_from_json($obj, $lookupCaches);
+                $recordErrors = $status === true ? [] : $status;
+
+                // A conflict with an existing submission is a record-content
+                // problem, not a reason to reject every row in the file. The
+                // same service is used by portal edits. Intra-file duplicate
+                // keys were already rejected by the upload gate.
+                $duplicateCheck = SubmissionDuplicateDetection::checkForDuplicates(
+                    $document->submitter_id,
+                    $submission->gene_id,
+                    $submission->original_disease_id,
+                    $submission->inheritance_id,
+                    $action === 'R'
+                        ? array_filter([
+                            $originalSubmission->id ?? null,
+                            $submission->exists ? $submission->id : null,
+                        ])
+                        : ($submission->id ?? null)
+                );
+                if ($duplicateCheck['has_blocking_duplicate']) {
+                    $recordErrors['duplicate_submission'] = SubmissionDuplicateDetection::formatBlockingErrorMessage(
+                        $duplicateCheck['blocking_duplicates']->first()
+                    );
+                }
+
+                $status = empty($recordErrors) ? true : $recordErrors;
                 if ($status === true)
                 {
                     $submission->user_id = $document->user_id;
@@ -1101,10 +1080,8 @@ class DocumentController extends Controller
                         // Republish: Set status to draft_republish
                         // New version record was already created above with version_number incremented
                         $submission->status = Submission::STATUS_DRAFT_REPUBLISH;
-                        \Log::info('DocumentController@parser: Setting republish status to draft_republish');
                     } elseif ($action === 'N') {
                         // New submission: set status to draft_new
-                        \Log::info('DocumentController@parser: Setting new submission status to draft_new');
                         $submission->status = Submission::STATUS_DRAFT_NEW;
                     }
 
@@ -1112,20 +1089,6 @@ class DocumentController extends Controller
                     $submission->job_id = $job->id;
                     $submission->document_id = $document->id;
                     $submission->save();
-
-                    // For republish, mark the original submission as not most recent
-                    if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
-                        $originalSubmission->is_most_recent = false;
-                        $originalSubmission->save();
-                        \Log::info("DocumentController@parser: Marked original submission as not most recent");
-                    }
-
-                    // For republish, copy pubmed associations from original submission
-                    if ($action === 'R' && isset($originalSubmission)) {
-                        $pubmedIds = $originalSubmission->pubmeds()->pluck('pubmeds.id')->toArray();
-                        $submission->pubmeds()->sync($pubmedIds);
-                        \Log::info("DocumentController@parser: Copied " . count($pubmedIds) . " pubmed associations to new version");
-                    }
 
                     $successfulSubmissions++;
                 }
@@ -1158,12 +1121,23 @@ class DocumentController extends Controller
                         'errors' => $status
                     ];
                 }
+
+                // A saved republish draft is the newest version even when it
+                // has record errors that must be fixed before submission.
+                if ($action === 'R' && isset($originalSubmission) && $originalSubmission->is_most_recent) {
+                    $originalSubmission->is_most_recent = false;
+                    $originalSubmission->save();
+                }
             }
 
-            // we can now update the evidence pivot table entries
-            $submission->pubmeds()->detach();
+            // Link the PubMed records cited in the sheet.  An unpublish version
+            // already has its links, copied above.  A new submission has none
+            // yet; a republish version may be a reused draft holding old ones.
+            if ($action === 'R') {
+                $submission->pubmeds()->detach();
+            }
 
-            if (isset($submission->submission_data->evidence) && is_array($submission->submission_data->evidence)) {
+            if ($action !== 'U' && isset($submission->submission_data->evidence) && is_array($submission->submission_data->evidence)) {
                 // Collect all pubmed IDs to attach in one query
                 $pubmedIdsToAttach = [];
                 foreach ($submission->submission_data->evidence as $evidence)
@@ -1279,17 +1253,6 @@ class DocumentController extends Controller
      * list is all over the place.  Some use ; as a separator.  Some include
      * [PMID].  Some include _.  This function attempts to clean it all up.
      */
-    public function process_pmids($list)
-    {
-        if (empty(trim($list))) {
-            return [];
-        }
-
-        $result = \App\Services\PmidNormalizer::normalize($list);
-        return $result['pmids'];
-    }
-
-
     /**
      * Get error report as JSON for a document
      */

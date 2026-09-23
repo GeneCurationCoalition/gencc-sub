@@ -12,6 +12,30 @@ use JsonMachine\Items;
 use JsonMachine\JsonDecoder\ExtJsonDecoder;
 use Illuminate\Support\Str;
 
+/**
+ * Import MONDO, OMIM and Orphanet into the diseases table.
+ *
+ * Storage policy: a row's `xrefs` is a faithful, exact-only record of what that
+ * row's *own* ontology asserts about other ontologies.  Nothing stores another
+ * ontology's claim about itself, and nothing stores a non-exact relationship.
+ * Presence in `xrefs` therefore implies exactness, so no provenance column or
+ * relation qualifier is needed anywhere downstream.
+ *
+ *   MONDO row     `omim_id`         skos:exactMatch OMIM ids
+ *                 `orpha_id`        skos:exactMatch Orphanet codes
+ *                 `replaced_by`     successor CURIE when the term is obsolete
+ *   Orphanet row  `mondo_id`        exact + validated MONDO CURIEs from Orphadata
+ *                 `omim_id`         exact + validated OMIM ids from Orphadata
+ *   OMIM row      `include_titles` only; OMIM's source file asserts nothing
+ *
+ * Every equivalence key is an array, even when empty.  Values are bare
+ * identifiers — the key already names the namespace — except `mondo_id`, which
+ * holds CURIEs so that the zero-padding MONDO identifiers require stays visible.
+ *
+ * `omim_id` and `orpha_id` keep the names they had before this policy, when
+ * they also held non-exact identifiers, so that gencc-search, which reads them,
+ * needs no change.
+ */
 class UpdateDiseases extends Command
 {
     use CachesFileHeaders;
@@ -36,6 +60,46 @@ class UpdateDiseases extends Command
     protected $description = 'Update disease information from MONDO, OMIM, Orphanet with comprehensive reconciliation';
 
     /**
+     * The outcome of one source phase.  "Skipped" and "failed" are distinct
+     * because reconciliation deprecates every row a phase did not report as
+     * seen: doing that for a phase that *failed* would mass-deprecate the whole
+     * namespace.
+     */
+    protected const PHASE_UPDATED = 'updated';
+    protected const PHASE_SKIPPED = 'skipped';
+    protected const PHASE_FAILED = 'failed';
+
+    /**
+     * The only MONDO predicate that relates a term to another ontology under
+     * this policy, plus the obsolescence successor predicate.
+     */
+    protected const PRED_EXACT_MATCH = 'http://www.w3.org/2004/02/skos/core#exactMatch';
+    protected const PRED_REPLACED_BY = 'http://purl.obolibrary.org/obo/IAO_0100001';
+
+    /**
+     * The path segment that marks a MONDO exactMatch value as an OMIM entry.
+     * Phenotypic series sit under /phenotypicSeries/ and are not OMIM ids.
+     */
+    protected const OMIM_ENTRY_PATH = '/omim.org/entry/';
+
+    /**
+     * The `xrefs` keys that hold cross-ontology equivalences; see the class
+     * docblock.  DiseaseResolver reads them through these constants.
+     */
+    public const FIELD_EXACT_OMIM = 'omim_id';
+    public const FIELD_EXACT_ORPHANET = 'orpha_id';
+    public const FIELD_EXACT_MONDO = 'mondo_id';
+    public const FIELD_REPLACED_BY = 'replaced_by';
+
+    /**
+     * Orphadata's numeric ids for "E (Exact mapping...)" and "Validated".  The
+     * ids are matched rather than the sibling <Name>, which is localisable
+     * English prose.
+     */
+    protected const ORPHA_RELATION_EXACT = '21527';
+    protected const ORPHA_VALIDATION_VALIDATED = '21611';
+
+    /**
      * Track diseases seen in this update run (by curie)
      */
     protected $seenMondoIds = [];
@@ -43,26 +107,18 @@ class UpdateDiseases extends Command
     protected $seenOrphanetIds = [];
 
     /**
-     * Track exact_match relationships from MONDO
+     * The MONDO term claiming each OMIM or Orphanet identifier in this run, used
+     * only to reject a release in which two terms claim the same one.
+     * Resolution reads the stored xrefs, not this map.
+     *
+     * @var array<string, string> e.g. ['OMIM:123' => 'MONDO:0000456']
      */
-    protected $mondoExactMatchOmim = [];  // ['OMIM:123' => 'MONDO:456']
-    protected $mondoExactMatchOrphanet = [];  // ['Orphanet:123' => 'MONDO:456']
-
-    /**
-     * Track xref relationships from MONDO (non-exact_match)
-     */
-    protected $mondoXrefOmim = [];  // ['OMIM:123' => ['MONDO:456', 'MONDO:789']]
-    protected $mondoXrefOrphanet = [];  // ['Orphanet:123' => ['MONDO:456']]
+    protected $exactMatchClaims = [];
 
     /**
      * Pre-loaded disease cache for FK-safe upserts: curie => ['id' => int, 'ident' => string, 'status' => int, 'name' => string]
      */
     protected $diseaseCache = [];
-
-    /**
-     * MONDO curie to database ID mapping (for setting mondo_id on OMIM/Orphanet)
-     */
-    protected $mondoCurieToId = [];
 
     /**
      * Execute the console command.
@@ -83,35 +139,30 @@ class UpdateDiseases extends Command
             // Pre-load all existing disease data into memory for FK-safe upserts
             $this->preloadDiseaseCache();
 
-            // MONDO must go first - it determines the canonical disease set and mappings
-            // Each method returns true if updates were made, false if skipped
-            $mondoUpdated = $this->mondo();
+            // MONDO goes first because it determines the canonical disease set.
+            // Each method reports updated / skipped / failed.
+            $outcomes = [];
+            $outcomes['mondo'] = $this->mondo();
+            $outcomes['omim'] = $this->omim();
+            $outcomes['orphanet'] = $this->orphanet();
 
-            // OMIM and Orphanet updates using MONDO mappings
-            $omimUpdated = $this->omim();
-            $orphanetUpdated = $this->orphanet();
+            $failed = array_keys($outcomes, self::PHASE_FAILED, true);
 
-            // Only run post-processing if at least one source was updated
-            if ($mondoUpdated || $omimUpdated || $orphanetUpdated) {
-                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 0, 3, 'Starting post-processing...');
-
-                // Step 3: Assign mondo_id to OMIM diseases using Orphanet equivalence
-                $this->assignMondoIdViaOrphanet();
-                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 1, 3, 'OMIM via Orphanet complete');
-
-                // Step 4: Assign mondo_id to Orphanet diseases using OMIM equivalence
-                $this->assignMondoIdViaOmim();
-                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 2, 3, 'Orphanet via OMIM complete');
-
-                // Reconcile all existing diseases not seen in this update
-                $this->reconcileUnseenDiseases();
-                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Reconciliation complete');
-            } else {
-                $this->info('All source files unchanged - skipping post-processing');
-                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Skipped - no changes');
+            foreach ($failed as $namespace) {
+                $this->error("...{$namespace} phase failed - its rows will not be reconciled");
             }
 
-            $this->info('Disease update complete');
+            // Only reconcile if at least one source was actually re-read
+            if (in_array(self::PHASE_UPDATED, $outcomes, true)) {
+                AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'post_processing', 0, 1, 'Starting post-processing...');
+
+                // Reconcile all existing diseases not seen in this update
+                $this->reconcileUnseenDiseases($failed);
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Reconciliation complete');
+            } else {
+                $this->info('All source files unchanged or failed - skipping post-processing');
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'post_processing', 'Skipped - no changes');
+            }
 
             // Build summary
             $summary = sprintf(
@@ -120,8 +171,18 @@ class UpdateDiseases extends Command
                 count($this->seenOmimIds),
                 count($this->seenOrphanetIds)
             );
+
+            if (!empty($failed)) {
+                $message = 'Disease update failed for: '.implode(', ', $failed);
+                AdminProgressTracker::fail(self::PROGRESS_OPERATION, $message);
+
+                return self::FAILURE;
+            }
+
+            $this->info('Disease update complete');
             AdminProgressTracker::complete(self::PROGRESS_OPERATION, $summary);
 
+            return self::SUCCESS;
         } catch (\Exception $e) {
             AdminProgressTracker::fail(self::PROGRESS_OPERATION, $e->getMessage());
             throw $e;
@@ -148,11 +209,6 @@ class UpdateDiseases extends Command
                 'name' => $disease->name,
                 'type' => $disease->type,
             ];
-
-            // Build MONDO curie→id mapping for OMIM/Orphanet phases
-            if ($disease->type === Disease::TYPE_MONDO) {
-                $this->mondoCurieToId[$disease->curie] = $disease->id;
-            }
         }
 
         $this->info("......loaded " . count($this->diseaseCache) . " existing diseases");
@@ -163,8 +219,10 @@ class UpdateDiseases extends Command
      *
      * This extracts:
      * 1. All MONDO diseases
-     * 2. exact_match relationships (from basicPropertyValues)
-     * 3. xref relationships (from xrefs)
+     * 2. skos:exactMatch relationships to OMIM and Orphanet
+     * 3. the successor of an obsolete term
+     *
+     * @return string One of the PHASE_* outcomes
      */
     protected function mondo()
     {
@@ -179,12 +237,13 @@ class UpdateDiseases extends Command
         if (!$this->shouldUpdateFile($fileIdentifier, $url, 'diseases')) {
             $this->info('...MONDO update skipped (file unchanged)');
 
-            // Still need to load mappings from existing MONDO diseases for OMIM/Orphanet phases
-            $this->loadExistingMondoMappings();
+            // Still need the existing identifiers so reconciliation does not
+            // deprecate every MONDO row
+            $this->loadExistingMondoCuries();
 
             AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'mondo', 'Skipped - file unchanged');
 
-            return false;
+            return self::PHASE_SKIPPED;
         }
 
         // Download the file to disk (not memory) for streaming
@@ -193,7 +252,9 @@ class UpdateDiseases extends Command
 
         if ($cachePath === null) {
             $this->error('......FAILED to retrieve data from MONDO');
-            return false;
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'mondo', 'Failed - download error');
+
+            return self::PHASE_FAILED;
         }
 
         $this->info('...processing MONDO diseases using batch upsert');
@@ -204,7 +265,6 @@ class UpdateDiseases extends Command
         $batchSize = 500;
         $batch = [];
         $now = now();
-        $newCuries = []; // Track new curies to refresh mondoCurieToId after upserts
 
         try {
             $nodes = Items::fromFile($cachePath, [
@@ -212,7 +272,7 @@ class UpdateDiseases extends Command
                 'decoder' => new ExtJsonDecoder(true), // true = return assoc arrays
             ]);
 
-            $totalNodes = 30000; // Approximate for progress tracking
+            $totalNodes = 40000; // Approximate for progress tracking
 
             foreach ($nodes as $node) {
                 // ExtJsonDecoder(true) returns associative arrays
@@ -232,24 +292,21 @@ class UpdateDiseases extends Command
                     $deprecatedCount++;
                 }
 
-                // Extract exact_match and xref mappings (pass as array)
-                $this->extractMondoMappingsArray($term, $meta);
+                $xrefs = $this->x_mondo_xrefs_array($meta);
+
+                // Detect a release in which two terms claim the same identifier
+                $this->recordMondoExactMatches($term, $xrefs);
 
                 // Check if disease exists in cache
                 $existing = $this->diseaseCache[$term] ?? null;
                 $ident = $existing['ident'] ?? Str::uuid()->toString();
-
-                if (!$existing) {
-                    $newCuries[] = $term;
-                }
 
                 // Build record for upsert
                 $record = [
                     'ident' => $ident,
                     'curie' => $term,
                     'type' => Disease::TYPE_MONDO,
-                    'mondo_id' => null,
-                    'xrefs' => json_encode($this->x_mondo_xrefs_array($meta)),
+                    'xrefs' => json_encode($xrefs),
                     'status' => $is_deprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
                     'created_at' => $now,
                     'updated_at' => $now,
@@ -285,11 +342,6 @@ class UpdateDiseases extends Command
                 $this->upsertMondoBatch($batch);
             }
 
-            // Refresh mondoCurieToId mapping for new diseases
-            if (count($newCuries) > 0) {
-                $this->refreshMondoCurieToId($newCuries);
-            }
-
             // Update cached headers after successful processing
             $this->updateCachedHeaders($fileIdentifier, $url);
 
@@ -298,12 +350,13 @@ class UpdateDiseases extends Command
             if ($deprecatedCount > 0) {
                 $this->info('...found ' . $deprecatedCount . ' deprecated MONDO diseases (deprecated: true)');
             }
-            $this->info('...found ' . count($this->mondoExactMatchOmim) . ' OMIM exact_match relationships');
-            $this->info('...found ' . count($this->mondoExactMatchOrphanet) . ' Orphanet exact_match relationships');
+            $this->info('...found ' . count($this->exactMatchClaims) . ' OMIM and Orphanet exact_match relationships');
 
         } catch (\Exception $e) {
             $this->error('......FAILED to parse MONDO JSON: ' . $e->getMessage());
-            return false;
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'mondo', 'Failed - ' . $e->getMessage());
+
+            return self::PHASE_FAILED;
         }
 
         AdminProgressTracker::completePhase(
@@ -312,7 +365,7 @@ class UpdateDiseases extends Command
             sprintf('%d diseases processed (%d deprecated)', $mondoCount, $deprecatedCount)
         );
 
-        return true;
+        return self::PHASE_UPDATED;
     }
 
     /**
@@ -322,7 +375,7 @@ class UpdateDiseases extends Command
     {
         // Columns to update on conflict
         $updateColumns = [
-            'type', 'mondo_id', 'xrefs', 'status', 'updated_at',
+            'type', 'xrefs', 'status', 'updated_at',
             'name', 'description', 'synonyms', 'deprecated_name',
         ];
 
@@ -330,148 +383,78 @@ class UpdateDiseases extends Command
     }
 
     /**
-     * Refresh mondoCurieToId mapping for newly inserted diseases
+     * Claim this term's exact matches, throwing if another term in the release
+     * already claimed one of them.
+     *
+     * @param  array{omim_id: string[], orpha_id: string[]}  $exactMatches  As
+     *      returned by x_mondo_xrefs_array(), i.e. exactly what is stored
      */
-    protected function refreshMondoCurieToId(array $curies): void
+    protected function recordMondoExactMatches(string $mondoCurie, array $exactMatches): void
     {
-        $newDiseases = Disease::whereIn('curie', $curies)
-            ->select('id', 'curie')
-            ->get();
+        foreach (['OMIM' => self::FIELD_EXACT_OMIM, 'Orphanet' => self::FIELD_EXACT_ORPHANET] as $prefix => $field) {
+            foreach ($exactMatches[$field] as $id) {
+                $claimant = $this->exactMatchClaims["{$prefix}:{$id}"] ??= $mondoCurie;
 
-        foreach ($newDiseases as $disease) {
-            $this->mondoCurieToId[$disease->curie] = $disease->id;
-        }
-    }
-
-    /**
-     * Extract MONDO mappings from array-format metadata
-     */
-    protected function extractMondoMappingsArray($mondoCurie, $meta)
-    {
-        if (empty($meta)) {
-            return;
-        }
-
-        // Extract exact_match from basicPropertyValues
-        foreach (($meta['basicPropertyValues'] ?? []) as $property) {
-            if (($property['pred'] ?? '') === 'http://www.w3.org/2004/02/skos/core#exactMatch') {
-                $val = $property['val'] ?? '';
-
-                // Check for OMIM exact_match
-                if (strpos($val, '/omim.org/entry/') !== false) {
-                    $omimId = basename($val);
-                    $omimCurie = 'OMIM:' . $omimId;
-
-                    if (isset($this->mondoExactMatchOmim[$omimCurie]) &&
-                        $this->mondoExactMatchOmim[$omimCurie] !== $mondoCurie) {
-                        throw new \Exception(
-                            "OMIM {$omimCurie} has multiple MONDO exact_match: " .
-                            "{$this->mondoExactMatchOmim[$omimCurie]} and {$mondoCurie}"
-                        );
-                    }
-                    $this->mondoExactMatchOmim[$omimCurie] = $mondoCurie;
+                if ($claimant !== $mondoCurie) {
+                    throw new \Exception("{$prefix}:{$id} has multiple MONDO exact_match: {$claimant} and {$mondoCurie}");
                 }
-
-                // Check for Orphanet exact_match
-                if (strpos($val, 'orpha.net') !== false || strpos($val, 'Orphanet') !== false) {
-                    if (preg_match('/Orphanet[:\/_](\d+)/', $val, $matches)) {
-                        $orphanetCurie = 'Orphanet:' . $matches[1];
-
-                        if (isset($this->mondoExactMatchOrphanet[$orphanetCurie]) &&
-                            $this->mondoExactMatchOrphanet[$orphanetCurie] !== $mondoCurie) {
-                            throw new \Exception(
-                                "Orphanet {$orphanetCurie} has multiple MONDO exact_match: " .
-                                "{$this->mondoExactMatchOrphanet[$orphanetCurie]} and {$mondoCurie}"
-                            );
-                        }
-                        $this->mondoExactMatchOrphanet[$orphanetCurie] = $mondoCurie;
-                    }
-                }
-            }
-        }
-
-        // Extract xrefs
-        foreach (($meta['xrefs'] ?? []) as $property) {
-            $val = explode(':', $property['val'] ?? '');
-            if (count($val) < 2) continue;
-
-            switch ($val[0]) {
-                case 'OMIM':
-                    $omimCurie = 'OMIM:' . $val[1];
-                    if (!isset($this->mondoExactMatchOmim[$omimCurie])) {
-                        $this->mondoXrefOmim[$omimCurie][] = $mondoCurie;
-                    }
-                    break;
-                case 'Orphanet':
-                    $orphanetCurie = 'Orphanet:' . $val[1];
-                    if (!isset($this->mondoExactMatchOrphanet[$orphanetCurie])) {
-                        $this->mondoXrefOrphanet[$orphanetCurie][] = $mondoCurie;
-                    }
-                    break;
             }
         }
     }
 
     /**
-     * Parse MONDO xrefs from array format
+     * Parse what a MONDO term asserts about other ontologies.
+     *
+     * Only `skos:exactMatch` values are read: they are the sole equivalence
+     * signal in the OBO Graphs JSON, and this policy relates terms across
+     * ontologies on exactness alone.  The generic `meta.xrefs` list carries no
+     * per-entry relation annotation and is deliberately not read.
+     *
+     * The predicate filter on the OMIM branch is load-bearing even though every
+     * `omim.org/entry/` value currently sits under exactMatch: an OMIM id may
+     * only map to a MONDO term that maps back, so a value arriving under some
+     * other predicate must not be stored.
+     *
+     * @return array{omim_id: string[], orpha_id: string[], replaced_by: ?string}
      */
     protected function x_mondo_xrefs_array($meta)
     {
         $cleansed = [
-            'omim_id' => [], 'omim_label' => null,
-            'orpha_id' => null, 'orpha_label' => null, 'ogms' => null,
-            'do_id' => null, 'medgen_id' => null, 'mesh' => null,
-            'gard_id' => null, 'umls_id' => null, 'ncit' => null
+            self::FIELD_EXACT_OMIM => [],
+            self::FIELD_EXACT_ORPHANET => [],
+            self::FIELD_REPLACED_BY => null,
         ];
 
-        if (empty($meta)) {
-            return $cleansed;
-        }
-
-        // Get OMIM from basicPropertyValues
         foreach (($meta['basicPropertyValues'] ?? []) as $property) {
+            $pred = $property['pred'] ?? '';
             $val = $property['val'] ?? '';
-            if (($n = strpos($val, '/omim.org/entry/')) > 0) {
-                $cleansed['omim_id'][] = substr($val, $n + 16);
+
+            if ($pred === self::PRED_REPLACED_BY) {
+                // Never let a later foreign successor erase a MONDO one
+                $cleansed[self::FIELD_REPLACED_BY] = $this->x_mondo_curie($val) ?? $cleansed[self::FIELD_REPLACED_BY];
+            } elseif ($pred !== self::PRED_EXACT_MATCH) {
+                continue;
+            } elseif (($n = strpos($val, self::OMIM_ENTRY_PATH)) !== false) {
+                $cleansed[self::FIELD_EXACT_OMIM][] = substr($val, $n + strlen(self::OMIM_ENTRY_PATH));
+            } elseif (preg_match('/Orphanet[:\/_](\d+)/', $val, $matches)) {
+                $cleansed[self::FIELD_EXACT_ORPHANET][] = $matches[1];
             }
         }
 
-        // Get the rest from xrefs
-        foreach (($meta['xrefs'] ?? []) as $property) {
-            $val = explode(':', $property['val'] ?? '');
-            if (count($val) < 2) continue;
-
-            switch ($val[0]) {
-                case 'DOID':
-                    $cleansed['do_id'] = $val[1];
-                    break;
-                case 'OMIM':
-                    $cleansed['omim_id'][] = $val[1];
-                    break;
-                case 'Orphanet':
-                    $cleansed['orpha_id'] = $val[1];
-                    break;
-                case 'GARD':
-                    $cleansed['gard_id'] = $val[1];
-                    break;
-                case 'UMLS':
-                    $cleansed['umls_id'] = $val[1];
-                    break;
-                case 'MESH':
-                    $cleansed['mesh'] = $val[1];
-                    break;
-                case 'NCIT':
-                    $cleansed['ncit'] = $val[1];
-                    break;
-                case 'OGMS':
-                    $cleansed['ogms'] = $val[1];
-                    break;
-            }
-        }
-
-        $cleansed['omim_id'] = array_values(array_unique($cleansed['omim_id']));
+        $cleansed[self::FIELD_EXACT_OMIM] = array_values(array_unique($cleansed[self::FIELD_EXACT_OMIM]));
+        $cleansed[self::FIELD_EXACT_ORPHANET] = array_values(array_unique($cleansed[self::FIELD_EXACT_ORPHANET]));
 
         return $cleansed;
+    }
+
+    /**
+     * The MONDO CURIE named by an OBO purl, or null if it names another ontology.
+     */
+    protected function x_mondo_curie($val)
+    {
+        $curie = str_replace('_', ':', basename((string) $val));
+
+        return str_starts_with($curie, 'MONDO:') ? $curie : null;
     }
 
     /**
@@ -490,137 +473,32 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Extract exact_match and xref mappings from MONDO metadata
+     * Note every stored MONDO identifier as seen, deprecated ones included, for
+     * the run where the MONDO file is unchanged.
      */
-    protected function extractMondoMappings($mondoCurie, $meta)
+    protected function loadExistingMondoCuries()
     {
-        if ($meta === null)
-            return;
+        $this->info('......loading existing MONDO identifiers from database');
 
-        // Extract exact_match from basicPropertyValues
-        foreach (($meta->basicPropertyValues ?? []) as $property) {
-            if ($property->pred === 'http://www.w3.org/2004/02/skos/core#exactMatch') {
-                $val = $property->val;
-
-                // Check for OMIM exact_match (NOT OMIMPS)
-                if (strpos($val, '/omim.org/entry/') !== false) {
-                    $omimId = basename($val);
-                    $omimCurie = 'OMIM:' . $omimId;
-
-                    // Validate uniqueness
-                    if (isset($this->mondoExactMatchOmim[$omimCurie]) &&
-                        $this->mondoExactMatchOmim[$omimCurie] !== $mondoCurie) {
-                        throw new \Exception(
-                            "OMIM {$omimCurie} has multiple MONDO exact_match: " .
-                            "{$this->mondoExactMatchOmim[$omimCurie]} and {$mondoCurie}"
-                        );
-                    }
-
-                    $this->mondoExactMatchOmim[$omimCurie] = $mondoCurie;
-                }
-
-                // Check for Orphanet exact_match
-                if (strpos($val, 'orpha.net') !== false || strpos($val, 'Orphanet') !== false) {
-                    // Extract Orphanet ID from various URL formats
-                    if (preg_match('/Orphanet[:\/_](\d+)/', $val, $matches)) {
-                        $orphanetId = $matches[1];
-                        $orphanetCurie = 'Orphanet:' . $orphanetId;
-
-                        // Validate uniqueness
-                        if (isset($this->mondoExactMatchOrphanet[$orphanetCurie]) &&
-                            $this->mondoExactMatchOrphanet[$orphanetCurie] !== $mondoCurie) {
-                            throw new \Exception(
-                                "Orphanet {$orphanetCurie} has multiple MONDO exact_match: " .
-                                "{$this->mondoExactMatchOrphanet[$orphanetCurie]} and {$mondoCurie}"
-                            );
-                        }
-
-                        $this->mondoExactMatchOrphanet[$orphanetCurie] = $mondoCurie;
-                    }
-                }
+        foreach ($this->diseaseCache as $curie => $data) {
+            if ($data['type'] === Disease::TYPE_MONDO) {
+                $this->seenMondoIds[] = $curie;
             }
         }
 
-        // Extract xrefs (these are NOT exact_match)
-        foreach (($meta->xrefs ?? []) as $property) {
-            $val = explode(':', $property->val);
-
-            switch ($val[0]) {
-                case 'OMIM':  // Regular OMIM xref (NOT OMIMPS)
-                    $omimCurie = 'OMIM:' . $val[1];
-                    // Skip if already an exact_match
-                    if (!isset($this->mondoExactMatchOmim[$omimCurie])) {
-                        if (!isset($this->mondoXrefOmim[$omimCurie])) {
-                            $this->mondoXrefOmim[$omimCurie] = [];
-                        }
-                        $this->mondoXrefOmim[$omimCurie][] = $mondoCurie;
-                    }
-                    break;
-
-                case 'Orphanet':
-                    $orphanetCurie = 'Orphanet:' . $val[1];
-                    // Skip if already an exact_match
-                    if (!isset($this->mondoExactMatchOrphanet[$orphanetCurie])) {
-                        if (!isset($this->mondoXrefOrphanet[$orphanetCurie])) {
-                            $this->mondoXrefOrphanet[$orphanetCurie] = [];
-                        }
-                        $this->mondoXrefOrphanet[$orphanetCurie][] = $mondoCurie;
-                    }
-                    break;
-            }
-        }
-    }
-
-
-    /**
-     * Load existing MONDO mappings when MONDO update is skipped
-     *
-     * Note: This reads from the processed xrefs format stored in the database,
-     * not the raw MONDO JSON format. The database stores xrefs as an object with
-     * keys like omim_id, orpha_id, etc.
-     */
-    protected function loadExistingMondoMappings()
-    {
-        $this->info('......loading existing MONDO mappings from database');
-
-        $mondoDiseases = Disease::where('type', Disease::TYPE_MONDO)
-            ->where('status', Disease::STATUS_ACTIVE)
-            ->get();
-
-        foreach ($mondoDiseases as $disease) {
-            $this->seenMondoIds[] = $disease->curie;
-
-            $xrefs = $disease->xrefs;
-            if ($xrefs === null) {
-                continue;
-            }
-
-            // Process OMIM mappings (stored as array in omim_id)
-            $omimIds = $xrefs->omim_id ?? [];
-            if (!is_array($omimIds)) {
-                $omimIds = [$omimIds];
-            }
-            foreach ($omimIds as $omimId) {
-                if ($omimId) {
-                    $omimCurie = 'OMIM:' . $omimId;
-                    $this->mondoExactMatchOmim[$omimCurie] = $disease->curie;
-                }
-            }
-
-            // Process Orphanet mappings (stored as single value in orpha_id)
-            $orphaId = $xrefs->orpha_id ?? null;
-            if ($orphaId) {
-                $orphaCurie = 'Orphanet:' . $orphaId;
-                $this->mondoExactMatchOrphanet[$orphaCurie] = $disease->curie;
-            }
-        }
+        $this->info('......loaded ' . count($this->seenMondoIds) . ' MONDO identifiers');
     }
 
 
     /**
      * Update disease information from OMIM
      *
-     * Uses mimTitles.txt and MONDO mappings to create/update OMIM diseases
+     * Creates the portal's OMIM rows from mimTitles.txt.  The OMIM source
+     * asserts no relationship to any other ontology, so an OMIM row stores
+     * nothing but its own titles: an OMIM id reaches MONDO only when a MONDO
+     * term exact-matches it, which is what makes the reciprocity rule automatic.
+     *
+     * @return string One of the PHASE_* outcomes
      */
     protected function omim()
     {
@@ -630,7 +508,9 @@ class UpdateDiseases extends Command
         $key = env('OMIM_API_KEY');
         if (!$key) {
             $this->error('...ERROR, no OMIM key. Set OMIM_API_KEY in .env');
-            return false;
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'omim', 'Failed - no API key');
+
+            return self::PHASE_FAILED;
         }
 
         $url = "https://data.omim.org/downloads/" . $key . "/mimTitles.txt";
@@ -652,7 +532,7 @@ class UpdateDiseases extends Command
                 }
             }
 
-            return false;
+            return self::PHASE_SKIPPED;
         }
 
         // Download and cache the file
@@ -663,7 +543,9 @@ class UpdateDiseases extends Command
             $data = $this->getCachedFile($cacheFilename);
             if ($data === null) {
                 $this->error('......FAILED to retrieve data from OMIM');
-                return false;
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'omim', 'Failed - download error');
+
+                return self::PHASE_FAILED;
             }
         }
 
@@ -723,14 +605,12 @@ class UpdateDiseases extends Command
             // Use cached lookup instead of database query
             $existing = $this->diseaseCache[$curie] ?? null;
             $ident = $existing['ident'] ?? Str::uuid()->toString();
-            $mondoId = $this->determineMondoIdForOmim($curie);
 
             // Build record for upsert
             $record = [
                 'ident' => $ident,
                 'curie' => $curie,
                 'type' => $type,
-                'mondo_id' => $mondoId,
                 'synonyms' => json_encode(empty($value[3]) ? [] : [$value[3]]),
                 'xrefs' => json_encode(['include_titles' => $value[4] ?? null]),
                 'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
@@ -744,7 +624,7 @@ class UpdateDiseases extends Command
                 $record['deprecated_name'] = $newName;
                 // For existing deprecated diseases, preserve their current name
                 $record['name'] = $existing ? $existing['name'] : $newName;
-                $record['description'] = $existing ? null : null;
+                $record['description'] = null;
             } else {
                 $record['name'] = $newName;
                 $record['description'] = null;
@@ -780,7 +660,7 @@ class UpdateDiseases extends Command
             sprintf('%d diseases processed', $omimCount)
         );
 
-        return true;
+        return self::PHASE_UPDATED;
     }
 
     /**
@@ -789,7 +669,7 @@ class UpdateDiseases extends Command
     protected function upsertOmimBatch(array $batch): void
     {
         $updateColumns = [
-            'type', 'mondo_id', 'synonyms', 'xrefs', 'status', 'updated_at',
+            'type', 'synonyms', 'xrefs', 'status', 'updated_at',
             'name', 'description', 'deprecated_name',
         ];
 
@@ -798,31 +678,9 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Determine the MONDO ID for an OMIM disease using priority:
-     * 1. exact_match
-     * 2. First xref found
-     * Uses cached mondoCurieToId mapping instead of database queries.
-     */
-    protected function determineMondoIdForOmim($omimCurie)
-    {
-        // Priority 1: exact_match
-        if (isset($this->mondoExactMatchOmim[$omimCurie])) {
-            $mondoCurie = $this->mondoExactMatchOmim[$omimCurie];
-            return $this->mondoCurieToId[$mondoCurie] ?? null;
-        }
-
-        // Priority 2: First xref
-        if (isset($this->mondoXrefOmim[$omimCurie]) && count($this->mondoXrefOmim[$omimCurie]) > 0) {
-            $mondoCurie = $this->mondoXrefOmim[$omimCurie][0];
-            return $this->mondoCurieToId[$mondoCurie] ?? null;
-        }
-
-        return null;
-    }
-
-
-    /**
      * Update disease information from Orphanet
+     *
+     * @return string One of the PHASE_* outcomes
      */
     protected function orphanet()
     {
@@ -840,12 +698,12 @@ class UpdateDiseases extends Command
 
             // Still need to track seen IDs from existing Orphanet diseases (use cache)
             foreach ($this->diseaseCache as $curie => $data) {
-                if ($data['type'] === Disease::TYPE_ORPHANET && $data['status'] === Disease::STATUS_ACTIVE) {
+                if ($data['type'] === Disease::TYPE_ORPHANET) {
                     $this->seenOrphanetIds[] = $curie;
                 }
             }
 
-            return false;
+            return self::PHASE_SKIPPED;
         }
 
         // Download and cache the file
@@ -856,16 +714,24 @@ class UpdateDiseases extends Command
             $data = $this->getCachedFile($cacheFilename);
             if ($data === null) {
                 $this->error('......FAILED to retrieve data from Orphanet');
-                return false;
+                AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'orphanet', 'Failed - download error');
+
+                return self::PHASE_FAILED;
             }
         }
 
         // Parse XML
         $xml = simplexml_load_string($data);
 
+        // The raw string is no longer needed once the DOM exists, and together
+        // they are the largest allocation in the command
+        unset($data);
+
         if ($xml === false) {
             $this->error('......FAILED to parse Orphanet XML');
-            return false;
+            AdminProgressTracker::completePhase(self::PROGRESS_OPERATION, 'orphanet', 'Failed - parse error');
+
+            return self::PHASE_FAILED;
         }
 
         $this->info('...processing Orphanet diseases using batch upsert');
@@ -904,9 +770,6 @@ class UpdateDiseases extends Command
                 }
             }
 
-            // Determine mondo_id
-            $mondoId = $this->determineMondoIdForOrphanet($curie);
-
             // Use cached lookup instead of database query
             $existing = $this->diseaseCache[$curie] ?? null;
             $ident = $existing['ident'] ?? Str::uuid()->toString();
@@ -916,7 +779,6 @@ class UpdateDiseases extends Command
                 'ident' => $ident,
                 'curie' => $curie,
                 'type' => Disease::TYPE_ORPHANET,
-                'mondo_id' => $mondoId,
                 'synonyms' => json_encode($this->x_orphanet_synonyms_xml($node->SynonymList ?? null)),
                 'xrefs' => json_encode($this->x_orphanet_xrefs_xml($node->ExternalReferenceList ?? null)),
                 'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
@@ -981,7 +843,7 @@ class UpdateDiseases extends Command
             sprintf('%d diseases processed', $orphanetCount)
         );
 
-        return true;
+        return self::PHASE_UPDATED;
     }
 
     /**
@@ -990,7 +852,7 @@ class UpdateDiseases extends Command
     protected function upsertOrphanetBatch(array $batch): void
     {
         $updateColumns = [
-            'type', 'mondo_id', 'synonyms', 'xrefs', 'status', 'updated_at',
+            'type', 'synonyms', 'xrefs', 'status', 'updated_at',
             'name', 'description', 'deprecated_name',
         ];
 
@@ -999,194 +861,78 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Determine the MONDO ID for an Orphanet disease.
-     * Uses cached mondoCurieToId mapping instead of database queries.
-     */
-    protected function determineMondoIdForOrphanet($orphanetCurie)
-    {
-        // Priority 1: exact_match
-        if (isset($this->mondoExactMatchOrphanet[$orphanetCurie])) {
-            $mondoCurie = $this->mondoExactMatchOrphanet[$orphanetCurie];
-            return $this->mondoCurieToId[$mondoCurie] ?? null;
-        }
-
-        // Priority 2: First xref
-        if (isset($this->mondoXrefOrphanet[$orphanetCurie]) && count($this->mondoXrefOrphanet[$orphanetCurie]) > 0) {
-            $mondoCurie = $this->mondoXrefOrphanet[$orphanetCurie][0];
-            return $this->mondoCurieToId[$mondoCurie] ?? null;
-        }
-
-        return null;
-    }
-
-
-    /**
-     * Step 3: Assign mondo_id to OMIM diseases using Orphanet equivalence
-     *
-     * If an OMIM disease doesn't have a mondo_id but is referenced by an Orphanet
-     * disease that does have a mondo_id, use the Orphanet disease's mondo_id.
-     */
-    protected function assignMondoIdViaOrphanet()
-    {
-        $this->info('...assigning mondo_id to OMIM diseases via Orphanet equivalence');
-
-        // Find all OMIM diseases without mondo_id
-        $omimWithoutMondo = Disease::whereIn('type', [
-                Disease::TYPE_OMIM,
-                Disease::TYPE_OMIM_PLUS,
-                Disease::TYPE_OMIM_NUMBER,
-                Disease::TYPE_OMIM_CARET,
-                Disease::TYPE_OMIM_PERCENT
-            ])
-            ->whereNull('mondo_id')
-            ->get();
-
-        $assignedCount = 0;
-
-        foreach ($omimWithoutMondo as $omimDisease) {
-            // Extract OMIM ID from curie (e.g., "OMIM:615221" -> "615221")
-            $omimId = str_replace('OMIM:', '', $omimDisease->curie);
-
-            // Find Orphanet diseases that reference this OMIM ID in their xrefs
-            $orphanetDiseases = Disease::where('type', Disease::TYPE_ORPHANET)
-                ->whereNotNull('mondo_id')
-                ->whereRaw("JSON_EXTRACT(xrefs, '$.omim_id') = ?", [$omimId])
-                ->get();
-
-            if ($orphanetDiseases->count() > 0) {
-                // Use the first Orphanet disease's mondo_id
-                $orphanetDisease = $orphanetDiseases->first();
-                $omimDisease->update(['mondo_id' => $orphanetDisease->mondo_id]);
-                $assignedCount++;
-            }
-        }
-
-        $this->info("...assigned {$assignedCount} mondo_id values via Orphanet equivalence");
-    }
-
-
-    /**
-     * Step 4: Assign mondo_id to Orphanet diseases using OMIM equivalence
-     *
-     * If an Orphanet disease doesn't have a mondo_id but references an OMIM
-     * disease (in its xrefs) that does have a mondo_id, use the OMIM disease's mondo_id.
-     *
-     * This handles cases like Orphanet:722 which has xrefs->omim_id = "217090",
-     * and OMIM:217090 has mondo_id pointing to MONDO:0009009.
-     */
-    protected function assignMondoIdViaOmim()
-    {
-        $this->info('...assigning mondo_id to Orphanet diseases via OMIM equivalence');
-
-        // Find all Orphanet diseases without mondo_id
-        $orphanetWithoutMondo = Disease::where('type', Disease::TYPE_ORPHANET)
-            ->whereNull('mondo_id')
-            ->whereNotNull('xrefs')
-            ->get();
-
-        $assignedCount = 0;
-
-        foreach ($orphanetWithoutMondo as $orphanetDisease) {
-            // Check if this Orphanet disease has an OMIM xref
-            $xrefs = $orphanetDisease->xrefs;
-            if ($xrefs === null) {
-                continue;
-            }
-
-            $omimId = $xrefs->omim_id ?? null;
-            if (empty($omimId)) {
-                continue;
-            }
-
-            // Build the OMIM curie
-            $omimCurie = 'OMIM:' . $omimId;
-
-            // Find the OMIM disease with this curie that has a mondo_id
-            $omimDisease = Disease::whereIn('type', [
-                    Disease::TYPE_OMIM,
-                    Disease::TYPE_OMIM_PLUS,
-                    Disease::TYPE_OMIM_NUMBER,
-                    Disease::TYPE_OMIM_PERCENT
-                ])
-                ->where('curie', $omimCurie)
-                ->whereNotNull('mondo_id')
-                ->first();
-
-            if ($omimDisease) {
-                // Use the OMIM disease's mondo_id
-                $orphanetDisease->update(['mondo_id' => $omimDisease->mondo_id]);
-                $assignedCount++;
-            }
-        }
-
-        $this->info("...assigned {$assignedCount} mondo_id values via OMIM equivalence");
-    }
-
-
-    /**
      * Reconcile diseases that weren't seen in this update
      * Treat them as deprecated/removed
+     *
+     * @param  string[]  $failedNamespaces  Namespaces whose phase failed; their
+     *      rows are left alone, because "not seen" there means "not read".
      */
-    protected function reconcileUnseenDiseases()
+    protected function reconcileUnseenDiseases(array $failedNamespaces = [])
     {
         $this->info('...reconciling unseen diseases');
 
         $deprecatedCount = 0;
         $withRefsCount = 0;
+        $totalChecked = 0;
 
-        // Find MONDO diseases not seen
-        $unseenMondo = Disease::where('type', Disease::TYPE_MONDO)
-            ->whereNotIn('curie', $this->seenMondoIds)
-            ->get();
+        $sweeps = [
+            'mondo' => fn () => Disease::where('type', Disease::TYPE_MONDO)
+                ->whereNotIn('curie', $this->seenMondoIds)
+                ->get(),
+            'omim' => fn () => Disease::whereIn('type', [
+                    Disease::TYPE_OMIM,
+                    Disease::TYPE_OMIM_PLUS,
+                    Disease::TYPE_OMIM_NUMBER,
+                    Disease::TYPE_OMIM_CARET,
+                    Disease::TYPE_OMIM_PERCENT
+                ])
+                ->whereNotIn('curie', $this->seenOmimIds)
+                ->get(),
+            'orphanet' => fn () => Disease::where('type', Disease::TYPE_ORPHANET)
+                ->whereNotIn('curie', $this->seenOrphanetIds)
+                ->get(),
+        ];
 
-        foreach ($unseenMondo as $disease) {
-            $result = $this->markAsRemovedOrDeprecated($disease);
-            if ($result['deprecated']) {
-                $deprecatedCount++;
-                if ($result['has_refs']) $withRefsCount++;
+        foreach ($sweeps as $namespace => $unseen) {
+            if (in_array($namespace, $failedNamespaces, true)) {
+                $this->info("......skipping {$namespace} (phase failed)");
+                continue;
+            }
+
+            foreach ($unseen() as $disease) {
+                $totalChecked++;
+                $result = $this->markAsRemovedOrDeprecated($disease);
+                if ($result['deprecated']) {
+                    $deprecatedCount++;
+                    if ($result['has_refs']) $withRefsCount++;
+                }
             }
         }
 
-        // Find OMIM diseases not seen
-        $unseenOmim = Disease::whereIn('type', [
-                Disease::TYPE_OMIM,
-                Disease::TYPE_OMIM_PLUS,
-                Disease::TYPE_OMIM_NUMBER,
-                Disease::TYPE_OMIM_CARET,
-                Disease::TYPE_OMIM_PERCENT
-            ])
-            ->whereNotIn('curie', $this->seenOmimIds)
-            ->get();
-
-        foreach ($unseenOmim as $disease) {
-            $result = $this->markAsRemovedOrDeprecated($disease);
-            if ($result['deprecated']) {
-                $deprecatedCount++;
-                if ($result['has_refs']) $withRefsCount++;
-            }
-        }
-
-        // Find Orphanet diseases not seen
-        $unseenOrphanet = Disease::where('type', Disease::TYPE_ORPHANET)
-            ->whereNotIn('curie', $this->seenOrphanetIds)
-            ->get();
-
-        foreach ($unseenOrphanet as $disease) {
-            $result = $this->markAsRemovedOrDeprecated($disease);
-            if ($result['deprecated']) {
-                $deprecatedCount++;
-                if ($result['has_refs']) $withRefsCount++;
-            }
-        }
-
-        $totalChecked = $unseenMondo->count() + $unseenOmim->count() + $unseenOrphanet->count();
         $this->info("...reconciliation complete: checked {$totalChecked}, deprecated {$deprecatedCount} ({$withRefsCount} with submission refs)");
     }
 
 
     /**
-     * Mark a disease as removed/deprecated
-     * Preserve mondo_id, set deprecated_name with REMOVED- prefix
+     * Mark a disease as removed/deprecated.
+     *
+     * Set deprecated_name with a REMOVED- prefix and intentionally retain the
+     * last exact-only xrefs. Existing submissions already retain their disease
+     * foreign keys; keeping the xrefs additionally allows future identifiers to
+     * resolve through the deprecated term and receive the portal warning. This
+     * may be revisited if mappings absent from the current release should stop
+     * participating in resolution.
+     *
+     * All three sources mark retired terms in their own files, and those are
+     * stored as DEPRECATED by the phases above.  This only catches rows a
+     * source no longer lists at all (e.g. MONDO ids withdrawn without
+     * obsoletion, or OMIM entries reclassified as Asterisk, which are not
+     * imported), and records them the same way.
+     *
+     * TODO: give these their own status (e.g. MISSING_FROM_UPSTREAM) instead
+     * of reusing DEPRECATED plus a name prefix, and record when a term became
+     * missing or deprecated.  Needs a migration and a review of every status
+     * check, so it was left out of the exact-only mapping change.
      *
      * @return array ['deprecated' => bool, 'has_refs' => bool]
      */
@@ -1206,27 +952,11 @@ class UpdateDiseases extends Command
         $updates = [
             'status' => Disease::STATUS_DEPRECATED,
             'deprecated_name' => 'REMOVED- ' . $disease->name,
-            // DON'T update mondo_id - preserve it
         ];
 
         $disease->update($updates);
 
         return ['deprecated' => true, 'has_refs' => $hasReferences];
-    }
-
-
-    /**
-     * Transform MONDO synonyms
-     */
-    protected function x_mondo_synonym($synonyms)
-    {
-        $cleansed = [];
-
-        foreach ($synonyms as $synonym)
-            if ($synonym->pred === "hasExactSynonym")
-                $cleansed[] = $synonym->val;
-
-        return $cleansed;
     }
 
 
@@ -1262,110 +992,6 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Parse MONDO xrefs
-     */
-    protected function x_mondo_xrefs($meta)
-    {
-        $cleansed = [
-            'omim_id' => [], 'omim_label' => null,
-            'orpha_id' =>  null, 'orpha_label' => null, 'ogms' => null,
-            'do_id' => null, 'medgen_id' => null, 'mesh' => null,
-            'gard_id' => null, 'umls_id' => null, 'ncit' => null
-        ];
-
-        if ($meta === null)
-            return $cleansed;
-
-        // Get OMIM from basicPropertyValues (could be exact_match or other)
-        foreach (($meta->basicPropertyValues ?? []) as $property)
-            if (($n = strpos($property->val, '/omim.org/entry/')) > 0)
-                $cleansed['omim_id'][] = substr($property->val, $n + 16);
-
-        // Get the rest from xrefs
-        foreach (($meta->xrefs ?? []) as $property)
-        {
-            $val = explode(':', $property->val);
-
-            switch ($val[0])
-            {
-                case 'DOID':
-                    $cleansed['do_id'] = $val[1];
-                    break;
-                case 'OMIM':
-                    $cleansed['omim_id'][] = $val[1];
-                    break;
-                case 'Orphanet':
-                    $cleansed['orpha_id'] = $val[1];
-                    break;
-                case 'GARD':
-                    $cleansed['gard_id'] = $val[1];
-                    break;
-                case 'UMLS':
-                    $cleansed['umls_id'] = $val[1];
-                    break;
-                case 'MESH':
-                    $cleansed['mesh'] = $val[1];
-                    break;
-                case 'NCIT':
-                    $cleansed['ncit'] = $val[1];
-                    break;
-                case 'OGMS':
-                    $cleansed['ogms'] = $val[1];
-                    break;
-            }
-        }
-
-        $cleansed['omim_id'] = array_values(array_unique($cleansed['omim_id']));
-
-        return $cleansed;
-    }
-
-
-    /**
-     * Transform Orphanet synonyms
-     */
-    protected function x_orphanet_synonyms($synonyms)
-    {
-        $cleansed = [];
-
-        if ($synonyms === null)
-            return $cleansed;
-
-        foreach ($synonyms as $synonym)
-            $cleansed[] = $synonym->label;
-
-        return $cleansed;
-    }
-
-
-    /**
-     * Parse Orphanet xrefs (JSON format - legacy)
-     */
-    protected function x_orphanet_xrefs($externals)
-    {
-        $cleansed = [];
-
-        if ($externals === null)
-            return $cleansed;
-
-        foreach ($externals as $external)
-        {
-            switch ($external->Source)
-            {
-                case 'OMIM':
-                    $cleansed['omim_id'] = $external->Reference;
-                    break;
-                case 'UMLS':
-                    $cleansed['umls_id'] = $external->Reference;
-                    break;
-            }
-        }
-
-        return $cleansed;
-    }
-
-
-    /**
      * Transform Orphanet synonyms from XML
      */
     protected function x_orphanet_synonyms_xml($synonymList)
@@ -1384,11 +1010,24 @@ class UpdateDiseases extends Command
 
 
     /**
-     * Parse Orphanet xrefs from XML
+     * Parse what an Orphanet disorder asserts about other ontologies.
+     *
+     * Orphadata annotates every external reference with a relation and a
+     * validation status, and only "E (Exact mapping...)" + "Validated" may
+     * relate terms across ontologies under this policy.  More than half of
+     * Orphadata's OMIM references are broader, narrower or undecided and are
+     * dropped here.  Matching is on the numeric id attribute rather than the
+     * sibling <Name>, which is localisable English prose.
+     *
+     * MONDO <Reference> values are bare digits and about a fifth of them are
+     * written unpadded ("44", "7800"), so they are left-padded to the 7 digits
+     * MONDO CURIEs use.
+     *
+     * @return array{mondo_id: string[], omim_id: string[]}
      */
     protected function x_orphanet_xrefs_xml($externalRefList)
     {
-        $cleansed = [];
+        $cleansed = [self::FIELD_EXACT_MONDO => [], self::FIELD_EXACT_OMIM => []];
 
         if ($externalRefList === null || !isset($externalRefList->ExternalReference))
             return $cleansed;
@@ -1396,18 +1035,22 @@ class UpdateDiseases extends Command
         foreach ($externalRefList->ExternalReference as $external)
         {
             $source = (string)$external->Source;
-            $reference = (string)$external->Reference;
+            $reference = trim((string)$external->Reference);
 
-            switch ($source)
-            {
-                case 'OMIM':
-                    $cleansed['omim_id'] = $reference;
-                    break;
-                case 'UMLS':
-                    $cleansed['umls_id'] = $reference;
-                    break;
-            }
+            if (!in_array($source, ['MONDO', 'OMIM'], true)
+                || $reference === ''
+                || (string)$external->DisorderMappingRelation['id'] !== self::ORPHA_RELATION_EXACT
+                || (string)$external->DisorderMappingValidationStatus['id'] !== self::ORPHA_VALIDATION_VALIDATED)
+                continue;
+
+            if ($source === 'MONDO')
+                $cleansed[self::FIELD_EXACT_MONDO][] = 'MONDO:' . str_pad($reference, 7, '0', STR_PAD_LEFT);
+            else
+                $cleansed[self::FIELD_EXACT_OMIM][] = $reference;
         }
+
+        $cleansed[self::FIELD_EXACT_MONDO] = array_values(array_unique($cleansed[self::FIELD_EXACT_MONDO]));
+        $cleansed[self::FIELD_EXACT_OMIM] = array_values(array_unique($cleansed[self::FIELD_EXACT_OMIM]));
 
         return $cleansed;
     }

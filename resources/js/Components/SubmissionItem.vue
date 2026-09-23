@@ -8,6 +8,8 @@
     import ChangeGene from './ChangeGene.vue';
     import ChangeDisease from './ChangeDisease.vue';
     import { getDiseaseUrl, getGeneUrl } from '@/utils/externalLinks';
+    import { unresolvedField } from '@/utils/submissionFields';
+    import UnresolvedField from './UnresolvedField.vue';
     import ChangeContributor from './ChangeContributor.vue';
     import ChangeNotes from './ChangeNotes.vue';
     import ChangeEvidence from './ChangeEvidence.vue';
@@ -23,7 +25,7 @@
     import { useToast } from "primevue/usetoast";
 
 
-    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning'])
+    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning', 'deprecatedDiseaseWarning'])
 
     const confirm = useConfirm();
     const toast = useToast();
@@ -61,14 +63,15 @@
         return props.submission.status === 20 || ![2, 4].includes(props.submission.job?.status);
     });
 
-    // Gene field has additional restrictions: cannot be edited for republished submissions
-    const isGeneNotEditable = computed(() => {
+    // Gene, disease, and mode of inheritance identify the relationship and
+    // cannot be changed on a republished submission.
+    const isRelationshipNotEditable = computed(() => {
         // Apply all standard editability rules first
         if (isNotEditable.value) {
             return true;
         }
 
-        // Additionally, block gene editing for republish status
+        // Additionally, block relationship editing for republish status
         // With simplified model: 'republish' or legacy 'draft_republish', 'submitted_republish'
         if (props.submission.status) {
             return ['republish', 'draft_republish', 'submitted_republish'].includes(props.submission.status);
@@ -218,6 +221,17 @@
         return false;
     }
 
+    // The recorded messages, so the banner says what is wrong with this row
+    // rather than only that something is
+    function errorMessages() {
+        if (!props.submission.submission_errors) {
+            return [];
+        }
+
+        return Object.values(props.submission.submission_errors)
+            .filter(m => typeof m === 'string' && m.trim() !== '');
+    }
+
     const JOB_STATUS_PROCESSING = 2;
     const JOB_STATUS_ERROR = 4;
 
@@ -334,6 +348,30 @@
             // Clear any previous errors when opening the dialog
             localKeyError.value = '';
             showLocalKeyDialog.value = true;
+        }
+    }
+
+    /**
+     * Report a failed field update.  Without this a rejected value, or a server
+     * error, left the dialog open with nothing said.
+     */
+    function showUpdateFailed(reason) {
+        const detail = typeof reason === 'string' && reason
+            ? reason
+            : (reason?.response?.data?.message || 'The change could not be saved. Please try again.');
+
+        console.error(reason);
+        toast.add({ severity: 'error', summary: 'Update failed', detail, life: 8000 });
+    }
+
+    function safeWebUrl(value) {
+        if (typeof value !== 'string' || value.trim() === '') return null;
+
+        try {
+            const url = new URL(value);
+            return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+        } catch {
+            return null;
         }
     }
 
@@ -577,8 +615,12 @@
                 // close the dialog
                 showEvidenceDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -604,8 +646,12 @@
                 // close the dialog
                 showReportDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -633,8 +679,12 @@
                 // close the dialog
                 showCriteriaDialog.value = false;
             }
+            else
+            {
+                showUpdateFailed(response.data.message);
+            }
         } catch (error) {
-            console.error(error);
+            showUpdateFailed(error);
         }
     }
 
@@ -716,6 +766,11 @@
                     return; // Blocked by duplicate error - dialog stays open to show error
                 }
 
+                if (response.data.status_code !== 200) {
+                    duplicateError.value = response.data.message || 'Unable to update disease.';
+                    return;
+                }
+
                 if ( response.data.hasOwnProperty('status_code') &&  response.data.status_code == 200 )
                 {
                     // Close the dialog FIRST (on success only)
@@ -725,7 +780,7 @@
                     router.reload();
                 }
             } catch (error) {
-                console.error(error);
+                duplicateError.value = error.response?.data?.message || 'Unable to update disease. Please try again.';
             }
         }
     }
@@ -1098,16 +1153,31 @@ console.log(props.submission)
 
 <template>
     <div>
+        <!-- Without this the toasts raised here, such as a rejected field edit, never appear -->
+        <Toast />
         <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
 
             <!-- header -->
             <div v-if="hasAnyErrors()" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">This submission has errors</p>
-                <p>
+                <ul v-if="errorMessages().length > 0" class="list-disc list-inside mt-1">
+                    <li v-for="(message, index) in errorMessages()" :key="index">{{ message }}</li>
+                </ul>
+                <a v-if="hasProperty('disease_curie_id')" :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">How disease mapping works</a>
+                <p class="mt-1">
                     Fields with errors are highlighted below in red.  Click on the field edit button to correct.
                     For a submission to be published to GenCC, all errors must be resolved.
                     Once all errors have been cleared, the system will automatically stage the submission for publishing.
                 </p>
+            </div>
+            <!-- Obsolete disease term warning banner - informational, never blocking -->
+            <div v-if="deprecatedDiseaseWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
+                <p class="font-bold flex items-center gap-2">
+                    <i class="pi pi-info-circle"></i>
+                    Obsolete Disease Term
+                </p>
+                <p class="mt-1">{{ deprecatedDiseaseWarning.message }}</p>
+                <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">Learn more about deprecated disease terms</a>
             </div>
             <!-- Unpublished duplicate warning banner -->
             <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
@@ -1277,10 +1347,13 @@ console.log(props.submission)
                         <!-- classification -->
                         <div class="col-span-2 pt-3 text-right pr-3">Classification:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('classification_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'classification')" :unresolved="unresolvedField(submission, 'classification')" />
+                            <template v-else>
                             <div class="font-normal ">
                                 {{  submission.classification?.name || '-' }}
                             </div>
                             <div class="text-xs">{{ submission.classification?.curie || '' }}</div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('classification_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('classification_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
@@ -1293,6 +1366,8 @@ console.log(props.submission)
                         <!-- gene -->
                         <div class="col-span-2 pt-3 text-right pr-3">Gene:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('gene_hgnc_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'gene')" :unresolved="unresolvedField(submission, 'gene')" />
+                            <template v-else>
                             <div class="font-normal">{{ submission.gene?.symbol || '-' }}</div>
                             <div class="text-xs">
                                 <a v-if="submission.gene?.hgnc_id && getGeneUrl(submission.gene.hgnc_id)"
@@ -1304,30 +1379,33 @@ console.log(props.submission)
                                 </a>
                                 <span v-else>{{ submission.gene?.hgnc_id || '' }}</span>
                             </div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('gene_hgnc_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('gene_hgnc_id')" :disabled="isGeneNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('gene_hgnc_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('gene_hgnc_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('gene_hgnc_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeGene v-model:visible="showGeneDialog" v-bind:input="submission.gene?.hgnc_id || ''" @input_dialog_close="showGeneDialog = false" @input_gene_item="updateGene" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeGene>
+                              <ChangeGene v-model:visible="showGeneDialog" v-bind:input="submission.gene?.hgnc_id || unresolvedField(submission, 'gene')?.id || ''" @input_dialog_close="showGeneDialog = false" @input_gene_item="updateGene" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeGene>
                           </div>
                         </div>
 
                         <!-- disease -->
                         <div class="col-span-2 pt-3 text-right pr-3">Disease:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('disease_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'disease')" :unresolved="unresolvedField(submission, 'disease')" />
+                            <template v-else>
                             <!-- Primary Display: Always show MONDO disease (normalized) -->
                             <div class="mb-2">
-                                <div class="font-normal">{{ !submission.disease || submission.disease?.curie == "MONDO:0000001" ? '-' : submission.disease.name }}</div>
+                                <div class="font-normal">{{ submission.disease?.name || '-' }}</div>
                                 <div class="text-xs">
-                                    <a v-if="submission.disease?.curie && submission.disease.curie !== 'MONDO:0000001' && getDiseaseUrl(submission.disease.curie)"
+                                    <a v-if="submission.disease?.curie && getDiseaseUrl(submission.disease.curie)"
                                        :href="getDiseaseUrl(submission.disease.curie)"
                                        target="_blank"
                                        rel="noopener noreferrer"
                                        class="text-blue-600 hover:text-blue-800 hover:underline">
                                         {{ submission.disease.curie }}
                                     </a>
-                                    <span v-else>{{ !submission.disease || submission.disease?.curie == "MONDO:0000001" ? '-' : submission.disease?.curie }}</span>
+                                    <span v-else>{{ submission.disease?.curie || '' }}</span>
                                     <span v-if="submission.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)">⚠</span>
                                 </div>
                             </div>
@@ -1348,24 +1426,28 @@ console.log(props.submission)
                                     <span v-if="submission.original_disease.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)">⚠</span>
                                 </div>
                             </div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('disease_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('disease_curie_id')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('disease_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('disease_curie_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('disease_curie_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeDisease v-model:visible="showDiseaseDialog" v-bind:input="submission.original_disease?.curie || submission.disease?.curie || ''" @input_dialog_close="showDiseaseDialog = false" @input_disease_item="updateDisease" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeDisease>
+                              <ChangeDisease v-model:visible="showDiseaseDialog" v-bind:input="unresolvedField(submission, 'disease')?.id || submission.original_disease?.curie || submission.disease?.curie || ''" @input_dialog_close="showDiseaseDialog = false" @input_disease_item="updateDisease" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeDisease>
                           </div>
                         </div>
 
                         <!-- mode of inheritance -->
                         <div class="col-span-2 pt-3 text-right pr-3">Mode Of Inheritance:</div>
                         <div class="col-span-9 py-1 my-2 border-l-8 pl-3" :class="hasProperty('moi_curie_id') ? 'border-2 border-red-600' : ''">
+                            <UnresolvedField v-if="unresolvedField(submission, 'inheritance')" :unresolved="unresolvedField(submission, 'inheritance')" />
+                            <template v-else>
                             <div class="font-normal">{{ submission.inheritance?.name || '-' }}</div>
                             <div class="text-xs">{{ submission.inheritance?.curie || '' }}</div>
+                            </template>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
-                          <div v-if="hasProperty('moi_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('moi_curie_id')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
-                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('moi_curie_id')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
+                          <div v-if="hasProperty('moi_curie_id')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('moi_curie_id')" :disabled="isRelationshipNotEditable" severity="danger" text raised rounded/></div>
+                          <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('moi_curie_id')" :disabled="isRelationshipNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
                               <ChangeInheritance v-model:visible="showSelectDialog" v-bind:input="submission.inheritance?.curie || ''" @select_dialog_close="showSelectDialog = false" @select_moi_item="updateInheritance" @clear_api_error="clearDuplicateError" :apiError="duplicateError" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeInheritance>
                           </div>
@@ -1447,25 +1529,25 @@ console.log(props.submission)
                         <!-- report url -->
                         <div class="col-span-2 pt-3 text-right pr-3">Public Report:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3" :class="hasProperty('report_url') ? 'border-2 border-red-600' : ''">
-                            <div v-show="submission.report_url" class="font-normal"><a class="underline" id='click-exit-public-report' target="_blank" v-bind:href="submission.report_url">Click here to view the public report <i class="fas fa-external-link-alt"></i></a></div>
-                            <div class="text-xs">{{ submission.report_url }}</div>
+                            <div v-if="safeWebUrl(submission.report_url)" class="font-normal"><a class="underline" id='click-exit-public-report' target="_blank" rel="noopener noreferrer" v-bind:href="safeWebUrl(submission.report_url)">Click here to view the public report <i class="fas fa-external-link-alt"></i></a></div>
+                            <div class="text-xs">{{ submission.report_url || submission.submission_data?.report?.ext_url || '' }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Evaluated Date:</div>
                         <div class="col-span-4 py-1 my-2 border-l-8 pl-3" :class="hasProperty('report_date') ? 'border-2 border-red-600' : ''">
-                            <div class="font-normal">{{ submission.report_date ? new Date(Date.parse(submission.report_date)).toISOString().split('T')[0] : '' }}</div>
+                            <div class="font-normal">{{ submission.report_date ? new Date(Date.parse(submission.report_date)).toISOString().split('T')[0] : (submission.submission_data?.report?.display_date || '') }}</div>
                         </div>
                         <div v-if="jobHasStatusProcessingOrError()">
                           <div v-if="hasProperty('report_url') || hasProperty('report_date')" class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-times" @click="openDialog('report')" :disabled="isNotEditable" severity="danger" text raised rounded/></div>
                           <div v-else class="flex col-span-1 py-1 pl-4 my-2 items-center"><Button icon="pi pi-check" @click="openDialog('report')" :disabled="isNotEditable" severity="success" text raised rounded/></div>
                           <div class="col-span-12 ">
-                              <ChangeReport v-model:visible="showReportDialog" @input_report_close="showReport = false" @input_report_item="updateReport" v-bind:input="submission.submission_data?.report" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeReport>
+                              <ChangeReport v-model:visible="showReportDialog" @input_report_close="showReport = false" @input_report_item="updateReport" v-bind:input="submission.submission_data?.report" :normalized-date="submission.report_date" :date-error="submission.submission_errors?.report_date" header="header" :title="dialogTitle" :label="dialogLabel" :style="{ width: '50rem' }"></ChangeReport>
                           </div>
                         </div>
 
                         <!-- assertion criteria -->
                         <div class="col-span-2 pt-3 text-right pr-3">Assertion Criteria:</div>
                         <div class="col-span-3 py-1 my-2 border-l-8 pl-3" :class="hasProperty('criteria_url') ? 'border-2 border-red-600' : ''">
-                            <div v-show="submission.submission_data?.criteria?.url" class="font-normal"><a class="underline" id='click-exit-assertion-criteria' target="_blank" v-bind:href="submission.submission_data?.criteria?.url">Click here to view assertion criteria <i class="fas fa-external-link-alt"></i></a></div>
+                            <div v-if="safeWebUrl(submission.submission_data?.criteria?.url) && !hasProperty('criteria_url')" class="font-normal"><a class="underline" id='click-exit-assertion-criteria' target="_blank" rel="noopener noreferrer" v-bind:href="safeWebUrl(submission.submission_data?.criteria?.url)">Click here to view assertion criteria <i class="fas fa-external-link-alt"></i></a></div>
                             <div class="text-xs">{{ submission.submission_data?.criteria?.url }}</div>
                         </div>
                         <div class="col-span-2 pt-3 text-right pr-3">Name:</div>

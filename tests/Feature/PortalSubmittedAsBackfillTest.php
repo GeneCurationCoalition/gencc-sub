@@ -122,7 +122,6 @@ class PortalSubmittedAsBackfillTest extends TestCase
         $originalDisease = Disease::create([
             'curie' => 'OMIM:123456',
             'name' => 'original disease label',
-            'mondo_id' => $disease->id,
             'status' => Disease::STATUS_ACTIVE,
         ]);
         $inheritance = Inheritance::create([

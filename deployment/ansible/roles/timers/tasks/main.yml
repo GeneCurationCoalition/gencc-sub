@@ -116,4 +116,6 @@
     - gencc-sub-update-diseases.timer
     - gencc-sub-release.timer
     - gencc-backup-db.timer
-  when: gencc_enable_timers | bool
+  when:
+    - gencc_enable_timers | bool
+    - not (gencc_deploy_with_maintenance_mode | bool)

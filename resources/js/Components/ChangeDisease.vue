@@ -7,7 +7,10 @@
 
     // component side validations
     const schema = yup.object({
-        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|Orphanet):[0-9]+$/gi, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
+        // Kept in step with the disease_id column regex in SubmissionFileValidation.php:
+        // 'ORPHA' is an accepted spelling of 'Orphanet', and dropping /g avoids yup
+        // reusing a stateful .test() lastIndex across submits
+        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|ORPHA|Orphanet):[0-9]+$/i, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
@@ -84,10 +87,6 @@
     function initializeInput()
     {
         disease.value = props.input;
-
-        // 001 is only used as a placeholder.  don't let it into the dialog
-        if (disease.value == "MONDO:0000001")
-            disease.value = "";
     }
 
 </script>
@@ -103,9 +102,9 @@
 
             <!-- API Error Display -->
             <div v-if="apiError" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-                <p class="font-bold">Duplicate Submission</p>
+                <p class="font-bold">Unable to update disease</p>
                 <p class="text-sm">{{ apiError }}</p>
-                <p class="text-sm mt-2 italic">Consider modifying the existing submission or selecting a different disease.</p>
+                <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">How disease mapping works</a>
             </div>
 
             <div class="grid grid-cols-4">
@@ -123,7 +122,10 @@
                     <div class="font-sm ml-2 italic">&nbsp;</div>
                 </div>
                 <div v-else class="flex items-center col-span-3">
-                    <small id="username-help" class="text-red-600">{{ errors.disease }}</small>
+                    <small id="username-help" class="text-red-600">
+                        {{ errors.disease }}
+                        <a :href="route('help.disease-mapping')" target="_blank" class="ml-1 font-medium text-sky-800 underline">Accepted disease identifiers</a>
+                    </small>
                 </div>
             </div>
 

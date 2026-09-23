@@ -11,9 +11,17 @@
     import ToggleButton from 'primevue/togglebutton';
     import Tag from 'primevue/tag';
     import { getDiseaseUrl, getGeneUrl } from '@/utils/externalLinks';
+    import { unresolvedField } from '@/utils/submissionFields';
+    import UnresolvedField from './UnresolvedField.vue';
 
 
-    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus'])
+    const props = defineProps(['submissions', 'errors', 'favorites', 'hasSubmittedJob', 'jobStatus', 'embedded'])
+
+    // Fields the keyword search matches, including the submitted ids of
+    // reference fields that did not resolve
+    const SEARCH_FIELDS = ['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie',
+        'inheritance.name', 'inheritance.curie', 'classification.name', 'created_at',
+        'submission_data.gene.id', 'submission_data.disease.id', 'submission_data.moi.id', 'submission_data.classification.id'];
 
     const page = usePage()
 
@@ -279,10 +287,8 @@
 
         // Apply global filter manually to match PrimeVue's behavior
         const searchTerm = filters.value.global.value.toLowerCase();
-        const globalFilterFields = ['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'created_at'];
-
         return rowFiltered.filter(item => {
-            return globalFilterFields.some(field => {
+            return SEARCH_FIELDS.some(field => {
                 const keys = field.split('.');
                 let value = item;
                 for (const key of keys) {
@@ -968,6 +974,18 @@
         return true;
     }
 
+    // The recorded error messages for a row, so the indicator says what is
+    // wrong rather than only that something is
+    function errorSummary(item) {
+        if (!item.submission_errors) {
+            return 'Submission has errors';
+        }
+
+        const messages = Object.values(item.submission_errors).filter(m => typeof m === 'string' && m.trim() !== '');
+
+        return messages.length > 0 ? messages.join('; ') : 'Submission has errors';
+    }
+
     const dt = ref();
 
     function rowFilter(item)
@@ -1053,20 +1071,10 @@
         if (globalFilter) {
             const searchLower = globalFilter.toLowerCase();
             filteredData = filteredData.filter(row => {
-                // Search across all the globalFilterFields
-                const searchableText = [
-                    row.sid,
-                    row.display_id,
-                    row.friendly,
-                    row.gene?.symbol,
-                    row.gene?.hgnc_id,
-                    row.disease?.name,
-                    row.disease?.curie,
-                    row.inheritance?.name,
-                    row.inheritance?.curie,
-                    row.classification?.name,
-                    row.created_at
-                ].filter(Boolean).join(' ').toLowerCase();
+                // Search across the same fields as the table's keyword search
+                const searchableText = SEARCH_FIELDS
+                    .map(field => field.split('.').reduce((value, key) => value?.[key], row))
+                    .filter(Boolean).join(' ').toLowerCase();
 
                 return searchableText.includes(searchLower);
             });
@@ -1491,7 +1499,7 @@ table tbody tr:hover {
             </div>
         </div>
 
-        <div class="p-6 lg:p-8 bg-white border-b border-gray-200">
+        <div class="py-6 lg:py-8 bg-white border-b border-gray-200" :class="embedded ? 'px-0' : 'px-6 lg:px-8'">
 
             <div v-if="errors" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold">There are submission errors present</p>
@@ -1535,7 +1543,7 @@ table tbody tr:hover {
             <Toast />
 
             <DataTable v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissionsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="status_date" :sortOrder="-1"
-                    :rowStyle="rowStyle" :globalFilterFields="['sid', 'display_id', 'friendly', 'gene.symbol', 'gene.hgnc_id', 'disease.name', 'disease.curie', 'inheritance.name', 'inheritance.curie', 'classification.name', 'created_at']" tableStyle="min-width: 20rem; width: auto;"
+                    :rowStyle="rowStyle" :globalFilterFields="SEARCH_FIELDS" tableStyle="min-width: 20rem; width: auto;"
                     dataKey="ident">
                 <template #header>
                     <!-- Bulk Action Toolbar -->
@@ -1671,6 +1679,8 @@ table tbody tr:hover {
                         <InputText v-model="filterModel.value" type="text" @input="filterCallback()" :filterFields="['gene.symbol', 'gene.hgnc_id']" class="p-column-filter" placeholder="Search by name" />
                      </template>>-->
                      <template #body="{ data }">
+                        <UnresolvedField v-if="unresolvedField(data, 'gene')" :unresolved="unresolvedField(data, 'gene')" compact />
+                        <template v-else>
                         <div class="font-medium">{{ data.gene?.symbol || '-' }}</div>
                         <div class="text-xs">
                             <a v-if="data.gene?.hgnc_id"
@@ -1682,6 +1692,7 @@ table tbody tr:hover {
                             </a>
                             <span v-else>{{ data.gene?.hgnc_id || '' }}</span>
                         </div>
+                        </template>
                     </template>
                 </Column>
                 <Column field="disease.name" header="Disease" sortable>
@@ -1689,6 +1700,8 @@ table tbody tr:hover {
                         <InputText v-model="filterModel.value" type="text" @input="filterCallback()" class="p-column-filter" placeholder="Search by name" />
                      </template>-->
                      <template #body="{ data }">
+                        <UnresolvedField v-if="unresolvedField(data, 'disease')" :unresolved="unresolvedField(data, 'disease')" compact />
+                        <template v-else>
                         <div class="font-medium">{{ data.disease?.name || '-' }}</div>
                         <div class="text-xs text-gray-500">
                             <a v-if="data.disease?.curie && getDiseaseUrl(data.disease.curie)"
@@ -1714,6 +1727,7 @@ table tbody tr:hover {
                             <span v-else>{{ data.submission_data.disease.id }}</span>
                             <span v-if="data.original_disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.original_disease)">⚠</span>
                         </div>
+                        </template>
                     </template>
                 </Column>
                 <Column field="inheritance.name" header="Inheritance" sortable>
@@ -1730,14 +1744,20 @@ table tbody tr:hover {
                         </MultiSelect>
                     </template>-->
                     <template #body="{ data }">
+                        <UnresolvedField v-if="unresolvedField(data, 'inheritance')" :unresolved="unresolvedField(data, 'inheritance')" compact />
+                        <template v-else>
                         <div class="font-medium">{{ data.inheritance?.name || '-' }}</div>
                         <div class="text-xs">{{ data.inheritance?.curie || '' }}</div>
+                        </template>
                     </template>
                 </Column>
                 <Column field="classification.name" header="Classification" sortable>
                     <template #body="{ data }">
+                        <UnresolvedField v-if="unresolvedField(data, 'classification')" :unresolved="unresolvedField(data, 'classification')" compact />
+                        <template v-else>
                         <div class="font-medium">{{ data.classification?.name || '-' }}</div>
                         <div class="text-xs">{{ data.classification?.curie || '' }}</div>
+                        </template>
                     </template>
                 </Column>
                 <Column field="status_date" header="Status Date" sortable style="min-width: 6rem; white-space: nowrap;">
@@ -1747,20 +1767,23 @@ table tbody tr:hover {
                 </Column>
                 <Column field="status" header="Status" sortable>
                      <template #body="{ data }">
-                        <div class="flex items-center gap-2">
+                        <div class="flex flex-col items-center gap-1">
                             <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getStatusClass(data.status, data.is_archived)]" />
                             <span v-else>{{ displayStatus(data.status) }}</span>
-                            <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
-                               class="pi pi-exclamation-triangle text-red-500 text-xl"
-                               title="Submission has errors"></i>
-                            <!-- Indicator for archived versions (superseded by newer release) -->
-                            <i v-if="data.is_archived"
-                               class="pi pi-history text-gray-400"
-                               v-tooltip.top="'Archived (superseded by newer release)'"></i>
+                            <div v-if="(data.submission_errors && Object.keys(data.submission_errors).length > 0) || data.is_archived"
+                                 class="flex items-center justify-center gap-1">
+                                <i v-if="data.submission_errors && Object.keys(data.submission_errors).length > 0"
+                                   class="pi pi-exclamation-triangle text-red-500 text-xl"
+                                   v-tooltip.top="errorSummary(data)"></i>
+                                <!-- Indicator for archived versions (superseded by newer release) -->
+                                <i v-if="data.is_archived"
+                                   class="pi pi-history text-gray-400"
+                                   v-tooltip.top="'Archived (superseded by newer release)'"></i>
+                            </div>
                         </div>
                      </template>
                 </Column>
-                <Column header="Action" style="width: 10%; min-width: 8rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
+                <Column header="Action" style="width: 10%; min-width: 7rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
                     <template #body="slotProps">
                         <!-- Archived versions (superseded by newer release): Only show View button (no other actions) -->
                         <template v-if="slotProps.data.is_archived">
