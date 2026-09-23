@@ -145,20 +145,18 @@
 - name: Put the current portal into maintenance mode and stop application work
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      set -euo pipefail
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      if podman container exists gencc-sub; then
-        podman exec gencc-sub php artisan down --retry=60
-        podman exec gencc-sub pm2 stop gencc-queue-worker gencc-php-fpm
-      fi
-      search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
-      if [[ "$search_load_state" != "not-found" ]]; then
-        systemctl --user stop gencc-search.service
-      fi
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    if podman container exists gencc-sub; then
+      podman exec gencc-sub php artisan down --retry=60
+      podman exec gencc-sub pm2 stop gencc-queue-worker gencc-php-fpm
+    fi
+    search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
+    if [[ "$search_load_state" != "not-found" ]]; then
+      systemctl --user stop gencc-search.service
+    fi
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   when: gencc_deploy_with_maintenance_mode | bool
 
 - name: Back up the database that will be replaced

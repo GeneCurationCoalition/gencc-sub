@@ -22,12 +22,11 @@
 - name: Wait for PM2 processes after restarting the application container
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      podman exec gencc-sub pm2 pid {{ item }}
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec gencc-sub pm2 pid {{ item }}
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   register: gencc_pm2_process
   changed_when: false
   until: (gencc_pm2_process.stdout | trim) is match('^[1-9][0-9]*$')
@@ -42,36 +41,31 @@
 - name: Put the restarted portal into maintenance mode
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      set -euo pipefail
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      podman exec gencc-sub php artisan down --retry=60
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec gencc-sub php artisan down --retry=60
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   when: gencc_deploy_with_maintenance_mode | bool
 
 - name: Stop the restarted application queue worker
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      set -euo pipefail
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      podman exec gencc-sub pm2 stop gencc-queue-worker
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec gencc-sub pm2 stop gencc-queue-worker
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   when: gencc_deploy_with_maintenance_mode | bool
 
 - name: Verify the restarted application queue worker is stopped
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      podman exec gencc-sub pm2 pid gencc-queue-worker
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec gencc-sub pm2 pid gencc-queue-worker
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   register: gencc_queue_worker_pid
   changed_when: false
   failed_when: >-
@@ -82,16 +76,14 @@
 - name: Stop search after restarting application containers
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc '
-      set -euo pipefail
-      export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-      search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
-      if [[ "$search_load_state" != "not-found" ]]; then
-        systemctl --user stop gencc-search.service
-      fi
-    '
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
+    if [[ "$search_load_state" != "not-found" ]]; then
+      systemctl --user stop gencc-search.service
+    fi
   args:
     executable: /bin/bash
+  become_user: "{{ gencc_deploy_user }}"
   when: gencc_deploy_with_maintenance_mode | bool
 
 - name: Verify the prepared restore dump still exists and is readable

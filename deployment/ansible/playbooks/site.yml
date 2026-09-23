@@ -19,12 +19,11 @@
     - name: Restart search after a maintenance-mode deployment
       ansible.builtin.shell: |
         set -euo pipefail
-        sudo -iu {{ gencc_deploy_user }} bash -lc '
-          export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"
-          systemctl --user start gencc-search.service
-        '
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        systemctl --user start gencc-search.service
       args:
         executable: /bin/bash
+      become_user: "{{ gencc_deploy_user }}"
       when: gencc_deploy_with_maintenance_mode | bool
 
     - name: Clear search release cache markers after restarting search
