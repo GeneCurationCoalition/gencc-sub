@@ -127,7 +127,7 @@ class SubmittedDate
         if (! self::isInAllowedRange($date)) {
             return "'{$date->format('Y-m-d')}' is outside the allowed date range, "
                 .self::earliest()->format('Y-m-d').' to '.self::latest()->format('Y-m-d')
-                .' (including a one-day allowance for time zones).';
+                .' (current date + 1).';
         }
 
         return null;

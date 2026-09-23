@@ -489,7 +489,7 @@ class SubmissionFileValidationTest extends TestCase
         $this->assertSame('13, 14', $details['2999-01-01']['rows']);
         $this->assertSame(2, $details['2999-01-01']['count']);
         $this->assertStringContainsString('outside the allowed date range', $details['2999-01-01']['reason']);
-        $this->assertStringContainsString('one-day allowance', $details['2999-01-01']['reason']);
+        $this->assertStringContainsString('current date + 1', $details['2999-01-01']['reason']);
         $this->assertStringContainsString('Not a date.', $details['2024-01-15T99:99garbage']['reason']);
         $this->assertStringContainsString('YYYY-MM-DD', $details['2024-01-15T99:99garbage']['reason']);
         $this->assertStringContainsString('outside the allowed date range', $details['2026']['reason']);

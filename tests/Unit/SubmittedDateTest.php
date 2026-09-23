@@ -113,7 +113,7 @@ class SubmittedDateTest extends TestCase
 
         try {
             $this->assertSame(
-                "'2999-01-01' is outside the allowed date range, 1970-01-01 to 2026-09-18 (including a one-day allowance for time zones).",
+                "'2999-01-01' is outside the allowed date range, 1970-01-01 to 2026-09-18 (current date + 1).",
                 SubmittedDate::rejectionReason('2999-01-01')
             );
         } finally {

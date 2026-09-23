@@ -24,13 +24,12 @@ class DiseaseMappingAmbiguity
 
         $candidates = array_map(function (Disease $disease) {
             $deprecated = (int) $disease->status === Disease::STATUS_DEPRECATED;
-            $label = $deprecated ? ($disease->deprecated_name ?: $disease->name) : $disease->name;
 
-            return $disease->curie.($label ? ' — '.$label : '').($deprecated ? ' [deprecated]' : '');
+            return $disease->curie.($deprecated ? ' (deprecated)' : '');
         }, $this->candidates);
 
         return "Disease ID '".trim($submitted)."' cannot be mapped uniquely to MONDO. "
             .$source.': '.implode('; ', $candidates).'. '
-            .'No MONDO mapping was assigned. Contact the GenCC team to discuss these mappings.';
+            .'No MONDO mapping was assigned. Learn more: '.route('help.disease-mapping').'.';
     }
 }
