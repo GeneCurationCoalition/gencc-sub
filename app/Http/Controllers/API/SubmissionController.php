@@ -696,6 +696,13 @@ class SubmissionController extends Controller
         $submission->save();
 
         // Build response with optional warnings
+        if (in_array($request->input('type'), ['gene', 'disease', 'inheritance'], true)) {
+            $submission->unsetRelation('disease');
+            \App\Services\MondoRelationshipWarnings::attach(collect([$submission]));
+            if ($submission->mondo_relationship_warning) {
+                $warnings[] = $submission->mondo_relationship_warning;
+            }
+        }
         $response = [
             'success' => 'true',
             'status_code' => 200,

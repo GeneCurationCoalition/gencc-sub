@@ -174,6 +174,42 @@ class DocumentParserPubmedLinksTest extends TestCase
         $this->assertFalse($original->fresh()->is_most_recent);
     }
 
+    public function test_a_republish_row_keeps_the_stored_disease_mapping_whatever_current_data_says(): void
+    {
+        $omim = Disease::factory()->create(['curie' => 'OMIM:123456', 'type' => Disease::TYPE_OMIM]);
+        $stored = Disease::where('curie', 'MONDO:0000002')->firstOrFail();
+        $stored->update(['xrefs' => ['omim_id' => ['123456']]]);
+        $original = Submission::factory()->create([
+            'sid' => 'SGC-100005', 'submitter_id' => $this->submitter->id, 'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true, 'is_most_recent' => true, 'version_number' => 1,
+            'gene_id' => Gene::where('hgnc_id', 'HGNC:5')->value('id'),
+            'original_disease_id' => $omim->id, 'disease_id' => $stored->id,
+            'inheritance_id' => Inheritance::where('curie', 'HP:0000006')->value('id'),
+            'submission_data' => ['disease' => ['id' => 'OMIM:123456']],
+        ]);
+
+        // MONDO now exact-matches OMIM:123456 from a different term.
+        $stored->update(['xrefs' => ['omim_id' => []]]);
+        Disease::factory()->mondo()->withXrefs(['omim_id' => ['123456']])->create(['curie' => 'MONDO:0000003']);
+        $this->parse([$this->row('R', sgcId: 'SGC-100005', overrides: ['disease_id' => 'OMIM:123456'])]);
+
+        $draft = Submission::where('sid', 'SGC-100005')->where('version_number', 2)->sole();
+        $this->assertSame($stored->id, $draft->disease_id);
+        $this->assertSame($omim->id, $draft->original_disease_id);
+        $this->assertArrayNotHasKey('disease_curie_id', (array) $draft->submission_errors);
+
+        // No MONDO term exact-matches it any more: still kept, still no disease error.
+        $draft->forceDelete();
+        $original->update(['is_most_recent' => true]);
+        Disease::where('curie', 'MONDO:0000003')->update(['xrefs' => json_encode(['omim_id' => []])]);
+        $this->parse([$this->row('R', sgcId: 'SGC-100005', overrides: ['disease_id' => 'OMIM:123456'])]);
+
+        $draft = Submission::where('sid', 'SGC-100005')->where('version_number', 2)->sole();
+        $this->assertSame($stored->id, $draft->disease_id);
+        $this->assertSame($omim->id, $draft->original_disease_id);
+        $this->assertArrayNotHasKey('disease_curie_id', (array) $draft->submission_errors);
+    }
+
     public function test_existing_duplicate_becomes_a_record_error_instead_of_preventing_creation(): void
     {
         $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();

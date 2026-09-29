@@ -1509,6 +1509,29 @@ class SubmissionFileValidation
     }
 
     /**
+     * Whether a republish row names the disease its SGC ID was submitted with.
+     *
+     * Compared as submitted rather than by current resolution: republishing keeps
+     * the stored mapping. Older records without an original disease fall back to
+     * the submitted data, then to the stored MONDO term.
+     */
+    private static function isStoredSubmittedDisease(string $diseaseId, Submission $submission): bool
+    {
+        $submitted = Disease::normalizeCurie($diseaseId);
+        if ($submitted === null) {
+            return false;
+        }
+
+        $stored = array_filter([
+            $submission->originalDisease?->curie,
+            data_get($submission->submission_data, 'disease.id'),
+            $submission->original_disease_id === null ? $submission->disease?->curie : null,
+        ], 'is_string');
+
+        return in_array($submitted, array_map([Disease::class, 'normalizeCurie'], $stored), true);
+    }
+
+    /**
      * Batch validate that all SGC IDs in the worksheet belong to the correct submitter
      *
      * @param array $worksheet The spreadsheet data
@@ -1583,7 +1606,8 @@ class SubmissionFileValidation
         // Use submission->submitter_id to support admin users acting as other submitters
         // For SIDs with multiple versions, only check against the live version (is_live=true)
         // or pending versions (draft/submitted statuses)
-        $submissions = \App\Models\Submission::with(['gene', 'originalDisease', 'inheritance'])
+        $submissions = \App\Models\Submission::with(['gene', 'inheritance',
+                'originalDisease' => fn ($q) => $q->withTrashed(), 'disease' => fn ($q) => $q->withTrashed()])
             ->whereIn('sid', array_keys($sgc_ids_to_check))
             ->where('submitter_id', $submitter_id)
             ->where(function ($q) {
@@ -1722,10 +1746,16 @@ class SubmissionFileValidation
                     }
 
                     if ($require_matching_relationship) {
-                        $diseaseValidation = SubmissionValueValidation::disease($row_action['disease_id'], $diseaseResolver);
+                        // A republish keeps the disease mapping stored for its SGC ID, so a row
+                        // naming the stored submitted disease matches even if that identifier
+                        // no longer resolves, or resolves elsewhere, under current data.
+                        $sameDisease = self::isStoredSubmittedDisease($row_action['disease_id'], $submission);
+                        $diseaseValidation = $sameDisease
+                            ? null
+                            : SubmissionValueValidation::disease($row_action['disease_id'], $diseaseResolver);
                         $inheritanceValidation = SubmissionValueValidation::inheritance($row_action['moi_id'], $inheritanceCache);
 
-                        if ($diseaseValidation['error'] !== null || $diseaseValidation['original'] === null) {
+                        if (! $sameDisease && ($diseaseValidation['error'] !== null || $diseaseValidation['original'] === null)) {
                             $validation_results[] = [
                                 'error_type' => 'republish_invalid_disease',
                                 'severity' => self::SEVERITY_ERROR,
@@ -1748,12 +1778,10 @@ class SubmissionFileValidation
                         }
 
                         if ($geneValidation['error'] === null
-                            && $diseaseValidation['error'] === null
-                            && $diseaseValidation['original'] !== null
+                            && ($sameDisease || ($diseaseValidation['error'] === null && $diseaseValidation['original'] !== null))
                             && $inheritanceValidation['error'] === null
                             && $geneValidation['record']->id === $submission->gene_id
-                            && ($diseaseValidation['original']->id !== ($submission->original_disease_id ?? $submission->disease_id)
-                                || $inheritanceValidation['record']->id !== $submission->inheritance_id)) {
+                            && (! $sameDisease || $inheritanceValidation['record']->id !== $submission->inheritance_id)) {
                             $validation_results[] = [
                                 'error_type' => 'republish_relationship_mismatch',
                                 'severity' => self::SEVERITY_ERROR,
@@ -1882,6 +1910,7 @@ class SubmissionFileValidation
         // =====================================================================
 
         // Batch load genes by HGNC ID
+        $disease_resolver->preload(array_keys($uniqueDiseaseIds));
         $geneCache = Gene::whereIn('hgnc_id', array_keys($uniqueHgncIds))
             ->get()
             ->keyBy('hgnc_id');
@@ -1942,6 +1971,10 @@ class SubmissionFileValidation
             $original_disease_id = $originalDisease?->id ?? $mondoDisease->id;
 
             $submissions_to_check[] = [
+                'submitter_id' => $submitter_id,
+                'mondo' => ! $diseaseValidation['error'] && ! $diseaseValidation['original_error'] ? $mondoDisease->curie : null,
+                'sid' => $action === 'R' ? $sgc_id : null,
+                'submitted_id' => $disease_id_raw,
                 'gene_id' => $gene->id,
                 'original_disease_id' => $original_disease_id,
                 'inheritance_id' => $inheritance->id,

@@ -38,6 +38,7 @@ class AdminLog extends Model
     public const OP_SYNC_PUBMED = 'sync_pubmed';
     public const OP_UPDATE_DISEASES = 'update_diseases';
     public const OP_UPDATE_GENES = 'update_genes';
+    public const OP_AUDIT_DISEASES = 'audit_diseases';
 
     /**
      * Get the user who executed this operation.
@@ -67,6 +68,7 @@ class AdminLog extends Model
             self::OP_SYNC_PUBMED,
             self::OP_UPDATE_DISEASES,
             self::OP_UPDATE_GENES,
+            self::OP_AUDIT_DISEASES,
         ];
 
         $latest = [];

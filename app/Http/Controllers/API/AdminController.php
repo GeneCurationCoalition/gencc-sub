@@ -85,6 +85,14 @@ class AdminController extends Controller
     }
 
     /**
+     * Run the audit:disease-ontologies command. It refuses to start during a disease update.
+     */
+    public function auditDiseases(Request $request)
+    {
+        return $this->runAndLog(AdminLog::OP_AUDIT_DISEASES, 'audit:disease-ontologies');
+    }
+
+    /**
      * Run the update:genes command.
      */
     public function updateGenes(Request $request)

@@ -9,8 +9,8 @@ use App\Models\Inheritance;
 use App\Models\Submission;
 use App\Services\DiseaseResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
 use Tests\Support\SeedsDiseaseWorld;
+use Tests\TestCase;
 
 /**
  * Phase 2 of an upload: the disease references Submission::load_from_json()
@@ -118,9 +118,8 @@ class SubmissionDiseaseResolutionTest extends TestCase
 
             $this->assertIsArray($result, $mode);
             $this->assertStringContainsString("Disease ID 'ORPHA:1941' cannot be mapped uniquely", $result['disease_curie_id']);
-            $this->assertStringContainsString('MONDO:0011876 (deprecated)', $result['disease_curie_id']);
-            $this->assertStringContainsString('MONDO:0800453', $result['disease_curie_id']);
-            $this->assertStringNotContainsString('juvenile absence epilepsy', $result['disease_curie_id']);
+            $this->assertStringContainsString('MONDO:0011876 (juvenile absence epilepsy; deprecated)', $result['disease_curie_id']);
+            $this->assertStringContainsString('MONDO:0800453 (juvenile absence epilepsy)', $result['disease_curie_id']);
             $this->assertStringContainsString(route('help.disease-mapping'), $result['disease_curie_id']);
             $this->assertStringNotContainsString('MONDO:0020772', $result['disease_curie_id']);
             $this->assertNull($submission->disease_id);

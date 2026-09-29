@@ -1,4 +1,5 @@
 <script setup>
+    import DiseaseReplacementAdvice from '@/Components/DiseaseReplacementAdvice.vue';
 
     import { ref, computed } from 'vue'
     import { router } from '@inertiajs/vue3'
@@ -25,7 +26,7 @@
     import { useToast } from "primevue/usetoast";
 
 
-    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning', 'deprecatedDiseaseWarning'])
+    const props = defineProps(['submission', 'criteria_options', 'hasSubmittedJob', 'unpublishedDuplicateWarning'])
 
     const confirm = useConfirm();
     const toast = useToast();
@@ -1171,15 +1172,16 @@ console.log(props.submission)
                 </p>
             </div>
             <!-- Obsolete disease term warning banner - informational, never blocking -->
-            <div v-if="deprecatedDiseaseWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
-                <p class="font-bold flex items-center gap-2">
-                    <i class="pi pi-info-circle"></i>
-                    Obsolete Disease Term
-                </p>
-                <p class="mt-1">{{ deprecatedDiseaseWarning.message }}</p>
+            <div v-if="submission.disease_recommendations?.length">
+                <DiseaseReplacementAdvice :recommendations="submission.disease_recommendations" />
+                <p class="text-sm text-amber-900 mt-2">To use a different disease on a previously published assertion, create a new submission. Review whether the old assertion should be unpublished; republishing does not permit changing its disease.</p>
                 <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">Learn more about deprecated disease terms</a>
             </div>
             <!-- Unpublished duplicate warning banner -->
+            <div v-if="submission.mondo_relationship_warning" class="bg-amber-50 border-l-4 border-amber-600 text-amber-900 p-4 mt-2 text-sm">
+                {{ submission.mondo_relationship_warning.message }}
+                <p class="mt-2">The current mapping of this submission is compared with peers' stored MONDO mappings; the admin audit also checks current-only convergence.</p>
+            </div>
             <div v-if="unpublishedDuplicateWarning" class="bg-amber-100 border-l-4 border-amber-700 text-amber-800 p-4 mt-2" role="alert">
                 <p class="font-bold flex items-center gap-2">
                     <i class="pi pi-info-circle"></i>
@@ -1406,7 +1408,7 @@ console.log(props.submission)
                                         {{ submission.disease.curie }}
                                     </a>
                                     <span v-else>{{ submission.disease?.curie || '' }}</span>
-                                    <span v-if="submission.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)">⚠</span>
+                                    <i v-if="submission.disease?.status === 8" class="pi pi-info-circle text-blue-600 text-xl align-middle ml-1 cursor-help" role="img" aria-label="Deprecated disease term" v-tooltip.top="getDiseaseDeprecationTooltip(submission.disease)"></i>
                                 </div>
                             </div>
                             <!-- Secondary Display: Show original disease if different from MONDO -->
@@ -1423,7 +1425,7 @@ console.log(props.submission)
                                         {{ submission.original_disease.curie }}
                                     </a>
                                     <span v-else>{{ submission.original_disease.curie }}</span>
-                                    <span v-if="submission.original_disease.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)">⚠</span>
+                                    <i v-if="submission.original_disease.status === 8" class="pi pi-info-circle text-blue-600 text-xl align-middle ml-1 cursor-help" role="img" aria-label="Deprecated disease term" v-tooltip.top="getDiseaseDeprecationTooltip(submission.original_disease)"></i>
                                 </div>
                             </div>
                             </template>

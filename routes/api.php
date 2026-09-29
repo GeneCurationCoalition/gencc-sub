@@ -185,6 +185,7 @@ Route::group(['middleware' => ['auth:sanctum'], 'prefix' => 'admin'], function (
     Route::post('/run-publish', [AdminController::class, 'runPublish']);
     Route::post('/repair-release', [AdminController::class, 'repairRelease']);
     Route::post('/update-diseases', [AdminController::class, 'updateDiseases']);
+    Route::post('/audit-diseases', [AdminController::class, 'auditDiseases']);
     Route::post('/update-genes', [AdminController::class, 'updateGenes']);
     Route::post('/sync-pubmed', [AdminController::class, 'syncPubmed']);
     Route::delete('/progress/{operation}', [AdminController::class, 'clearStaleOperation']);

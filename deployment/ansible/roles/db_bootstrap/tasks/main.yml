@@ -242,6 +242,32 @@
     - gencc_db_bootstrap_mode == "restore_and_migrate"
     - gencc_release_bootstrap.stdout_lines is defined
 
+# Refresh the admin disease audit against the rebuilt mappings and current
+# submissions. A failed audit is reported but does not fail the deployment.
+- name: Audit disease mappings of live and most recent submissions
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan audit:disease-ontologies'
+  args:
+    executable: /bin/bash
+  async: 3600
+  poll: 0
+  register: gencc_disease_audit_job
+
+- name: Wait for disease audit to complete
+  ansible.builtin.async_status:
+    jid: "{{ gencc_disease_audit_job.ansible_job_id }}"
+  register: gencc_disease_audit_status
+  until: gencc_disease_audit_status.finished
+  retries: 360
+  delay: 10
+  failed_when: false
+
+- name: Report a failed disease audit
+  ansible.builtin.debug:
+    msg: "Disease audit failed (rc={{ gencc_disease_audit_status.rc | default('unknown') }}): {{ gencc_disease_audit_status.stderr | default('') }} {{ gencc_disease_audit_status.stdout | default('') }}"
+  when: (gencc_disease_audit_status.rc | default(0)) != 0
+
 # ---------------------------------------------------------------------------
 # Refresh downloadable release exports after migrations.
 #

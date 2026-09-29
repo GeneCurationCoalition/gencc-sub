@@ -217,7 +217,7 @@ class UpdateDiseasesTest extends TestCase
 
         $this->assertSame(['123456', '789012'], $result['omim_id']);
         $this->assertSame(['9999', '8888'], $result['orpha_id']);
-        $this->assertNull($result['replaced_by']);
+        $this->assertSame([], $result['replaced_by']);
     }
 
     /**
@@ -267,15 +267,15 @@ class UpdateDiseasesTest extends TestCase
 
         $result = $this->callMethod('x_mondo_xrefs_array', [$meta]);
 
-        $this->assertSame('MONDO:0009299', $result['replaced_by']);
+        $this->assertSame(['MONDO:0009299'], $result['replaced_by']);
     }
 
     /**
-     * A successor in another ontology is not a MONDO term and is not stored.
+     * A successor in another ontology is retained as informative metadata only.
      *
      * @test
      */
-    public function x_mondo_xrefs_array_ignores_a_foreign_successor(): void
+    public function x_mondo_xrefs_array_preserves_a_foreign_successor(): void
     {
         $meta = [
             'basicPropertyValues' => [
@@ -283,7 +283,7 @@ class UpdateDiseasesTest extends TestCase
             ],
         ];
 
-        $this->assertNull($this->callMethod('x_mondo_xrefs_array', [$meta])['replaced_by']);
+        $this->assertSame(['CHEBI:17792'], $this->callMethod('x_mondo_xrefs_array', [$meta])['replaced_by']);
     }
 
     /**
@@ -298,7 +298,7 @@ class UpdateDiseasesTest extends TestCase
             ],
         ];
 
-        $this->assertSame('MONDO:0009299', $this->callMethod('x_mondo_xrefs_array', [$meta])['replaced_by']);
+        $this->assertSame(['MONDO:0009299', 'CHEBI:17792'], $this->callMethod('x_mondo_xrefs_array', [$meta])['replaced_by']);
     }
 
     /**
@@ -310,7 +310,7 @@ class UpdateDiseasesTest extends TestCase
 
         $this->assertSame([], $result['omim_id']);
         $this->assertSame([], $result['orpha_id']);
-        $this->assertNull($result['replaced_by']);
+        $this->assertSame([], $result['replaced_by']);
     }
 
     /**

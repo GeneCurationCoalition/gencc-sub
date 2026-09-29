@@ -111,6 +111,8 @@ Route::middleware([
     Route::get('/aliases', [AliasController::class, 'index'])->name('alias.index');
 
     // Admin pages (protected by isGenccAdmin() check in controller)
+    Route::get('/admin/disease-ontology-audit', [\App\Http\Controllers\DiseaseOntologyAuditController::class, 'index'])->name('admin.disease-ontology-audit');
+    Route::get('/admin/disease-ontology-audit/export', [\App\Http\Controllers\DiseaseOntologyAuditController::class, 'export'])->name('admin.disease-ontology-audit.export');
     Route::get('/admin/submitters', [AdminPageController::class, 'submitters'])->name('admin.submitters');
     Route::get('/admin/submitters/{id}', [AdminPageController::class, 'submitterDetail'])->name('admin.submitters.show');
     Route::get('/admin/users', [AdminPageController::class, 'users'])->name('admin.users');

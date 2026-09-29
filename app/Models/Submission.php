@@ -542,11 +542,10 @@ class Submission extends Model
                               // Removed: 'original_submission_data', 'evidence' - too large for listing
                               'submission_data', 'submission_errors', 'pmid_issues', 'status', 'origin_state')
                      ->with('gene:id,hgnc_id,symbol')
-                     ->with('disease:id,curie,name,deprecated_name,status')
+                     ->with('disease:id,type,curie,name,deprecated_name,status') // type: MONDO peer grouping
                      ->with('originalDisease:id,curie,name,deprecated_name,status')
                      ->with('inheritance:id,curie,name')
                      ->with('classification:id,curie,name')
-                     ->with('submitter:id,curie,name')
                      ->with('job:id,ident,slug,status');
     }
 

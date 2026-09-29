@@ -700,6 +700,10 @@ table tbody tr:hover {
                             <div class="flex items-center gap-2">
                                 <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getJobStatusClass(data.status)]" />
                                 <span v-else>{{ displayStatus(data.status) }}</span>
+                                <i v-if="data.deprecated_disease_count"
+                                   class="pi pi-info-circle text-blue-600 text-xl align-middle cursor-help"
+                                   role="img" aria-label="Deprecated disease terms"
+                                   v-tooltip.top="`${data.deprecated_disease_count} submission(s) reference deprecated disease terms. Open the job to see which; each submission's page shows replacement advice. Deprecation alone does not block submission.`"></i>
                                 <!-- Debug: {{ data.is_publishing }} -->
                                 <i v-if="data.is_publishing"
                                    class="pi pi-spin pi-spinner text-blue-500 text-xl"
@@ -709,7 +713,8 @@ table tbody tr:hover {
                                    title="Processing upload..."></i>
                                 <i v-if="data.status === 'draft' && !isJobUploading(data) && (data.error_count > 0 || (data.documents && data.documents.length > 0 && data.documents[0].upload_state === 'validation_failed'))"
                                    class="pi pi-exclamation-triangle text-red-500 text-xl"
-                                   :title="data.documents && data.documents.length > 0 && data.documents[0].upload_state === 'validation_failed' ? 'File has validation errors' : `${data.error_count} submission(s) with errors`"></i>
+                                   role="img" aria-label="Job has validation errors"
+                                   v-tooltip.top="data.documents && data.documents.length > 0 && data.documents[0].upload_state === 'validation_failed' ? 'File has validation errors' : `${data.error_count} submission(s) with errors`"></i>
                             </div>
                             <span v-if="isJobUploading(data)" class="text-xs text-blue-600">
                                 Uploading - cannot submit yet

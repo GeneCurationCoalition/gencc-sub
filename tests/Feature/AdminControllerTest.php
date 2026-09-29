@@ -161,6 +161,26 @@ class AdminControllerTest extends TestCase
     }
 
     /**
+     * Test admin can dispatch the disease audit job, and non-admins cannot
+     */
+    public function test_admin_can_audit_diseases_and_dispatches_job(): void
+    {
+        Bus::fake([RunAdminCommand::class]);
+
+        $this->actingAs($this->regularUser)->postJson('/api/admin/audit-diseases')->assertStatus(403);
+        Bus::assertNotDispatched(RunAdminCommand::class);
+
+        $this->actingAs($this->adminUser)->postJson('/api/admin/audit-diseases')
+            ->assertStatus(200)
+            ->assertJson(['success' => true, 'started' => true]);
+
+        Bus::assertDispatched(RunAdminCommand::class, function ($job) {
+            return $job->operation === AdminLog::OP_AUDIT_DISEASES
+                && $job->command === 'audit:disease-ontologies';
+        });
+    }
+
+    /**
      * Test admin can dispatch update-genes job
      */
     public function test_admin_can_update_genes_and_dispatches_job(): void

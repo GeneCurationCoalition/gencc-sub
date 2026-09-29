@@ -24,8 +24,13 @@ class DiseaseMappingAmbiguity
 
         $candidates = array_map(function (Disease $disease) {
             $deprecated = (int) $disease->status === Disease::STATUS_DEPRECATED;
+            $qualifiers = array_filter([
+                trim((string) $disease->name) ?: null,
+                $deprecated ? 'deprecated' : null,
+            ]);
 
-            return $disease->curie.($deprecated ? ' (deprecated)' : '');
+            return $disease->curie
+                .($qualifiers ? ' ('.implode('; ', $qualifiers).')' : '');
         }, $this->candidates);
 
         return "Disease ID '".trim($submitted)."' cannot be mapped uniquely to MONDO. "

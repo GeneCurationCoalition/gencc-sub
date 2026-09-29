@@ -2,6 +2,7 @@
     import { ref, watch, computed } from 'vue'
     import { useForm } from 'vee-validate';
     import * as yup from 'yup';
+    import DiseaseReplacementAdvice from '@/Components/DiseaseReplacementAdvice.vue';
 
     const props = defineProps(['visible', 'input', 'title', 'label', 'apiError']);
 
@@ -26,6 +27,8 @@
     // other local vars
     const visible = defineModel('visible');
     const cardTitle = ref('');
+    const recommendations = ref([]);
+    const submittedId = ref('');
     const cardBody = ref('Enter a MONDO, OMIM, or Orphanet ID (Example: MONDO:0013212, OMIM:613287, or Orphanet:722) and click on search to view disease information before updating.');
 
     // both the child and parent can trigger visibility, so we need a watcher
@@ -38,7 +41,11 @@
      */
     async function checkEntry() {
         try {
-            const response = await axios.get('/api/lookup/disease/' + disease.value);
+            const searchedId = disease.value;
+            const response = await axios.get('/api/lookup/disease/' + searchedId);
+            if (disease.value !== searchedId) return;
+            recommendations.value = response.data.disease_recommendations || [];
+            submittedId.value = response.data.submitted_id || '';
 
             const nodata = response.data.hasOwnProperty('status_code');
 
@@ -63,6 +70,8 @@
     // Watch for value changes to clear API error
     watch(disease, () => {
         emit('clear_api_error');
+        recommendations.value = [];
+        submittedId.value = '';
     });
 
     /**
@@ -138,6 +147,8 @@
                         </p>
                     </template>
                 </Card>
+                <p v-if="submittedId" class="text-sm">Submitted identifier: {{ submittedId }}. The preview above uses exact-match resolution, not replacement advice.</p>
+                <DiseaseReplacementAdvice :recommendations="recommendations" />
             </div>
                 
             <template #footer>

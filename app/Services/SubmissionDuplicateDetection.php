@@ -42,6 +42,8 @@ class SubmissionDuplicateDetection
                 'has_blocking_duplicate' => false,
                 'has_unpublished_duplicate' => false,
                 'duplicates' => collect(),
+                'blocking_duplicates' => collect(),
+                'unpublished_duplicates' => collect(),
             ];
         }
 
@@ -67,6 +69,7 @@ class SubmissionDuplicateDetection
             $excludedIds = array_values(array_filter((array) $excludeSubmissionId, fn ($id) => $id !== null));
             if (!empty($excludedIds)) {
                 $query->whereNotIn('id', $excludedIds);
+                $query->whereNotIn('sid', Submission::withTrashed()->select('sid')->whereIn('id', $excludedIds)->whereNotNull('sid'));
             }
         }
 
@@ -115,11 +118,7 @@ class SubmissionDuplicateDetection
         // Merge results for each submission
         foreach ($submissions as $submission) {
             $rowIndex = $submission['row_index'];
-            $key = self::makeKey(
-                $submission['gene_id'],
-                $submission['original_disease_id'],
-                $submission['inheritance_id']
-            );
+            $key = self::keyFor($submission);
 
             $result = [
                 'has_blocking_duplicate' => false,
@@ -132,7 +131,7 @@ class SubmissionDuplicateDetection
             ];
 
             // Check for intra-batch duplicates
-            if (isset($batchDuplicates[$key])) {
+            if ($key !== null && isset($batchDuplicates[$key])) {
                 $otherRows = array_filter($batchDuplicates[$key], fn($r) => $r !== $rowIndex);
                 if (!empty($otherRows)) {
                     $result['has_batch_duplicate'] = true;
@@ -141,14 +140,17 @@ class SubmissionDuplicateDetection
             }
 
             // Check for existing submission duplicates
-            if (isset($existingDuplicates[$key])) {
+            if ($key !== null && isset($existingDuplicates[$key])) {
                 $existingMatches = $existingDuplicates[$key];
 
                 // Filter out self if exclude_submission_id is set
                 if (isset($submission['exclude_submission_id']) && $submission['exclude_submission_id'] !== null) {
                     $existingMatches = $existingMatches->filter(function ($sub) use ($submission) {
-                        return $sub->id !== $submission['exclude_submission_id'];
+                        return !in_array($sub->id, (array) $submission['exclude_submission_id']);
                     });
+                }
+                if (!empty($submission['sid'])) {
+                    $existingMatches = $existingMatches->where('sid', '!=', $submission['sid']);
                 }
 
                 $blockingDuplicates = $existingMatches->filter(function ($sub) {
@@ -333,23 +335,9 @@ class SubmissionDuplicateDetection
         $keyMap = [];
 
         foreach ($submissions as $submission) {
-            // Skip if any key field is null
-            if ($submission['gene_id'] === null ||
-                $submission['original_disease_id'] === null ||
-                $submission['inheritance_id'] === null) {
-                continue;
+            if (($key = self::keyFor($submission)) !== null) {
+                $keyMap[$key][] = $submission['row_index'];
             }
-
-            $key = self::makeKey(
-                $submission['gene_id'],
-                $submission['original_disease_id'],
-                $submission['inheritance_id']
-            );
-
-            if (!isset($keyMap[$key])) {
-                $keyMap[$key] = [];
-            }
-            $keyMap[$key][] = $submission['row_index'];
         }
 
         // Only return entries with more than one row (actual duplicates)
@@ -368,17 +356,9 @@ class SubmissionDuplicateDetection
         // Collect unique combinations to query
         $combinations = [];
         foreach ($submissions as $submission) {
-            if ($submission['gene_id'] === null ||
-                $submission['original_disease_id'] === null ||
-                $submission['inheritance_id'] === null) {
+            if (($key = self::keyFor($submission)) === null) {
                 continue;
             }
-
-            $key = self::makeKey(
-                $submission['gene_id'],
-                $submission['original_disease_id'],
-                $submission['inheritance_id']
-            );
 
             $combinations[$key] = [
                 'gene_id' => $submission['gene_id'],
@@ -440,5 +420,14 @@ class SubmissionDuplicateDetection
     protected static function makeKey(int $geneId, int $originalDiseaseId, int $inheritanceId): string
     {
         return "{$geneId}-{$originalDiseaseId}-{$inheritanceId}";
+    }
+
+    /** The submitted-disease key for a batch row, or null when any key field is missing. */
+    private static function keyFor(array $row): ?string
+    {
+        if (empty($row['gene_id']) || empty($row['original_disease_id']) || empty($row['inheritance_id'])) {
+            return null;
+        }
+        return self::makeKey($row['gene_id'], $row['original_disease_id'], $row['inheritance_id']);
     }
 }

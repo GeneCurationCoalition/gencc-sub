@@ -15,8 +15,10 @@ when it cannot be applied safely:
 - there are no submission rows from row 13 onward;
 - an action cannot be routed (`N`, `R`, or `U`), including its SGC-ID and state
   requirements;
-- a republish row supplies valid relationship identifiers that do not match the
-  gene, original disease, and mode of inheritance owned by its SGC ID;
+- a republish row does not name the gene, submitted disease identifier, and mode
+  of inheritance owned by its SGC ID. The disease is compared as submitted, not
+  by current resolution: a republish keeps its stored MONDO mapping, even if the
+  identifier now resolves to a different term or not at all;
 - an N/R row omits the submitter or claims a submitter other than the
   authenticated upload context;
 - an SGC ID is repeated within the file; or

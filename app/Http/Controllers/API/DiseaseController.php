@@ -29,14 +29,19 @@ class DiseaseController extends Controller
      */
     public function show(string $id)
     {
-        $resolution = Disease::resolver()->resolveDetailed($id);
+        $resolver = Disease::resolver();
+        $resolution = $resolver->resolveDetailed($id);
+        $advice = new \App\Services\DiseaseReplacementRecommendations($resolver);
+        $contexts = ['submitted term' => $id, 'mapped MONDO' => $resolution instanceof \App\Services\DiseaseResolution ? $resolution->mondo->curie : null];
+        $advice->preload(array_values($contexts));
+        $metadata = ['submitted_id' => $id, 'disease_recommendations' => $advice->forContexts($contexts)];
 
         if ($resolution === null || $resolution instanceof DiseaseMappingAmbiguity)
-            return response()->json(['success' => 'false',
+            return response()->json($metadata + ['success' => 'false',
                 'status_code' => 3001,
                 'message' => $resolution instanceof DiseaseMappingAmbiguity ? $resolution->message($id) : 'Disease not found'],
                 200);
 
-        return $resolution->mondo->only(['curie', 'name', 'description']);
+        return $resolution->mondo->only(['curie', 'name', 'description']) + $metadata;
     }
 }

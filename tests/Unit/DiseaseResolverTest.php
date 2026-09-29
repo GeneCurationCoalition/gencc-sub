@@ -57,6 +57,25 @@ class DiseaseResolverTest extends TestCase
         }
     }
 
+    public function test_bulk_preloading_preserves_every_resolution_and_caches_missing_lookups(): void
+    {
+        $inputs = self::diseaseWorldInputs();
+        $expected = [];
+        foreach ($inputs as $input) {
+            $expected[$input] = (new DiseaseResolver())->resolveDetailed($input);
+        }
+        $warm = new DiseaseResolver();
+        $warm->preload($inputs);
+        \Illuminate\Support\Facades\DB::enableQueryLog();
+        \Illuminate\Support\Facades\DB::flushQueryLog();
+        foreach ($inputs as $input) {
+            $this->assertEquals($expected[$input], $warm->resolveDetailed($input), $input);
+        }
+        $queries = \Illuminate\Support\Facades\DB::getQueryLog();
+        \Illuminate\Support\Facades\DB::disableQueryLog();
+        $this->assertCount(0, $queries);
+    }
+
     /**
      * The fixture world must actually exercise each step and each failure
      * mode, or the test above passes on an empty world.
@@ -122,7 +141,8 @@ class DiseaseResolverTest extends TestCase
             $this->assertCandidates($result, DiseaseResolution::VIA_ORPHANET_EXACT_MATCH, ['MONDO:0011876', 'MONDO:0800453']);
             $message = $result->message($input);
             $this->assertStringContainsString($input, $message);
-            $this->assertStringContainsString('obsolete juvenile absence epilepsy [deprecated]', $message);
+            $this->assertStringContainsString('MONDO:0011876 (juvenile absence epilepsy; deprecated)', $message);
+            $this->assertStringContainsString('MONDO:0800453 (juvenile absence epilepsy)', $message);
             $this->assertStringNotContainsString('MONDO:0020772', $message);
             $this->assertNull($resolver->resolve($input));
             $this->assertNull($resolver->resolveDetailed('Orphanet:999999'));

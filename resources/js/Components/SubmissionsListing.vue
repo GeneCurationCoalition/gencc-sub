@@ -1321,15 +1321,13 @@
     }
 
     function getDiseaseDeprecationTooltip(disease) {
-        if (!disease || disease.status !== 8) {
-            return 'DEPRECATED: This disease term is deprecated';
+        const advice = ' Open the submission to review replacement advice.';
+
+        if (disease?.status === 8 && disease.deprecated_name) {
+            return `DEPRECATED: ${disease.deprecated_name}.${advice}`;
         }
 
-        if (disease.deprecated_name) {
-            return `DEPRECATED: ${disease.deprecated_name}`;
-        }
-
-        return 'DEPRECATED: This disease term is deprecated';
+        return `DEPRECATED: This disease term is deprecated.${advice}`;
     }
 </script>
 
@@ -1422,18 +1420,20 @@ table tbody tr:hover {
 }
 
 /* Reduce DataTable cell padding for more compact layout */
-:deep(.p-datatable .p-datatable-tbody > tr > td) {
-    padding: 0.5rem 0.5rem !important;     /* Reduced from default 1rem */
+.submissions-table [data-pc-section="bodycell"],
+.submissions-table [data-pc-section="headercell"] {
+    padding: 0.5rem !important;
 }
 
-:deep(.p-datatable .p-datatable-thead > tr > th) {
-    padding: 0.5rem 0.5rem !important;     /* Reduced from default 1rem */
-}
-
-/* Prevent status date from wrapping */
-:deep(.p-datatable .p-datatable-tbody > tr > td:last-child),
-:deep(.p-datatable .p-datatable-tbody > tr > td:nth-last-child(2)) {
+/* Keep status controls and row actions on one line. */
+.submissions-table [data-pc-section="bodycell"]:last-child,
+.submissions-table [data-pc-section="bodycell"]:nth-last-child(2) {
     white-space: nowrap;
+}
+
+/* Remove the inline text baseline from the selection control's alignment. */
+.submissions-table .submission-selection-cell [data-pc-name="rowcheckbox"] {
+    display: flex;
 }
 
 </style>
@@ -1542,7 +1542,7 @@ table tbody tr:hover {
             </ConfirmDialog>
             <Toast />
 
-            <DataTable v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissionsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="status_date" :sortOrder="-1"
+            <DataTable class="submissions-table" v-model:filters="filters" v-model:selection="selectedSubmissions" ref="dt" :value="submissionsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="status_date" :sortOrder="-1"
                     :rowStyle="rowStyle" :globalFilterFields="SEARCH_FIELDS" tableStyle="min-width: 20rem; width: auto;"
                     dataKey="ident">
                 <template #header>
@@ -1653,11 +1653,16 @@ table tbody tr:hover {
                         </IconField>
                     </div>
                 </template>
-                <Column selectionMode="multiple" headerStyle="width: 3rem" :exportable="false"></Column>
+                <Column selectionMode="multiple" headerStyle="width: 3rem" bodyClass="submission-selection-cell" :exportable="false"></Column>
                 <Column field="ident" header="">
                      <template #body="{ data }">
-                        <div v-if="favorites.includes(data.ident)" class="text-orange-300 text-xl" @click="updateFavorite(data.ident, false)"><i class="pi pi-star-fill" ></i></div>
-                        <div v-else class="text-slate-300 text-xl" @click="updateFavorite(data.ident, true)"><i class="pi pi-star"></i></div>
+                        <button type="button" class="flex h-5 w-5 items-center justify-center text-xl"
+                                :class="favorites.includes(data.ident) ? 'text-orange-300' : 'text-slate-300'"
+                                :aria-pressed="favorites.includes(data.ident)"
+                                :aria-label="favorites.includes(data.ident) ? 'Remove from favorites' : 'Add to favorites'"
+                                @click="updateFavorite(data.ident, !favorites.includes(data.ident))">
+                            <i :class="favorites.includes(data.ident) ? 'pi pi-star-fill' : 'pi pi-star'" aria-hidden="true"></i>
+                        </button>
                     </template>
                 </Column>
                 <Column field="sid" header="Submission" sortable>
@@ -1700,6 +1705,9 @@ table tbody tr:hover {
                         <InputText v-model="filterModel.value" type="text" @input="filterCallback()" class="p-column-filter" placeholder="Search by name" />
                      </template>-->
                      <template #body="{ data }">
+                        <div v-if="data.mondo_relationship_warning" class="text-xs text-amber-700 mb-1">
+                            <a :href="'/submissions/' + data.ident" class="underline" :title="data.mondo_relationship_warning.message">Shared MONDO relationship</a>
+                        </div>
                         <UnresolvedField v-if="unresolvedField(data, 'disease')" :unresolved="unresolvedField(data, 'disease')" compact />
                         <template v-else>
                         <div class="font-medium">{{ data.disease?.name || '-' }}</div>
@@ -1712,7 +1720,7 @@ table tbody tr:hover {
                                 {{ data.disease.curie }}
                             </a>
                             <span v-else>{{ data.disease?.curie || '' }}</span>
-                            <span v-if="data.disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.disease)">⚠</span>
+                            <i v-if="data.disease?.status === 8" class="pi pi-info-circle text-blue-600 text-xl align-middle ml-1 cursor-help" role="img" aria-label="Deprecated disease term" v-tooltip.top="getDiseaseDeprecationTooltip(data.disease)"></i>
                         </div>
                         <div v-if="data.submission_data?.disease?.id && data.disease?.curie !== data.submission_data.disease.id"
                              class="text-xs text-gray-500">
@@ -1725,7 +1733,7 @@ table tbody tr:hover {
                                 {{ data.submission_data.disease.id }}
                             </a>
                             <span v-else>{{ data.submission_data.disease.id }}</span>
-                            <span v-if="data.original_disease?.status === 8" class="text-amber-500 cursor-help" v-tooltip.top="getDiseaseDeprecationTooltip(data.original_disease)">⚠</span>
+                            <i v-if="data.original_disease?.status === 8" class="pi pi-info-circle text-blue-600 text-xl align-middle ml-1 cursor-help" role="img" aria-label="Deprecated disease term" v-tooltip.top="getDiseaseDeprecationTooltip(data.original_disease)"></i>
                         </div>
                         </template>
                     </template>
@@ -1767,7 +1775,7 @@ table tbody tr:hover {
                 </Column>
                 <Column field="status" header="Status" sortable>
                      <template #body="{ data }">
-                        <div class="flex flex-col items-center gap-1">
+                        <div class="flex items-center gap-2">
                             <Tag v-if="data.status" :value="displayStatusV2(data.status)" :severity="getStatusSeverity(data.status)" :class="['status-tag', getStatusClass(data.status, data.is_archived)]" />
                             <span v-else>{{ displayStatus(data.status) }}</span>
                             <div v-if="(data.submission_errors && Object.keys(data.submission_errors).length > 0) || data.is_archived"

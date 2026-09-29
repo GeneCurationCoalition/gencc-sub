@@ -71,10 +71,14 @@ class DiseasePolicyPortalTest extends TestCase
         $this->actingAs($this->user)
             ->get('/submissions/'.$submission->ident)
             ->assertInertia(fn (AssertableInertia $page) => $page
-                ->where('deprecatedDiseaseWarning.curie', 'MONDO:0000002')
-                ->where('deprecatedDiseaseWarning.replaced_by', 'MONDO:0009299')
-                ->where('deprecatedDiseaseWarning.message', fn ($message) => str_contains($message, $successor->curie)
-                    && str_contains($message, 'remains valid'))
+                ->where('submission.disease_recommendations', function ($recommendations) use ($successor) {
+                    $advice = collect($recommendations)->firstWhere('curie', 'MONDO:0000002');
+
+                    return $advice !== null
+                        && $advice['replaced_by'] === 'MONDO:0009299'
+                        && str_contains($advice['message'], $successor->curie)
+                        && str_contains($advice['message'], 'does not block submission');
+                })
             );
     }
 
@@ -92,8 +96,13 @@ class DiseasePolicyPortalTest extends TestCase
         $this->actingAs($this->user)
             ->get('/submissions/'.$submission->ident)
             ->assertInertia(fn (AssertableInertia $page) => $page
-                ->where('deprecatedDiseaseWarning.replaced_by', null)
-                ->where('deprecatedDiseaseWarning.message', fn ($message) => str_contains($message, 'does not name a replacement'))
+                ->where('submission.disease_recommendations', function ($recommendations) {
+                    $advice = collect($recommendations)->firstWhere('curie', 'MONDO:0000003');
+
+                    return $advice !== null
+                        && $advice['replaced_by'] === null
+                        && str_contains($advice['message'], 'No replacement is recorded');
+                })
             );
     }
 
@@ -103,7 +112,37 @@ class DiseasePolicyPortalTest extends TestCase
 
         $this->actingAs($this->user)
             ->get('/submissions/'.$submission->ident)
-            ->assertInertia(fn (AssertableInertia $page) => $page->where('deprecatedDiseaseWarning', null));
+            ->assertInertia(fn (AssertableInertia $page) => $page->where('submission.disease_recommendations',
+                fn ($recommendations) => collect($recommendations)->firstWhere('curie', 'MONDO:0000004') === null));
+    }
+
+    public function test_unresolved_deprecated_submitted_term_still_has_advice(): void
+    {
+        $old = Disease::factory()->create(['curie' => 'Orphanet:12345', 'type' => Disease::TYPE_ORPHANET,
+            'status' => Disease::STATUS_DEPRECATED, 'xrefs' => ['replaced_by' => ['Orphanet:54321']]]);
+        $submission = $this->submissionFor($old);
+        $submission->update(['disease_id' => null, 'original_disease_id' => null,
+            'submission_data' => ['disease' => ['id' => $old->curie]]]);
+        $this->actingAs($this->user)->get('/submissions/'.$submission->ident)
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->where('submission.disease_recommendations.0.curie', $old->curie)
+                ->where('submission.disease_recommendations.0.targets.0.curie', 'Orphanet:54321'));
+        $this->get('/api/lookup/disease/'.$old->curie)->assertJsonPath('success', 'false')
+            ->assertJsonPath('disease_recommendations.0.curie', $old->curie);
+        $this->assertNull($submission->fresh()->disease_id);
+    }
+
+    public function test_manual_disease_edit_returns_nonblocking_cross_namespace_warning(): void
+    {
+        $mondo = Disease::factory()->mondo()->withXrefs(['omim_id' => ['123456']])->create(['curie' => 'MONDO:0009998']);
+        $omim = Disease::factory()->create(['curie' => 'OMIM:123456', 'type' => Disease::TYPE_OMIM]);
+        $peer = $this->submissionFor($mondo);
+        $peer->update(['original_disease_id' => $omim->id, 'inheritance_id' => 1, 'is_most_recent' => true,
+            'submission_data' => ['disease' => ['id' => $omim->curie]]]);
+        $draft = $this->submissionFor($mondo);
+        $draft->update(['inheritance_id' => 1, 'is_most_recent' => true]);
+        $this->actingAs($this->user)->postJson('/api/submissions/'.$draft->ident, ['type' => 'disease', 'curie' => $mondo->curie])
+            ->assertJsonPath('success', 'true')->assertJsonPath('warnings.0.type', 'shared_mondo_relationship');
     }
 
     public function test_ambiguous_lookup_and_manual_update_show_candidates_without_modifying_the_record(): void
@@ -121,6 +160,32 @@ class DiseasePolicyPortalTest extends TestCase
         ])->assertOk()->assertJson(['status_code' => 3001, 'success' => 'false', 'message' => $message]);
 
         $this->assertSame($before, $submission->fresh()->getAttributes());
+    }
+
+    public function test_gene_and_inheritance_edits_block_submitted_id_duplicates_but_only_warn_on_shared_mondo(): void
+    {
+        $gene = \App\Models\Gene::factory()->create();
+        $moi = \App\Models\Inheritance::factory()->create();
+        $mondo = Disease::factory()->mondo()->withXrefs(['omim_id' => ['123456']])->create(['curie' => 'MONDO:0009998']);
+        $omim = Disease::factory()->create(['curie' => 'OMIM:123456', 'type' => Disease::TYPE_OMIM]);
+        $peer = $this->submissionFor($mondo);
+        $peer->update(['original_disease_id' => $omim->id, 'gene_id' => $gene->id, 'inheritance_id' => $moi->id,
+            'is_most_recent' => true, 'submission_data' => ['disease' => ['id' => $omim->curie]]]);
+        $draft = $this->submissionFor($mondo);
+        $draft->update(['gene_id' => $gene->id, 'inheritance_id' => $moi->id,
+            'is_most_recent' => true, 'submission_data' => ['disease' => ['id' => $mondo->curie]]]);
+        foreach (['gene' => $gene->hgnc_id, 'inheritance' => $moi->curie] as $type => $curie) {
+            $this->actingAs($this->user)->postJson('/api/submissions/'.$draft->ident, compact('type', 'curie'))
+                ->assertJsonPath('success', 'true')->assertJsonPath('warnings.0.type', 'shared_mondo_relationship');
+        }
+
+        $peer->update(['original_disease_id' => $mondo->id]);
+        $before = $draft->fresh()->getRawOriginal();
+        foreach (['gene' => $gene->hgnc_id, 'inheritance' => $moi->curie] as $type => $curie) {
+            $this->actingAs($this->user)->postJson('/api/submissions/'.$draft->ident, compact('type', 'curie'))
+                ->assertJsonPath('success', 'false')->assertJsonPath('status_code', 3013);
+            $this->assertSame($before, $draft->fresh()->getRawOriginal());
+        }
     }
 
     public function test_candidate_message_survives_reload_and_blocks_job_submission(): void

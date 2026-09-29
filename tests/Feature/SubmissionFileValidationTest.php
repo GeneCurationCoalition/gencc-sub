@@ -20,6 +20,98 @@ class SubmissionFileValidationTest extends TestCase
 
     protected Submitter $submitter;
 
+    public function test_cross_namespace_relationships_do_not_block_the_workbook(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['disease_id' => 'OMIM:123456', 'local_key' => 'one']),
+            $this->createValidDataRow(['disease_id' => 'MONDO:0000001', 'local_key' => 'two']),
+        ]);
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+        $this->assertEmpty(array_filter($results, fn ($r) => ($r['error_type'] ?? '') === 'duplicate_submission'));
+        // Shared-MONDO advice is shown on the imported submissions, not by the upload gate,
+        // which rejects the file on any result it returns.
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate($worksheet, $this->submitter->id));
+    }
+
+    public function test_republishing_live_assertions_that_share_only_mondo_is_not_a_duplicate(): void
+    {
+        $job = Job::create(['submitter_id' => $this->submitter->id, 'user_id' => 1, 'status' => Job::STATUS_PROCESSED]);
+        $gene = Gene::where('hgnc_id', 'HGNC:5')->first();
+        $mondo = Disease::where('curie', 'MONDO:0000001')->first();
+        $moi = Inheritance::where('curie', 'HP:0000006')->first();
+        foreach (['SGC-100001' => 'OMIM:123456', 'SGC-100002' => 'MONDO:0000001'] as $sid => $submitted) {
+            Submission::create([
+                'sid' => $sid, 'job_id' => $job->id, 'submitter_id' => $this->submitter->id, 'user_id' => 1,
+                'submission_data' => ['disease' => ['id' => $submitted]], 'gene_id' => $gene->id,
+                'disease_id' => $mondo->id, 'original_disease_id' => Disease::where('curie', $submitted)->value('id'),
+                'inheritance_id' => $moi->id, 'status' => Submission::STATUS_PUBLISHED,
+                'is_live' => true, 'is_most_recent' => true,
+            ]);
+        }
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['action' => 'R', 'sgc_id' => 'SGC-100001', 'disease_id' => 'OMIM:123456', 'local_key' => 'one']),
+            $this->createValidDataRow(['action' => 'R', 'sgc_id' => 'SGC-100002', 'disease_id' => 'MONDO:0000001', 'local_key' => 'two']),
+        ]);
+        $isDuplicate = fn ($r) => ($r['error_type'] ?? '') === 'duplicate_submission';
+
+        $results = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->submitter->id, true);
+        $this->assertEmpty(array_filter($results, $isDuplicate));
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate($worksheet, $this->submitter->id));
+    }
+
+    /**
+     * A republish keeps the stored disease mapping, so the gate accepts a row naming the
+     * stored submitted disease even when current data maps it elsewhere or not at all.
+     */
+    public function test_republish_row_naming_the_stored_disease_passes_whatever_it_resolves_to_now(): void
+    {
+        $this->publishedOmimAssertion();
+        $row = $this->createValidSpreadsheet([$this->createValidDataRow([
+            'action' => 'R', 'sgc_id' => 'SGC-100001', 'disease_id' => 'OMIM:123456',
+        ])]);
+
+        // MONDO moves its exact match for OMIM:123456 to a different term.
+        Disease::where('curie', 'MONDO:0000001')->first()->update(['xrefs' => ['omim_id' => []]]);
+        Disease::create(['curie' => 'MONDO:0000099', 'name' => 'new target', 'description' => '',
+            'type' => Disease::TYPE_MONDO, 'status' => Disease::STATUS_ACTIVE, 'xrefs' => ['omim_id' => ['123456']]]);
+        SubmissionFileValidation::resetCache();
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate($row, $this->submitter->id));
+
+        // No MONDO term exact-matches it any more.
+        Disease::where('curie', 'MONDO:0000099')->first()->update(['xrefs' => ['omim_id' => []]]);
+        SubmissionFileValidation::resetCache();
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate($row, $this->submitter->id));
+    }
+
+    public function test_republish_row_naming_a_different_disease_is_still_rejected(): void
+    {
+        $this->publishedOmimAssertion();
+        $gate = fn ($disease) => array_column(SubmissionFileValidation::validate_upload_gate(
+            $this->createValidSpreadsheet([$this->createValidDataRow([
+                'action' => 'R', 'sgc_id' => 'SGC-100001', 'disease_id' => $disease,
+            ])]), $this->submitter->id), 'error_type');
+
+        // Resolves to the stored MONDO term, but is not the identifier that was submitted.
+        $this->assertContains('republish_relationship_mismatch', $gate('MONDO:0000001'));
+        $this->assertContains('republish_invalid_disease', $gate('OMIM:999999'));
+    }
+
+    private function publishedOmimAssertion(): Submission
+    {
+        $job = Job::create(['submitter_id' => $this->submitter->id, 'user_id' => 1, 'status' => Job::STATUS_PROCESSED]);
+
+        return Submission::create([
+            'sid' => 'SGC-100001', 'job_id' => $job->id, 'submitter_id' => $this->submitter->id, 'user_id' => 1,
+            'submission_data' => ['disease' => ['id' => 'OMIM:123456']],
+            'gene_id' => Gene::where('hgnc_id', 'HGNC:5')->value('id'),
+            'original_disease_id' => Disease::where('curie', 'OMIM:123456')->value('id'),
+            'disease_id' => Disease::where('curie', 'MONDO:0000001')->value('id'),
+            'inheritance_id' => Inheritance::where('curie', 'HP:0000006')->value('id'),
+            'status' => Submission::STATUS_PUBLISHED, 'publish_date' => '2025-01-01',
+            'is_live' => true, 'is_most_recent' => true,
+        ]);
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

@@ -1048,6 +1048,16 @@ class DocumentController extends Controller
                 $status = $submission->load_from_json($obj, $lookupCaches);
                 $recordErrors = $status === true ? [] : $status;
 
+                // A republish keeps its SGC ID's stored disease mapping, as portal
+                // republish does, even if the submitted identifier no longer resolves,
+                // or resolves elsewhere, under current data. The upload gate has
+                // already required the row to name the same submitted disease.
+                if ($action === 'R') {
+                    $submission->original_disease_id = $originalSubmission->original_disease_id;
+                    $submission->disease_id = $originalSubmission->disease_id;
+                    unset($recordErrors['disease_curie_id']);
+                }
+
                 // A conflict with an existing submission is a record-content
                 // problem, not a reason to reject every row in the file. The
                 // same service is used by portal edits. Intra-file duplicate

@@ -8,6 +8,9 @@ use App\Models\Disease;
 use App\Models\Submission;
 use App\Console\Traits\CachesFileHeaders;
 use App\Services\AdminProgressTracker;
+use App\Services\DiseaseReplacementImport;
+use App\Services\DiseaseOntologyLock;
+use App\Services\DiseaseOntologySources;
 use JsonMachine\Items;
 use JsonMachine\JsonDecoder\ExtJsonDecoder;
 use Illuminate\Support\Str;
@@ -23,7 +26,7 @@ use Illuminate\Support\Str;
  *
  *   MONDO row     `omim_id`         skos:exactMatch OMIM ids
  *                 `orpha_id`        skos:exactMatch Orphanet codes
- *                 `replaced_by`     successor CURIE when the term is obsolete
+ *                 `replaced_by`     explicit successor CURIEs (advice, not equivalence)
  *   Orphanet row  `mondo_id`        exact + validated MONDO CURIEs from Orphadata
  *                 `omim_id`         exact + validated OMIM ids from Orphadata
  *   OMIM row      `include_titles` only; OMIM's source file asserts nothing
@@ -135,7 +138,11 @@ class UpdateDiseases extends Command
             'post_processing' => 'Post-processing',
         ]);
 
+        $lock = null;
         try {
+            // Waits for a running disease audit; keeps new audits out until this import ends.
+            $lock = DiseaseOntologyLock::forImport();
+
             // Pre-load all existing disease data into memory for FK-safe upserts
             $this->preloadDiseaseCache();
 
@@ -186,6 +193,10 @@ class UpdateDiseases extends Command
         } catch (\Exception $e) {
             AdminProgressTracker::fail(self::PROGRESS_OPERATION, $e->getMessage());
             throw $e;
+        } finally {
+            if ($lock !== null) {
+                DiseaseOntologyLock::release($lock);
+            }
         }
     }
 
@@ -230,7 +241,7 @@ class UpdateDiseases extends Command
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'mondo', 0, 100, 'Checking MONDO source...');
 
         $url = 'http://purl.obolibrary.org/obo/mondo/mondo-with-equivalents.json';
-        $fileIdentifier = "mondo_with_equivalents";
+        $fileIdentifier = DiseaseOntologySources::MONDO;
         $cacheFilename = "mondo-with-equivalents.json";
 
         // Check if file needs updating
@@ -415,14 +426,14 @@ class UpdateDiseases extends Command
      * only map to a MONDO term that maps back, so a value arriving under some
      * other predicate must not be stored.
      *
-     * @return array{omim_id: string[], orpha_id: string[], replaced_by: ?string}
+     * @return array{omim_id: string[], orpha_id: string[], replaced_by: string[]}
      */
     protected function x_mondo_xrefs_array($meta)
     {
         $cleansed = [
             self::FIELD_EXACT_OMIM => [],
             self::FIELD_EXACT_ORPHANET => [],
-            self::FIELD_REPLACED_BY => null,
+            self::FIELD_REPLACED_BY => [],
         ];
 
         foreach (($meta['basicPropertyValues'] ?? []) as $property) {
@@ -430,8 +441,11 @@ class UpdateDiseases extends Command
             $val = $property['val'] ?? '';
 
             if ($pred === self::PRED_REPLACED_BY) {
-                // Never let a later foreign successor erase a MONDO one
-                $cleansed[self::FIELD_REPLACED_BY] = $this->x_mondo_curie($val) ?? $cleansed[self::FIELD_REPLACED_BY];
+                // Successors, including unsupported phenotype terms, are advice, not equivalence.
+                $curie = str_replace('_', ':', basename((string) $val));
+                if (preg_match('/^[A-Za-z][A-Za-z0-9]*:[0-9]+$/D', $curie)) {
+                    $cleansed[self::FIELD_REPLACED_BY][] = $curie;
+                }
             } elseif ($pred !== self::PRED_EXACT_MATCH) {
                 continue;
             } elseif (($n = strpos($val, self::OMIM_ENTRY_PATH)) !== false) {
@@ -443,18 +457,9 @@ class UpdateDiseases extends Command
 
         $cleansed[self::FIELD_EXACT_OMIM] = array_values(array_unique($cleansed[self::FIELD_EXACT_OMIM]));
         $cleansed[self::FIELD_EXACT_ORPHANET] = array_values(array_unique($cleansed[self::FIELD_EXACT_ORPHANET]));
+        $cleansed[self::FIELD_REPLACED_BY] = array_values(array_unique($cleansed[self::FIELD_REPLACED_BY]));
 
         return $cleansed;
-    }
-
-    /**
-     * The MONDO CURIE named by an OBO purl, or null if it names another ontology.
-     */
-    protected function x_mondo_curie($val)
-    {
-        $curie = str_replace('_', ':', basename((string) $val));
-
-        return str_starts_with($curie, 'MONDO:') ? $curie : null;
     }
 
     /**
@@ -495,7 +500,7 @@ class UpdateDiseases extends Command
      *
      * Creates the portal's OMIM rows from mimTitles.txt.  The OMIM source
      * asserts no relationship to any other ontology, so an OMIM row stores
-     * nothing but its own titles: an OMIM id reaches MONDO only when a MONDO
+     * its own titles and explicit move assertions: an OMIM id reaches MONDO only when a MONDO
      * term exact-matches it, which is what makes the reciprocity rule automatic.
      *
      * @return string One of the PHASE_* outcomes
@@ -514,7 +519,7 @@ class UpdateDiseases extends Command
         }
 
         $url = "https://data.omim.org/downloads/" . $key . "/mimTitles.txt";
-        $fileIdentifier = "omim_mimTitles";
+        $fileIdentifier = DiseaseOntologySources::OMIM;
         $cacheFilename = "mimTitles.txt";
 
         // Check if file needs updating
@@ -557,6 +562,9 @@ class UpdateDiseases extends Command
         $batchSize = 500;
         $batch = [];
         $now = now();
+
+        // Include gene entries in the destination lookup without importing them as diseases.
+        $replacementEntries = DiseaseReplacementImport::omimEntries($data);
 
         // Skip copyright line
         $line = strtok($data, "\n");
@@ -612,7 +620,8 @@ class UpdateDiseases extends Command
                 'curie' => $curie,
                 'type' => $type,
                 'synonyms' => json_encode(empty($value[3]) ? [] : [$value[3]]),
-                'xrefs' => json_encode(['include_titles' => $value[4] ?? null]),
+                'xrefs' => json_encode(['include_titles' => $value[4] ?? null]
+                    + DiseaseReplacementImport::omim($value[0], $newName, $replacementEntries)),
                 'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -688,7 +697,7 @@ class UpdateDiseases extends Command
         AdminProgressTracker::updatePhase(self::PROGRESS_OPERATION, 'orphanet', 0, 100, 'Checking Orphanet source...');
 
         $url = 'https://www.orphadata.com/data/xml/en_product1.xml';
-        $fileIdentifier = 'orphanet_product1';
+        $fileIdentifier = DiseaseOntologySources::ORPHANET;
         $cacheFilename = 'en_product1.xml';
 
         // Check if file needs updating
@@ -780,7 +789,8 @@ class UpdateDiseases extends Command
                 'curie' => $curie,
                 'type' => Disease::TYPE_ORPHANET,
                 'synonyms' => json_encode($this->x_orphanet_synonyms_xml($node->SynonymList ?? null)),
-                'xrefs' => json_encode($this->x_orphanet_xrefs_xml($node->ExternalReferenceList ?? null)),
+                'xrefs' => json_encode($this->x_orphanet_xrefs_xml($node->ExternalReferenceList ?? null)
+                    + DiseaseReplacementImport::orphanet($node)),
                 'status' => $isDeprecated ? Disease::STATUS_DEPRECATED : Disease::STATUS_ACTIVE,
                 'created_at' => $now,
                 'updated_at' => $now,

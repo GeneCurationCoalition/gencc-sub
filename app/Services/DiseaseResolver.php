@@ -80,6 +80,55 @@ class DiseaseResolver
     /** @var array<string, Disease|DiseaseMappingAmbiguity|null> Exact-match outcomes, memoized. */
     private array $exactMatch = [];
 
+    /** Batch warm source terms and all possible exact-match targets for this request. */
+    public function preload(array $curies): void
+    {
+        $curies = array_values(array_unique(array_filter(array_map(
+            fn ($curie) => is_string($curie) ? Disease::normalizeCurie($curie) : null, $curies
+        ))));
+        $missing = array_values(array_filter($curies, fn ($curie) => ! array_key_exists($curie, $this->byCurie)));
+        foreach ($missing as $curie) {
+            $this->byCurie[$curie] = null;
+        }
+        foreach ($missing ? self::eligible(Disease::query())->whereIn('curie', $missing)->get() : [] as $term) {
+            $this->byCurie[$term->curie] ??= $term;
+            $this->byId[$term->id] = $term;
+        }
+
+        $ids = $targets = [];
+        foreach ($curies as $curie) {
+            [$prefix, $number] = explode(':', $curie, 2);
+            if (! in_array($prefix, ['OMIM', 'OMIMPS', 'Orphanet'], true)) {
+                continue;
+            }
+            $this->xrefIndex ??= $this->buildXrefIndex();
+            $field = $prefix === 'Orphanet' ? UpdateDiseases::FIELD_EXACT_ORPHANET : UpdateDiseases::FIELD_EXACT_OMIM;
+            array_push($ids, ...($this->xrefIndex[$field][$number] ?? []));
+            if ($prefix === 'Orphanet' && ($source = $this->byCurie[$curie] ?? null)) {
+                array_push($targets, ...self::xrefValues($source->xrefs, UpdateDiseases::FIELD_EXACT_MONDO));
+                foreach (self::xrefValues($source->xrefs, UpdateDiseases::FIELD_EXACT_OMIM) as $omim) {
+                    array_push($ids, ...($this->xrefIndex[UpdateDiseases::FIELD_EXACT_OMIM][$omim] ?? []));
+                }
+            }
+        }
+        $ids = array_values(array_filter(array_unique($ids), fn ($id) => ! array_key_exists($id, $this->byId)));
+        $targets = array_values(array_filter(array_unique($targets), fn ($curie) => ! array_key_exists($curie, $this->byCurie)));
+        if (! $ids && ! $targets) {
+            return;
+        }
+        foreach ($ids as $id) {
+            $this->byId[$id] = null;
+        }
+        foreach ($targets as $curie) {
+            $this->byCurie[$curie] = null;
+        }
+        $terms = self::eligible(Disease::query())->where(fn ($q) => $q->whereIn('id', $ids)->orWhereIn('curie', $targets))->get();
+        foreach ($terms as $term) {
+            $this->byCurie[$term->curie] ??= $term;
+            $this->byId[$term->id] = $term;
+        }
+    }
+
     /**
      * Resolve a submitted disease identifier.
      *
