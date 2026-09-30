@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Console\Commands\UpdateDiseases;
 use App\Models\Disease;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Resolves a submitted disease identifier to the pair of disease records a
@@ -50,9 +49,8 @@ class DiseaseResolver
 {
     /**
      * The MONDO xrefs fields that record an exact match to another ontology,
-     * and so are indexed for lookup.  An OMIMPS identifier shares OMIM's field:
-     * MONDO records phenotypic series under a URL form the importer does not
-     * store, so nothing ever lands there for it.
+     * and so are indexed for lookup. OMIM phenotypic series (OMIMPS) are a
+     * separate namespace and are not imported or accepted for resolution.
      *
      * @var array<int, string>
      */
@@ -98,7 +96,7 @@ class DiseaseResolver
         $ids = $targets = [];
         foreach ($curies as $curie) {
             [$prefix, $number] = explode(':', $curie, 2);
-            if (! in_array($prefix, ['OMIM', 'OMIMPS', 'Orphanet'], true)) {
+            if (! in_array($prefix, ['OMIM', 'Orphanet'], true)) {
                 continue;
             }
             $this->xrefIndex ??= $this->buildXrefIndex();
@@ -161,18 +159,10 @@ class DiseaseResolver
 
         $result = match ($prefix) {
             'MONDO' => $this->mondo($curie),
-            'OMIM', 'OMIMPS' => $this->omim($curie, $number),
+            'OMIM' => $this->omim($curie, $number),
             'Orphanet' => $this->orphanet($curie, $number),
             default => null,
         };
-
-        if ($result instanceof DiseaseMappingAmbiguity) {
-            Log::warning('DiseaseResolver: ambiguous MONDO mapping', [
-                'submitted' => $submitted,
-                'step' => $result->step,
-                'mondo' => array_map(fn (Disease $disease) => $disease->curie, $result->candidates),
-            ]);
-        }
 
         return $result;
     }
@@ -415,7 +405,9 @@ class DiseaseResolver
 
     /**
      * Restrict any diseases query to the records resolution may return, ordered
-     * so that ACTIVE wins over DEPRECATED and the lowest id breaks a tie.
+     * by status and then id for deterministic results. Both ACTIVE and
+     * DEPRECATED records remain candidates; distinct exact-match targets
+     * are ambiguous regardless of status.
      * REMOVED and soft-deleted diseases are never eligible.  The deleted_at
      * filter is stated here, not left to the SoftDeletes scope, because the
      * xref index reads the table through the query builder, which has no

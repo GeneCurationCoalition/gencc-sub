@@ -310,7 +310,7 @@ gcloud storage buckets update gs://gencc \
 
 ```bash
 # Find the backup you need
-gsutil ls -l "gs://gencc-backups/database-backups/**/*.sql.gz" | sort
+gcloud storage ls --long "gs://gencc-backups/database-backups/**/*.sql.gz" | sort
 
 # Restore specific backup
 /opt/gencc/scripts/restore-db-from-gcs.sh \
@@ -324,7 +324,7 @@ gsutil ls -l "gs://gencc-backups/database-backups/**/*.sql.gz" | sort
 apt-get update && apt-get install -y mysql-client
 
 # Download and run restore
-gsutil cp gs://gencc-backups/database-backups/2026/01/gencc_sub_20260115-020000.sql.gz /tmp/
+gcloud storage cp gs://gencc-backups/database-backups/2026/01/gencc_sub_20260115-020000.sql.gz /tmp/
 gunzip -c /tmp/gencc_sub_20260115-020000.sql.gz | mysql -u root -p gencc_sub
 ```
 

@@ -152,6 +152,7 @@ class DiseaseResolverTest extends TestCase
 
     public function test_mondo_side_ambiguity_stops_before_an_orphanet_fallback(): void
     {
+        \Illuminate\Support\Facades\Log::spy();
         $world = self::seedJuvenileAbsenceMappings();
         $world['obsolete']->update(['xrefs' => ['orpha_id' => ['1941']]]);
         $world['orphanet']->update(['xrefs' => ['mondo_id' => ['MONDO:0800453'], 'omim_id' => ['607631']]]);
@@ -161,6 +162,29 @@ class DiseaseResolverTest extends TestCase
             $this->assertCandidates($resolver->resolveDetailed('Orphanet:1941'), DiseaseResolution::VIA_MONDO_EXACT_MATCH,
                 ['MONDO:0011876', 'MONDO:0800453']);
             $this->assertNull($resolver->resolve('Orphanet:1941'));
+        }
+
+        \Illuminate\Support\Facades\Log::shouldNotHaveReceived('warning');
+    }
+
+    public function test_omim_phenotypic_series_never_resolve_through_an_individual_entry(): void
+    {
+        Disease::factory()->mondo()->withXrefs(['omim_id' => ['163950']])->create([
+            'curie' => 'MONDO:0008104', 'name' => 'Noonan syndrome 1',
+        ]);
+        Disease::factory()->mondo()->create(['curie' => 'MONDO:0018997', 'name' => 'Noonan syndrome']);
+        Disease::factory()->omim()->create(['curie' => 'OMIM:163950']);
+
+        foreach ([new DiseaseResolver(), new DiseaseResolver()] as $index => $resolver) {
+            if ($index === 1) {
+                $resolver->preload(['OMIM:163950', 'OMIMPS:163950', 'omimps:163950']);
+            }
+            $this->assertSame('MONDO:0008104', $resolver->resolve('OMIM:163950')->mondo->curie);
+            $this->assertNull($resolver->resolveDetailed('OMIMPS:163950'));
+            $this->assertNull($resolver->resolveDetailed('omimps:163950'));
+            $this->assertNull(\App\Services\SubmissionValueValidation::disease('OMIMPS:163950', $resolver)['mondo']);
+            $response = (new \App\Http\Controllers\API\DiseaseController())->show('OMIMPS:163950');
+            $this->assertSame('false', $response->getData(true)['success']);
         }
     }
 

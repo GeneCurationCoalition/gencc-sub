@@ -81,7 +81,8 @@ class UpdateDiseases extends Command
 
     /**
      * The path segment that marks a MONDO exactMatch value as an OMIM entry.
-     * Phenotypic series sit under /phenotypicSeries/ and are not OMIM ids.
+     * Phenotypic series sit under /phenotypicSeries/ in the separate OMIMPS
+     * namespace. Their references are deliberately excluded from ingestion.
      */
     protected const OMIM_ENTRY_PATH = '/omim.org/entry/';
 

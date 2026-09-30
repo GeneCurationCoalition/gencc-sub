@@ -67,76 +67,22 @@ This document provides a comprehensive explanation of what happens when a user u
 
 ---
 
-### Phase 2: Batch Validation
+### Phase 2: Upload Gate
 
 #### 3. Spreadsheet Validation
-**Location**: `SubmissionFileValidation::validate_spreadsheet`
+**Location**: `SubmissionFileValidation::validate_upload_gate`
 
-**Critical**: This happens **BEFORE any submissions are created**. If validation fails, NO submissions are processed.
+This runs before creating submissions. It rejects an unreadable or malformed
+file, unsafe action/SGC-ID requests, submitter mismatches, and duplicate
+relationships within the file. It also verifies that republish rows retain
+their stored gene, submitted disease identifier, and mode of inheritance.
 
-**Validation Checks** (in order):
+Content errors are handled on each created record by `Submission::load_from_json()`
+and `SubmissionValueValidation`, including unknown identifiers, invalid dates or
+URLs, PMID normalization, and conflicts with existing submissions.
 
-a. **Header Structure Validation**
-   - Verifies all required columns exist
-   - Checks column order matches expected format
-   - Required columns: SGC_ID, Action, Local_Key, HGNC_ID, Disease_ID, MOI_ID, Classification_ID, Date, Report_URL, PMIDs, Notes
-
-b. **SGC_ID Batch Validation** (Performance Optimized)
-   - Collects all SGC_IDs from spreadsheet
-   - **Single SQL query** fetches all submissions at once:
-     ```php
-     Submission::whereIn('sid', $all_sgc_ids)
-         ->where('submitter_id', $submitter_id)
-         ->get()
-     ```
-   - For each SGC_ID, validates:
-     - Existence (for R and U actions)
-     - Ownership (belongs to current submitter)
-     - State transitions (can't edit if in another draft/submitted job)
-     - Valid state for action (e.g., can't unpublish if not published)
-
-c. **Disease ID Format Validation**
-   - Validates format: MONDO:XXXXXXX, OMIM:XXXXXX, or ORPHA:XXXXXX
-   - Reports rows with invalid formats
-
-d. **PMID Format Validation**
-   - Ensures PMIDs are numeric
-   - Validates comma-separated lists
-
-e. **Action Field Validation**
-   - Valid values: N (New), R (Republish), U (Unpublish)
-   - Case-insensitive
-
-**If Validation Fails**:
-```php
-// Store errors in document
-$document->update(['processing_errors' => $formattedErrors]);
-
-// Broadcast error event
-SpreadsheetUpdate::dispatch([
-    'ident' => $document->job->ident,
-    'status' => 'validation_errors',
-    'error_count' => count($formattedErrors),
-    'document_id' => $document->id
-]);
-
-return false; // STOPS PROCESSING
-```
-
-**If Validation Passes**: Continue to submission processing
-
-**Validate-Only Mode** (New Feature):
-If `validate_only=true`, returns after validation with row count:
-```php
-SpreadsheetUpdate::dispatch([
-    'ident' => $document->job->ident,
-    'status' => 'validation_complete',
-    'row_count' => $rawFirstsheet->count() - 6,
-    'document_id' => $document->id
-]);
-
-return ['validated' => true, 'row_count' => $count];
-```
+See [Submission validation flow](SUBMISSION_VALIDATION_FLOW.md) for the current
+boundary between file rejection and record errors.
 
 ---
 
@@ -689,7 +635,7 @@ echoChannel.listen('SpreadsheetUpdate', (e) => {
   - `parser()` method (lines 209-604)
   - `process()` method (lines 163-201) - New endpoint
 - **Validation Service**: `app/Services/SubmissionFileValidation.php`
-  - `validate_spreadsheet()` method
+  - `validate_upload_gate()` method
   - `validate_sgc_ids_batch()` method (lines 1085-1209)
 - **Submission Model**: `app/Models/Submission.php`
   - `load_from_json()` method (lines 545-670)

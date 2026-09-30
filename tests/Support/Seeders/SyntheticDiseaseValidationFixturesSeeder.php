@@ -1,6 +1,6 @@
 <?php
 
-namespace Database\Seeders;
+namespace Tests\Support\Seeders;
 
 use App\Models\Disease;
 use Illuminate\Database\Seeder;
@@ -8,17 +8,12 @@ use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
- * Install the synthetic disease graph used by the F09-F13 UI validation cases.
+ * Local/test-only fixtures for the F09-F13 disease validation cases.
  *
- * This seeder is intentionally not called by DatabaseSeeder. Run it explicitly
- * after update:diseases, which marks terms absent from the ontologies removed.
+ * This class lives in the test tree and is excluded from production images.
+ * From a local checkout with development dependencies, run after update:diseases:
  *
- * Local:
- *   php artisan db:seed --class=SyntheticDiseaseValidationFixturesSeeder
- *
- * Staging (APP_ENV commonly reports production inside the release image):
- *   ALLOW_SYNTHETIC_DISEASE_FIXTURES=1 php artisan db:seed \
- *     --class=SyntheticDiseaseValidationFixturesSeeder --force
+ *   php artisan db:seed --class='Tests\Support\Seeders\SyntheticDiseaseValidationFixturesSeeder'
  */
 class SyntheticDiseaseValidationFixturesSeeder extends Seeder
 {

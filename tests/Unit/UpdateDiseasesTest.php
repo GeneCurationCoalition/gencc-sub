@@ -207,10 +207,11 @@ class UpdateDiseasesTest extends TestCase
             'basicPropertyValues' => [
                 ['pred' => 'http://www.w3.org/2004/02/skos/core#exactMatch', 'val' => 'https://omim.org/entry/123456'],
                 ['pred' => 'http://www.w3.org/2004/02/skos/core#exactMatch', 'val' => 'http://omim.org/entry/789012'],
+                ['pred' => 'http://www.w3.org/2004/02/skos/core#exactMatch', 'val' => 'https://omim.org/phenotypicSeries/PS163950'],
                 ['pred' => 'http://www.w3.org/2004/02/skos/core#exactMatch', 'val' => 'http://www.orpha.net/ORDO/Orphanet_9999'],
                 ['pred' => 'http://www.w3.org/2004/02/skos/core#exactMatch', 'val' => 'http://www.orpha.net/ORDO/Orphanet_8888'],
             ],
-            'xrefs' => [],
+            'xrefs' => [['val' => 'OMIMPS:163950']],
         ];
 
         $result = $this->callMethod('x_mondo_xrefs_array', [$meta]);

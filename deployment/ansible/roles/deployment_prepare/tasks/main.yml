@@ -56,7 +56,7 @@
     - gencc_db_restore_source is match('^https?://')
 
 - name: Download restore dump from GCS before downtime
-  ansible.builtin.command: "gsutil cp {{ gencc_db_restore_source | quote }} {{ gencc_db_restore_tmp_path | quote }}"
+  ansible.builtin.command: "gcloud storage cp {{ gencc_db_restore_source | quote }} {{ gencc_db_restore_tmp_path | quote }}"
   changed_when: true
   when:
     - gencc_db_bootstrap_mode == "restore_and_migrate"

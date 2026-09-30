@@ -8,14 +8,14 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * The migration that makes the next disease import re-read MONDO and Orphanet.
+ * The one-time cleanup of mappings created before the exact-only policy.
  */
-class ExpireDiseaseSourceFileHeadersMigrationTest extends TestCase
+class ClearLegacyDiseaseMappingsMigrationTest extends TestCase
 {
     use RefreshDatabase;
 
     /** @test */
-    public function it_clears_legacy_mappings_and_forgets_only_the_mondo_and_orphanet_headers(): void
+    public function it_clears_legacy_mappings_and_preserves_source_header_history(): void
     {
         $mondo = Disease::create([
             'curie' => 'MONDO:0000001',
@@ -40,10 +40,11 @@ class ExpireDiseaseSourceFileHeadersMigrationTest extends TestCase
             StaticFileHeader::create(['file_identifier' => $identifier, 'etag' => 'x']);
         }
 
-        (require database_path('migrations/2026_09_15_120000_expire_disease_source_file_headers.php'))->up();
+        (require database_path('migrations/2026_09_15_120000_clear_legacy_disease_mappings.php'))->up();
 
-        $this->assertNull(StaticFileHeader::latest('mondo_with_equivalents'));
-        $this->assertNull(StaticFileHeader::latest('orphanet_product1'));
+        $this->assertNotNull(StaticFileHeader::latest('mondo_with_equivalents'));
+        $this->assertNotNull(StaticFileHeader::latest('orphanet_product1'));
+        $this->assertSame(5, StaticFileHeader::count());
         $this->assertNotNull(StaticFileHeader::latest('omim_mimTitles'));
         $this->assertNotNull(StaticFileHeader::latest('hgnc_complete_set'));
         $this->assertSame([

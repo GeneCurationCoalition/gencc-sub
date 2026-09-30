@@ -6,7 +6,7 @@ use App\Models\Disease;
 use App\Services\DiseaseMappingAmbiguity;
 use App\Services\DiseaseResolution;
 use App\Services\DiseaseResolver;
-use Database\Seeders\SyntheticDiseaseValidationFixturesSeeder;
+use Tests\Support\Seeders\SyntheticDiseaseValidationFixturesSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
