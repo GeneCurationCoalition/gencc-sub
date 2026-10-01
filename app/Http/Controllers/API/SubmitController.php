@@ -11,6 +11,8 @@ use App\Models\User;
 use App\Models\Submitter;
 use App\Models\Job;
 use App\Models\Pubmed;
+use App\Services\DiseaseResolver;
+use App\Services\SubmissionDuplicateDetection;
 
 use Carbon\Carbon;
 
@@ -81,12 +83,38 @@ class SubmitController extends Controller
                 'message' => "Unknown action"],
                 501);
 
-        // if this is only a dry run, finish up and return
+        // Check submitted-disease duplicates before any writes, using the same
+        // policy for dry runs and actual submissions. Shared MONDO mappings are
+        // returned as non-blocking warnings.
+        $candidates = \App\Services\MondoRelationshipWarnings::incomingCandidates($submitter->id, (array) ($packet->data ?? []));
+        $duplicates = SubmissionDuplicateDetection::checkForDuplicatesBatch($submitter->id, $candidates);
+        $duplicateErrors = $relationshipWarnings = [];
+        foreach (\App\Services\MondoRelationshipWarnings::check($candidates) as $index => $warning) {
+            $relationshipWarnings[] = ['row' => $candidates[$index]['row_index']] + $warning;
+        }
+        foreach ($duplicates as $row => $duplicate) {
+            if ($duplicate['has_batch_duplicate']) {
+                $duplicateErrors[] = ['row' => $row, 'type' => 'duplicate_submission',
+                    'message' => SubmissionDuplicateDetection::formatBatchDuplicateMessage($duplicate['batch_duplicate_rows'])];
+            }
+            if ($duplicate['has_blocking_duplicate']) {
+                $duplicateErrors[] = ['row' => $row, 'type' => 'duplicate_submission',
+                    'message' => SubmissionDuplicateDetection::formatBlockingErrorMessage($duplicate['blocking_duplicates']->first())];
+            } elseif ($duplicate['has_unpublished_duplicate']) {
+                $relationshipWarnings[] = ['row' => $row, 'type' => 'unpublished_duplicate',
+                    'message' => SubmissionDuplicateDetection::formatUnpublishedWarningMessage($duplicate['unpublished_duplicates'])];
+            }
+        }
+        if ($duplicateErrors) {
+            return response()->json(['success' => 'false', 'status_code' => 3013,
+                'message' => 'Duplicate submission found', 'errors' => $duplicateErrors,
+                'warnings' => $relationshipWarnings], 422);
+        }
         if ($action == "check" || $packet->action == "check")
         {
             return response()->json(['success' => 'true',
                 'status_code' => 200,
-                'message' => "OK"],
+                'message' => "OK", 'warnings' => array_values($relationshipWarnings)],
                 200);
         }
 
@@ -109,6 +137,10 @@ class SubmitController extends Controller
         switch ($packet->action)
         {
             case "create":
+                $lookupCaches = [
+                    'disease_resolver' => new DiseaseResolver(),
+                ];
+
                 foreach($packet->data as $data)
                 {
                     switch ($data->action)
@@ -125,7 +157,7 @@ class SubmitController extends Controller
                         default:
                             continue 2;
                     }
-                    $status = $submission->load_from_json($data);
+                    $status = $submission->load_from_json($data, $lookupCaches);
                     if ($status === true)
                     {
                         $submission->user_id = $user->id;
@@ -178,6 +210,7 @@ class SubmitController extends Controller
         $data = [
             'timestamp' => Carbon::now(),
             'message' => "Job accepted",
+            'warnings' => array_values($relationshipWarnings),
             'id' => $job->slug
         ];
 

@@ -223,6 +223,25 @@ const handleFileChange = async (event, type) => {
                     </div>
                 </div>
 
+                <!-- Online Reference Section -->
+                <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg mb-6">
+                    <div class="p-6 lg:p-8">
+                        <h3 class="text-2xl font-bold text-gray-900 mb-2">Online Reference</h3>
+                        <p class="text-gray-600 mb-6">Detailed guidance for understanding disease normalization.</p>
+
+                        <div class="max-w-xl">
+                            <a href="/help/disease-mapping" class="block border border-gray-200 rounded-lg p-6 hover:border-indigo-400 hover:shadow-sm transition">
+                                <div class="flex items-center mb-3">
+                                    <i class="pi pi-sitemap text-3xl text-sky-700"></i>
+                                    <h4 class="ml-3 text-lg font-semibold text-gray-900">Disease Mapping</h4>
+                                </div>
+                                <p class="text-gray-600 text-sm">See exactly how MONDO, OMIM, and Orphanet identifiers are normalized using exact-match relationships.</p>
+                                <span class="mt-4 inline-flex items-center text-sm font-medium text-indigo-700">Open reference <i class="pi pi-arrow-right ml-2 text-xs"></i></span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- API Documentation Section -->
                 <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg mb-6">
                     <div class="p-6 lg:p-8">

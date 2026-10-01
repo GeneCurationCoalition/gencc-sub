@@ -3,6 +3,10 @@ export default {
         class: [
             // Position
             'absolute',
+            // Keep text tooltips from stealing hover from their trigger.
+            'pointer-events-none',
+            // Bound wrapping before PrimeVue measures and positions the tooltip.
+            'max-w-xs',
             // Spacing
             {
                 'px-1.5': context?.right || context?.left || (!context?.right && !context?.left && !context?.top && !context?.bottom),

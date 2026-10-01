@@ -1,0 +1,13 @@
+---
+# A destructive restore always requires a maintenance window. Set this
+# explicitly for a migrate-only deployment when its migrations also require
+# the portal and background work to be stopped.
+gencc_deploy_with_maintenance_mode: "{{ gencc_db_bootstrap_mode == 'restore_and_migrate' }}"
+
+# Preserve the database being replaced so a failed restore can be rolled back.
+gencc_pre_restore_backup: true
+
+# Optional content pins for a rehearsed restore. Set both for the staging run
+# so replacing a GCS object at the same path cannot silently change the input.
+gencc_db_restore_expected_size: 0
+gencc_db_restore_expected_md5: ""

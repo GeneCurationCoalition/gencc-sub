@@ -489,6 +489,7 @@
         publish: false,
         repair: false,
         diseases: false,
+        audit: false,
         genes: false,
         pubmed: false,
         compare: false
@@ -499,6 +500,7 @@
         publish: null,
         repair: null,
         diseases: null,
+        audit: null,
         genes: null,
         pubmed: null,
         compare: null
@@ -512,6 +514,7 @@
         publish: false,
         repair: false,
         diseases: false,
+        audit: false,
         genes: false,
         pubmed: false,
     });
@@ -519,6 +522,7 @@
     // Map action names to operation identifiers used by AdminProgressTracker
     const actionToOperation = {
         diseases: 'update_diseases',
+        audit: 'audit_diseases',
         genes: 'update_genes',
         pubmed: 'sync_pubmed',
         publish: 'run_publish',
@@ -530,6 +534,7 @@
         publish: 'Publish completed successfully',
         repair: 'Release repair completed successfully',
         diseases: 'Disease update completed',
+        audit: 'Disease audit completed',
         genes: 'Gene update completed',
         pubmed: 'PubMed sync completed successfully',
     };
@@ -766,6 +771,10 @@
 
     function updateDiseases() {
         runAdminAction('diseases', 'update-diseases');
+    }
+
+    function auditDiseases() {
+        runAdminAction('audit', 'audit-diseases');
     }
 
     function updateGenes() {
@@ -1256,6 +1265,57 @@
                                     <span v-if="admin_logs.update_diseases.duration_seconds" class="text-gray-400">({{ admin_logs.update_diseases.duration_seconds }}s)</span>
                                     <div v-if="!admin_logs.update_diseases.success && admin_logs.update_diseases.summary" class="text-red-500 mt-1">
                                         {{ admin_logs.update_diseases.summary.replace(/\*\*/g, '').substring(0, 80) }}
+                                    </div>
+                                </div>
+                                <!-- Disease audit: also runs after each successful scheduled disease update -->
+                                <div class="flex items-center gap-2 mt-2">
+                                    <Button
+                                        label="Audit Diseases"
+                                        icon="pi pi-search"
+                                        severity="info"
+                                        size="small"
+                                        outlined
+                                        :loading="adminActionLoading.audit && !staleOperations.audit"
+                                        :disabled="adminActionLoading.audit || adminActionLoading.diseases"
+                                        @click="auditDiseases"
+                                        title="Check stored disease mappings of live and most recent submissions against current ontology data"
+                                    />
+                                    <Button
+                                        v-if="staleOperations.audit"
+                                        label="Cancel"
+                                        icon="pi pi-times"
+                                        severity="danger"
+                                        size="small"
+                                        outlined
+                                        @click="clearStaleOperation('audit')"
+                                        title="Clear stuck operation"
+                                    />
+                                    <a :href="route('admin.disease-ontology-audit')" class="text-sm text-blue-600 underline">View audit</a>
+                                </div>
+                                <div v-if="adminActionStatus.audit" class="text-xs pl-1">
+                                    <span v-if="adminActionStatus.audit.type === 'progress'" class="text-blue-600">
+                                        <i class="pi pi-spin pi-spinner mr-1"></i>
+                                        {{ adminActionStatus.audit.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.audit.type === 'success' || adminActionStatus.audit.type === 'info'" class="text-green-600">
+                                        <i class="pi pi-check-circle mr-1"></i>
+                                        {{ adminActionStatus.audit.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.audit.type === 'warn'" class="text-amber-600">
+                                        <i class="pi pi-exclamation-triangle mr-1"></i>
+                                        {{ adminActionStatus.audit.text }}
+                                    </span>
+                                    <span v-else-if="adminActionStatus.audit.type === 'error'" class="text-red-600">
+                                        <i class="pi pi-times-circle mr-1"></i>
+                                        {{ adminActionStatus.audit.text }}
+                                    </span>
+                                </div>
+                                <div v-if="admin_logs?.audit_diseases" class="text-xs text-gray-500 pl-1">
+                                    <i :class="admin_logs.audit_diseases.success ? 'pi pi-check-circle text-green-500' : 'pi pi-times-circle text-red-500'" class="mr-1"></i>
+                                    {{ admin_logs.audit_diseases.executed_at_human }}
+                                    <span v-if="admin_logs.audit_diseases.duration_seconds" class="text-gray-400">({{ admin_logs.audit_diseases.duration_seconds }}s)</span>
+                                    <div v-if="!admin_logs.audit_diseases.success && admin_logs.audit_diseases.summary" class="text-red-500 mt-1">
+                                        {{ admin_logs.audit_diseases.summary.replace(/\*\*/g, '').substring(0, 80) }}
                                     </div>
                                 </div>
                                 <!-- Disease Statistics -->

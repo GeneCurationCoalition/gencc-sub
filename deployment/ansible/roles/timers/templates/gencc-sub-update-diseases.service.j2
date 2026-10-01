@@ -2,6 +2,8 @@
 Description=Run gencc-sub update:diseases inside container
 After=network-online.target
 Wants=network-online.target
+# Refresh the admin disease audit against the newly imported ontology data.
+OnSuccess=gencc-sub-audit-diseases.service
 
 [Service]
 Type=oneshot

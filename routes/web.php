@@ -41,6 +41,10 @@ Route::get('/', function () {
 // Download GenCC submission template with dynamic submitter IDs (public - no auth required)
 Route::get('/download/template', TemplateDownloadController::class)->name('download.template');
 
+// Public so it can be linked from uploaded spreadsheets and external instructions.
+Route::inertia('/help/disease-mapping', 'Help/DiseaseMapping')
+    ->name('help.disease-mapping');
+
 // Download User Guide PDF (with proper cache validation)
 Route::get('/download/user-guide', function () {
     $path = public_path('documents/UserGuide.pdf');
@@ -107,6 +111,8 @@ Route::middleware([
     Route::get('/aliases', [AliasController::class, 'index'])->name('alias.index');
 
     // Admin pages (protected by isGenccAdmin() check in controller)
+    Route::get('/admin/disease-ontology-audit', [\App\Http\Controllers\DiseaseOntologyAuditController::class, 'index'])->name('admin.disease-ontology-audit');
+    Route::get('/admin/disease-ontology-audit/export', [\App\Http\Controllers\DiseaseOntologyAuditController::class, 'export'])->name('admin.disease-ontology-audit.export');
     Route::get('/admin/submitters', [AdminPageController::class, 'submitters'])->name('admin.submitters');
     Route::get('/admin/submitters/{id}', [AdminPageController::class, 'submitterDetail'])->name('admin.submitters.show');
     Route::get('/admin/users', [AdminPageController::class, 'users'])->name('admin.users');

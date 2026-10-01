@@ -20,6 +20,9 @@ defineProps({
 
 const page = usePage();
 const showingNavigationDropdown = ref(false);
+// Admin navigation has more destinations and needs the compact menu sooner.
+const desktopNavigation = computed(() => page.props.isGenccAdmin ? 'xl:flex' : 'sm:flex');
+const compactNavigation = computed(() => page.props.isGenccAdmin ? 'xl:hidden' : 'sm:hidden');
 
 // Get the displayed submitter name
 const displayedSubmitterName = computed(() => {
@@ -67,46 +70,51 @@ const logout = () => {
                             </div>
 
                             <!-- Navigation Links -->
-                            <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                            <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                 <NavLink :href="route('dashboard')" :active="route().current('dashboard')">
                                     Dashboard
                                 </NavLink>
                             </div>
-                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                 <NavLink :href="route('jobs.index')" :active="route().current('jobs.index')">
                                     Jobs
                                 </NavLink>
                             </div>
-                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                            <div v-if="showJobsAndSubmissions" class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                 <NavLink :href="route('submissions.index')" :active="route().current('submissions.index')">
                                     Submissions
                                 </NavLink>
                             </div>
                             <template v-if="$page.props.isGenccAdmin">
-                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                     <NavLink :href="route('admin.submitters')" :active="route().current('admin.submitters*')">
                                         Submitters
                                     </NavLink>
                                 </div>
-                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                     <NavLink :href="route('admin.users')" :active="route().current('admin.users*')">
                                         Users
                                     </NavLink>
                                 </div>
-                                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
                                     <NavLink :href="route('admin.releases')" :active="route().current('admin.releases*')">
                                         Releases
                                     </NavLink>
                                 </div>
+                                <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
+                                    <NavLink :href="route('admin.disease-ontology-audit')" :active="route().current('admin.disease-ontology-audit*')">
+                                        Disease Audit
+                                    </NavLink>
+                                </div>
                             </template>
-                            <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
-                                <NavLink :href="route('help')" :active="route().current('help')">
+                            <div class="hidden space-x-8 sm:-my-px sm:ms-10" :class="desktopNavigation">
+                                <NavLink :href="route('help')" :active="route().current('help*')">
                                     Help  & Documentation
                                 </NavLink>
                             </div>
                         </div>
 
-                        <div class="hidden sm:flex sm:items-center sm:ms-6">
+                        <div class="hidden items-center sm:ms-6" :class="desktopNavigation">
                             <!-- Submitter Selector for GenCC Administrator -->
                             <SubmitterSelector />
 
@@ -167,8 +175,8 @@ const logout = () => {
                         </div>
 
                         <!-- Hamburger -->
-                        <div class="-me-2 flex items-center sm:hidden">
-                            <button class="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:bg-gray-100 focus:text-gray-500 transition duration-150 ease-in-out" @click="showingNavigationDropdown = ! showingNavigationDropdown">
+                        <div class="-me-2 flex items-center" :class="compactNavigation">
+                            <button aria-label="Toggle navigation" :aria-expanded="showingNavigationDropdown" class="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:bg-gray-100 focus:text-gray-500 transition duration-150 ease-in-out" @click="showingNavigationDropdown = ! showingNavigationDropdown">
                                 <svg
                                     class="h-6 w-6"
                                     stroke="currentColor"
@@ -196,7 +204,7 @@ const logout = () => {
                 </div>
 
                 <!-- Responsive Navigation Menu -->
-                <div :class="{'block': showingNavigationDropdown, 'hidden': ! showingNavigationDropdown}" class="sm:hidden">
+                <div :class="[compactNavigation, {'block': showingNavigationDropdown, 'hidden': ! showingNavigationDropdown}]">
                     <div class="pt-2 pb-3 space-y-1">
                         <ResponsiveNavLink :href="route('dashboard')" :active="route().current('dashboard')">
                             Dashboard
@@ -215,6 +223,9 @@ const logout = () => {
                         </ResponsiveNavLink>
                         <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.releases')" :active="route().current('admin.releases*')">
                             Releases
+                        </ResponsiveNavLink>
+                        <ResponsiveNavLink v-if="$page.props.isGenccAdmin" :href="route('admin.disease-ontology-audit')" :active="route().current('admin.disease-ontology-audit*')">
+                            Disease Audit
                         </ResponsiveNavLink>
                         <ResponsiveNavLink :href="route('help')" :active="route().current('help')">
                             Help & Documentation
