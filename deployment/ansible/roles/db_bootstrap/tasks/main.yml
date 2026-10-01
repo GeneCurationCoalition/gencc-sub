@@ -206,6 +206,7 @@
   async: 7200
   poll: 0
   register: gencc_disease_update_job
+  when: gencc_refresh_diseases_on_deploy | bool
 
 - name: Wait for disease mapping rebuild to complete
   ansible.builtin.async_status:
@@ -217,6 +218,7 @@
   failed_when:
     - gencc_disease_update_status.finished | bool
     - (gencc_disease_update_status.rc | default(0)) != 0
+  when: gencc_refresh_diseases_on_deploy | bool
 
 - name: Clear application caches after database transition
   ansible.builtin.shell: |
@@ -253,6 +255,7 @@
   async: 3600
   poll: 0
   register: gencc_disease_audit_job
+  when: gencc_refresh_diseases_on_deploy | bool
 
 - name: Wait for disease audit to complete
   ansible.builtin.async_status:
@@ -262,11 +265,14 @@
   retries: 360
   delay: 10
   failed_when: false
+  when: gencc_refresh_diseases_on_deploy | bool
 
 - name: Report a failed disease audit
   ansible.builtin.debug:
     msg: "Disease audit failed (rc={{ gencc_disease_audit_status.rc | default('unknown') }}): {{ gencc_disease_audit_status.stderr | default('') }} {{ gencc_disease_audit_status.stdout | default('') }}"
-  when: (gencc_disease_audit_status.rc | default(0)) != 0
+  when:
+    - gencc_refresh_diseases_on_deploy | bool
+    - (gencc_disease_audit_status.rc | default(0)) != 0
 
 # ---------------------------------------------------------------------------
 # Refresh downloadable release exports after migrations.

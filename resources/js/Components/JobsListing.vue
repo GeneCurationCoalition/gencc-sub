@@ -642,7 +642,7 @@ table tbody tr:hover {
             </ConfirmDialog>
             <Toast />
 
-            <DataTable v-model:filters="filters" ref="dt" :value="jobsWithStatusDate?.filter(rowFilter)" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="slug" :sortOrder="-1"
+            <DataTable v-model:filters="filters" ref="dt" :value="jobsWithStatusDate?.filter(rowFilter)" size="small" paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 250]" sortField="slug" :sortOrder="-1"
                     :rowStyle="rowStyle" :globalFilterFields="['slug', 'friendly', 'status_date', 'status']" tableStyle="min-width: 20rem; width: auto;">
                 <template #header>
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -722,29 +722,31 @@ table tbody tr:hover {
                         </div>
                      </template>
                 </Column>
-                <Column header="Action" style="width: 10%; min-width: 8rem" headerStyle="width: 5rem; text-align: center" bodyStyle="text-align: center; overflow: visible">
+                <Column header="Action" style="width: 10%; min-width: 8rem" headerStyle="width: 5rem; text-align: right" bodyStyle="text-align: right; overflow: visible">
                     <template #body="slotProps">
-                        <!-- Show submit icon for draft jobs with submissions and no errors (NOT when uploading) -->
-                        <span v-if="slotProps.data.status === 'draft' && slotProps.data.submissions_count > 0 && slotProps.data.error_count === 0 && !isJobUploading(slotProps.data)" class="mr-3">
-                            <Button @click="submitJob(slotProps.data.slug)"
-                                    icon="pi pi-send"
-                                    severity="info"
-                                    text
-                                    raised
-                                    rounded
-                                    v-tooltip.top="'Submit Job'"></Button>
-                        </span>
-                        <!-- Show delete icon for all draft jobs (processed jobs preserved for audit history) (NOT when uploading) -->
-                        <span v-if="slotProps.data.status === 'draft' && !isJobUploading(slotProps.data)" class="mr-3">
-                            <Button @click="requireConfirmation(slotProps.data)"
-                                    icon="pi pi-trash"
-                                    severity="danger"
-                                    text
-                                    raised
-                                    rounded
-                                    v-tooltip.top="'Delete Job'"></Button>
-                        </span>
-                        <a :href="'/jobs/' + slotProps.data.ident"><Button type="button" icon="pi pi-arrow-right" text raised rounded /></a>
+                        <div class="inline-flex items-center gap-2 whitespace-nowrap">
+                            <!-- Show submit icon for draft jobs with submissions and no errors (NOT when uploading) -->
+                            <span v-if="slotProps.data.status === 'draft' && slotProps.data.submissions_count > 0 && slotProps.data.error_count === 0 && !isJobUploading(slotProps.data)">
+                                <Button @click="submitJob(slotProps.data.slug)"
+                                        icon="pi pi-send"
+                                        severity="info"
+                                        text
+                                        raised
+                                        rounded
+                                        v-tooltip.top="'Submit Job'"></Button>
+                            </span>
+                            <!-- Show delete icon for all draft jobs (processed jobs preserved for audit history) (NOT when uploading) -->
+                            <span v-if="slotProps.data.status === 'draft' && !isJobUploading(slotProps.data)">
+                                <Button @click="requireConfirmation(slotProps.data)"
+                                        icon="pi pi-trash"
+                                        severity="danger"
+                                        text
+                                        raised
+                                        rounded
+                                        v-tooltip.top="'Delete Job'"></Button>
+                            </span>
+                            <a :href="'/jobs/' + slotProps.data.ident"><Button type="button" icon="pi pi-arrow-right" text raised rounded /></a>
+                        </div>
                     </template>
                  </Column>
                  <template #footer>Total of {{ jobs ? jobs.length : 0 }} jobs.</template>
