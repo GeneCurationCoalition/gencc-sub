@@ -13,12 +13,20 @@ A scan runs:
 - after each successful scheduled `update:diseases`
   (`gencc-sub-audit-diseases.service`, started by the disease update
   service's `OnSuccess=`);
-- at the end of every deployment, after the disease rebuild;
-- from **Audit Diseases** in the Dashboard's Admin Actions, or by hand:
+- during deployment, after the disease rebuild, when
+  `gencc_refresh_diseases_on_deploy` is enabled (the default);
+- from **Audit Diseases** in the Dashboard's Admin Actions, which queues a
+  background scan, or by hand:
 
 ```sh
 php artisan audit:disease-ontologies
 ```
+
+Setting `gencc_refresh_diseases_on_deploy: false` skips both the disease update
+and deployment audit. Keep it enabled for the first deployment of the disease
+mapping migrations, which clear legacy mappings for rebuilding. A failed audit
+is reported without failing the deployment; verify the latest successful report
+afterward.
 
 `update:diseases` and the audit share a process lock
 (`storage/framework/disease-ontology.lock`, `DiseaseOntologyLock`). An audit
@@ -125,12 +133,10 @@ that it was active.
 
 ## Deferred increments
 
-The timestamped `DISEASE_ONTOLOGY_AUDIT_PLAN_20260925-132107.md` describes later
-work: scheduling and manual queued scans, precise
-source-status metadata, review history, and approved submitter notifications.
-There is no automatic remediation or notification in this delivery.
-The optional “accept replacement” button in
-`DISEASE_REPLACEMENT_PLAN_20260927-182215.md` remains a separate review gate.
+More precise source-status metadata, review history, and approved submitter
+notifications remain deferred. There is no automatic remediation or notification
+in this delivery. A submitter action to accept a replacement or refresh a stored
+MONDO mapping is deferred to a future revision.
 
 Focused verification:
 
