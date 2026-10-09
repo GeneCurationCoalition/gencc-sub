@@ -63,7 +63,7 @@
     - name: Leave application maintenance mode after a successful deployment
       ansible.builtin.shell: |
         set -euo pipefail
-        sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan up'
+        sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan up'
       args:
         executable: /bin/bash
       when: gencc_deploy_with_maintenance_mode | bool

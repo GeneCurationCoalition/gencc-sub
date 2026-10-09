@@ -42,7 +42,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec gencc-sub php artisan down --retry=60
+    podman exec --user www-data gencc-sub php artisan down --retry=60
   args:
     executable: /bin/bash
   become_user: "{{ gencc_deploy_user }}"
@@ -179,7 +179,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     # Avoid Ansible become_user + async (can trigger ACL/chmod issues on some controllers).
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan migrate --force'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan migrate --force'
   args:
     executable: /bin/bash
   async: 3600
@@ -200,7 +200,7 @@
 - name: Rebuild disease mappings from current upstream sources
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan update:diseases --no-interaction'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan update:diseases --no-interaction'
   args:
     executable: /bin/bash
   async: 7200
@@ -223,14 +223,14 @@
 - name: Clear application caches after database transition
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan optimize:clear'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan optimize:clear'
   args:
     executable: /bin/bash
 
 - name: Bootstrap initial release after database restore
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan gencc:release bootstrap --no-interaction'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan gencc:release bootstrap --no-interaction'
   args:
     executable: /bin/bash
   register: gencc_release_bootstrap
@@ -249,7 +249,7 @@
 - name: Audit disease mappings of live and most recent submissions
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan audit:disease-ontologies'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan audit:disease-ontologies'
   args:
     executable: /bin/bash
   async: 3600
@@ -303,7 +303,7 @@
 - name: Regenerate downloadable release exports from current DB state
   ansible.builtin.shell: |
     set -euo pipefail
-    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan gencc:release regenerate-exports --no-interaction'
+    sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec --user www-data gencc-sub php artisan gencc:release regenerate-exports --no-interaction'
   args:
     executable: /bin/bash
   register: gencc_regenerate_exports
