@@ -34,6 +34,9 @@ module.exports = {
       name: 'gencc-queue-worker',
       script: 'artisan',
       interpreter: 'php',
+      // Match PHP-FPM workers so shared runtime files have one owner.
+      uid: 'www-data',
+      gid: 'www-data',
       args: 'queue:work --tries=3 --timeout=3600 --memory=2048 --sleep=3 --max-jobs=1000',
       instances: 1,
       autorestart: true,

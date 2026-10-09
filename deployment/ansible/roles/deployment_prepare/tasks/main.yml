@@ -148,7 +148,7 @@
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     if podman container exists gencc-sub; then
-      podman exec gencc-sub php artisan down --retry=60
+      podman exec --user www-data gencc-sub php artisan down --retry=60
       podman exec gencc-sub pm2 stop gencc-queue-worker gencc-php-fpm
     fi
     search_load_state="$(systemctl --user show gencc-search.service --property=LoadState --value)"
