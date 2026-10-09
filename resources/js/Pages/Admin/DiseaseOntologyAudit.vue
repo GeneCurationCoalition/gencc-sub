@@ -8,7 +8,7 @@ import DiseaseReplacementAdvice from '@/Components/DiseaseReplacementAdvice.vue'
 
 const props = defineProps({
     run: Object, sourcesChanged: Boolean, latestAttempt: Object, filters: Object, caseLabels: Object,
-    findings: Object, counts: Object, submitters: Array, namespaces: Array,
+    findings: Object, counts: Object, auditSubmitters: Array, namespaces: Array,
     submissionStates: Array, jobStates: Array,
 })
 const expandedRows = ref([])
@@ -110,7 +110,7 @@ const exportUrl = computed(() => route('admin.disease-ontology-audit.export', qu
                                 <select v-model="form.case" aria-label="Finding type" class="audit-filter"><option value="">All findings</option><option v-for="(label, code) in caseLabels" :key="code" :value="code" :disabled="!Object.hasOwn(run.case_counts || {}, code)">{{ label }}{{ Object.hasOwn(run.case_counts || {}, code) ? '' : ' (not captured)' }}</option></select>
                             </label>
                             <label class="text-sm">Submitter
-                                <select v-model="form.submitter" aria-label="Submitter" class="audit-filter"><option value="">All submitters</option><option v-for="submitter in submitters" :key="submitter.submitter_id" :value="submitter.submitter_id">{{ submitter.submitter_name || 'Unknown' }}</option></select>
+                                <select v-model="form.submitter" aria-label="Submitter" class="audit-filter"><option value="">All submitters</option><option v-for="submitter in auditSubmitters" :key="submitter.submitter_id" :value="submitter.submitter_id">{{ submitter.submitter_name || 'Unknown' }}</option></select>
                             </label>
                             <label class="text-sm">Submitted namespace
                                 <select v-model="form.namespace" aria-label="Submitted namespace" class="audit-filter"><option value="">All namespaces</option><option v-for="namespace in namespaces" :key="namespace">{{ namespace }}</option></select>

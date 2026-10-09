@@ -31,7 +31,7 @@ class DiseaseOntologyAuditController extends Controller
                 'identifiers' => (clone $query)->distinct()->count('normalized_id'),
                 'submitters' => (clone $query)->distinct()->count('submitter_id'),
             ],
-            'submitters' => (clone $base)->select('submitter_id', 'submitter_name')->distinct()->orderBy('submitter_name')->get(),
+            'auditSubmitters' => (clone $base)->select('submitter_id', 'submitter_name')->distinct()->orderBy('submitter_name')->get(),
             'namespaces' => (clone $base)->whereNotNull('namespace')->distinct()->orderBy('namespace')->pluck('namespace'),
             'submissionStates' => (clone $base)->distinct()->orderBy('submission_status')->pluck('submission_status'),
             'jobStates' => (clone $base)->whereNotNull('job_status')->distinct()->orderBy('job_status')->pluck('job_status'),
