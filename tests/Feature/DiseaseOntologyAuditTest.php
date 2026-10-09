@@ -122,6 +122,28 @@ class DiseaseOntologyAuditTest extends TestCase
         );
     }
 
+    public function test_scan_batches_disease_lookups_in_both_passes(): void
+    {
+        foreach (['MONDO:0000001', 'OMIM:600001', 'ORPHA:700001', 'Orphanet:700300', 'Orphanet:700700'] as $curie) {
+            $this->submission($curie);
+        }
+
+        DB::enableQueryLog();
+        try {
+            $run = app(DiseaseOntologyAudit::class)->run();
+            $individualLookups = array_filter(
+                DB::getQueryLog(),
+                fn ($query) => preg_match('/from "diseases".*"(?:curie|id)" = \\?/', $query['query'])
+            );
+        } finally {
+            DB::disableQueryLog();
+            DB::flushQueryLog();
+        }
+
+        $this->assertEquals(5, $run->examined_count);
+        $this->assertEmpty($individualLookups, 'Disease lookups should be batched before resolving each submission.');
+    }
+
     public function test_absent_replacements_are_distinct_from_unusable_or_unparsed_assertions(): void
     {
         $old = $this->world['mondo_deprecated'];
@@ -180,6 +202,23 @@ class DiseaseOntologyAuditTest extends TestCase
         $this->assertEquals(DiseaseAuditRun::FAILED, DiseaseAuditRun::orderByDesc('id')->first()->status);
         $this->assertSame(1, DiseaseAuditFinding::count());
         $this->assertEquals(DiseaseAuditRun::SUCCEEDED, app(DiseaseOntologyAudit::class)->run()->status);
+    }
+
+    public function test_import_holds_an_exclusive_lock_until_released(): void
+    {
+        $lock = DiseaseOntologyLock::forImport();
+        $contender = fopen(DiseaseOntologyLock::path(), 'c');
+        try {
+            $this->assertFalse(flock($contender, LOCK_SH | LOCK_NB));
+            $this->assertFalse(flock($contender, LOCK_EX | LOCK_NB));
+        } finally {
+            DiseaseOntologyLock::release($lock);
+            fclose($contender);
+        }
+
+        $audit = DiseaseOntologyLock::forAudit();
+        $this->assertIsResource($audit);
+        DiseaseOntologyLock::release($audit);
     }
 
     public function test_scan_is_refused_during_a_disease_update_or_another_scan(): void

@@ -6,9 +6,9 @@ use RuntimeException;
 
 /**
  * Keeps a disease audit from reading the diseases table while update:diseases
- * is rewriting it. Imports share the lock; an audit needs it alone, so an audit
- * refuses to start during an import or another audit, and an import started
- * during an audit waits for it to finish.
+ * is rewriting it. Imports and audits each need the lock alone. An audit
+ * refuses to start during an import or another audit; an import waits for
+ * any running import or audit to finish.
  *
  * A process-owned file lock has no lease to expire and is released when the
  * process exits. Timers, deploys and the queue worker all run inside the one
@@ -20,7 +20,7 @@ class DiseaseOntologyLock
     public static function forImport()
     {
         $handle = self::open();
-        if (! flock($handle, LOCK_SH)) {
+        if (! flock($handle, LOCK_EX)) {
             fclose($handle);
             throw new RuntimeException('Cannot lock the disease ontology tables for import.');
         }

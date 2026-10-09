@@ -270,6 +270,7 @@ class DiseaseOntologyAudit
         Submission::query()->where(fn ($q) => $q->where('is_live', true)->orWhere('is_most_recent', true))
             ->with(['disease', 'job:id,slug'])
             ->chunkById(500, function ($submissions) use (&$groups, &$currentByIdentifier, $resolver) {
+                $resolver->preload($submissions->map(fn ($s) => data_get($s->submission_data, 'disease.id'))->all());
                 foreach ($submissions as $submission) {
                     $stored = MondoRelationshipWarnings::candidate($submission);
                     if ($key = MondoRelationshipWarnings::key($stored)) {

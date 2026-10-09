@@ -124,6 +124,7 @@
     - gencc-sub-pubmed-sync.service
     - gencc-sub-update-genes.service
     - gencc-sub-update-diseases.service
+    - gencc-sub-audit-diseases.service
     - gencc-sub-release.service
     - gencc-backup-db.service
   register: gencc_scheduled_service_states
