@@ -4,18 +4,12 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use App\Http\Requests\JobRequest;
 use Illuminate\Support\Facades\DB;
 
-use App\Models\Disease;
-use App\Models\Inheritance;
-use App\Models\Gene;
-use App\Models\Classification;
 use App\Models\Submission;
 use App\Models\Document;
 
 use Auth;
-use Carbon\Carbon;
 
 use App\Models\Job;
 use App\Services\JobStateMachine;
@@ -80,122 +74,6 @@ class JobController extends Controller
                 200);
 
     }
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
-    {
-        //
-        /*$disease = Disease::rosetta($id);
-
-        if ($disease === null)
-            return response()->json(['success' => 'false',
-                'status_code' => 3001,
-                'message' => 'Disease not found'],
-                200);
-
-        return $disease;*/
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(JobRequest $request, string $id)
-    {
-        /*$submission = Auth::user()->submissions()
-                        ->where('sid', $id)->first();
-                        
-        if ($submission === null)
-                return response()->json(['success' => 'false',
-                    'status_code' => 3002,
-                    'message' => 'Unauthorized'],
-                    200);
-        
-        switch ($request->input('type'))
-        {
-            case 'inheritance':
-                $inheritance = Inheritance::curie($request->input('curie'))->first();
-
-                if ($inheritance === null)
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Inheritance not found'],
-                        200);
-
-                // update the submission disease
-                $submission->inheritance_id = $inheritance->id;
-                $bag = 'moi_curie_id';
-                break;
-            case 'classification':
-                $classification = Classification::curie($request->input('curie'))->first();
-
-                if ($classification === null)
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Classification not found'],
-                        200);
-
-                // update the submission disease
-                $submission->classification_id = $classification->id;
-                $bag = 'classification_curie_id';
-                break;
-            case 'disease':
-                $disease = Disease::rosetta($request->input('curie'));
-
-                if ($disease === null)
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Disease not found'],
-                        200);
-
-                // update the submission disease
-                $submission->disease_id = $disease->id;
-                $bag = 'disease_curie_id';
-                break;
-            case 'gene':
-                $gene = Gene::hgnc_id($request->input('curie'))->first();
-
-                if ($gene === null)
-                    return response()->json(['success' => 'false',
-                        'status_code' => 3001,
-                        'message' => 'Gene not found'],
-                        200);
-
-                // update the submission gene
-                $submission->gene_id = $gene->id;
-                $bag = 'gene_hgnc_id';
-                break;
-            case 'publishdate':
-                $submission->publish_date = Carbon::parse($request->input('curie'));
-                $bag = 'publish_date';
-                break;
-        }
-        
-        // update the submission errors
-        $eb = $submission->submission_errors;
-        unset($eb->$bag);
-        $submission->submission_errors =(empty((array) $eb) ? null : $eb);
-
-        // if this was the last error, update the status and reevaluate the job
-        if ($submission->submission_errors === null)
-            $submission->status = Submission::STATUS_PROCESSING;
-
-        // update the submission activity log
-        $submission->addEvent(Auth::user()->id, "$bag changed to " . $request->input('curie') . " in " . $request->input('type'));
-        
-        $submission->save();
-
-        $submission->job->reassess();
-
-        return response()->json(['success' => 'true',
-                'status_code' => 200,
-                'message' => 'Submission Updated'],
-                200);
-                */
-        //
-    }
-
 
     /**
      * Remove the specified resource from storage.

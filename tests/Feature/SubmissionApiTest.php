@@ -11,6 +11,7 @@ use App\Models\Disease;
 use App\Models\Classification;
 use App\Models\Inheritance;
 use App\Models\Mechanism;
+use App\Models\Pubmed;
 use App\Models\Submitter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -923,29 +924,30 @@ class SubmissionApiTest extends TestCase
         $this->assertSame('TEST-001', $additionalInformation->submitted_as_submission_id);
     }
 
-    /**
-     * Test cannot update gene on a republished submission (draft_republish status)
-     */
-    public function test_update_gene_blocked_for_draft_republish(): void
+    public function test_relationship_fields_are_blocked_for_draft_republish(): void
     {
-        // Set submission to draft_republish status
         $this->submission->update([
             'status' => Submission::STATUS_DRAFT_REPUBLISH,
             'publish_date' => now()
         ]);
 
-        $response = $this->actingAs($this->user)
-            ->postJson('/api/submissions/' . $this->submission->sid, [
-                'type' => 'gene',
-                'curie' => 'HGNC:5'
-            ]);
-
-        $response->assertStatus(200);
-        $response->assertJson([
-            'success' => 'false',
-            'status_code' => 3012,
-            'message' => 'Cannot change gene on a previously published submission. To submit a different gene-disease association, create a new submission instead.'
-        ]);
+        foreach ([
+            'gene' => 'HGNC:5',
+            'disease' => 'MONDO:0000001',
+            'inheritance' => 'HP:0000006',
+        ] as $type => $curie) {
+            $this->actingAs($this->user)
+                ->postJson('/api/submissions/' . $this->submission->sid, [
+                    'type' => $type,
+                    'curie' => $curie,
+                ])
+                ->assertOk()
+                ->assertJson([
+                    'success' => 'false',
+                    'status_code' => 3012,
+                    'message' => 'Cannot change the gene, disease, or mode of inheritance on a previously published submission. Create a new submission for a different relationship.',
+                ]);
+        }
     }
 
     /**
@@ -1948,5 +1950,202 @@ class SubmissionApiTest extends TestCase
             'error_count' => 1,
         ]);
         $this->assertStringContainsString('archived', $response->json('errors.0'));
+    }
+
+    /**
+     * A report date the system cannot store is refused with a message the
+     * portal can show, rather than failing the write and returning a 500.
+     */
+    public function test_report_date_outside_the_allowed_range_is_refused(): void
+    {
+        $before = $this->submission->report_date;
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '2999-01-01',
+            ]);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => 'false', 'status_code' => 3003]);
+        $this->assertStringContainsString('outside the allowed date range', $response->json('message'));
+
+        $this->submission->refresh();
+        $this->assertEquals($before, $this->submission->report_date);
+    }
+
+    /**
+     * A date in a form the system does not read is refused the same way.
+     */
+    public function test_report_date_in_an_unaccepted_format_is_refused(): void
+    {
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '08/26/2024',
+            ]);
+
+        $response->assertJson(['success' => 'false', 'status_code' => 3003]);
+        $this->assertStringContainsString('Not a date', $response->json('message'));
+    }
+
+    public function test_a_report_date_in_the_accepted_form_is_saved(): void
+    {
+        $data = $this->submission->submission_data;
+        $data->report = (object) ['ext_url' => null, 'display_date' => null];
+        $this->submission->update(['submission_data' => $data]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'https://example.com/report',
+                'date' => '2024-01-15',
+            ]);
+
+        $response->assertJson(['status_code' => 200]);
+
+        $this->submission->refresh();
+        $this->assertStringStartsWith('2024-01-15', (string) $this->submission->report_date);
+    }
+
+    public function test_report_editor_rejects_an_invalid_url_without_mutating_the_record(): void
+    {
+        $before = $this->submission->report_url;
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'report',
+                'curie' => 'not-a-url',
+                'date' => '2024-01-15',
+            ]);
+
+        $response->assertJson(['success' => 'false', 'status_code' => 3004]);
+        $this->submission->refresh();
+        $this->assertSame($before, $this->submission->report_url);
+    }
+
+    public function test_criteria_editor_rejects_an_invalid_url_without_mutating_the_record(): void
+    {
+        $data = $this->submission->submission_data;
+        $data->criteria = (object) ['url' => 'https://example.com/original', 'name' => 'Original'];
+        $this->submission->update(['submission_data' => $data]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'criteria',
+                'url' => 'not-a-url',
+                'name' => 'Invalid',
+                'remember' => 'false',
+            ]);
+
+        $response->assertJson(['success' => 'false', 'status_code' => 3005]);
+        $this->submission->refresh();
+        $this->assertSame('https://example.com/original', $this->submission->submission_data->criteria->url);
+    }
+
+    public function test_classification_editor_rejects_the_undefined_classification(): void
+    {
+        Classification::create([
+            'curie' => 'GENCC:000000',
+            'name' => 'Undefined',
+            'description' => 'Undefined classification',
+            'abbreviation' => 'UDF',
+            'type' => Classification::TYPE_CLASSIFICATION,
+            'status' => Classification::STATUS_ACTIVE,
+        ]);
+
+        $before = $this->submission->classification_id;
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'classification',
+                'curie' => 'GENCC:000000',
+            ]);
+
+        $response->assertJson([
+            'success' => 'false',
+            'status_code' => 3002,
+            'message' => 'Undefined classification cannot be selected',
+        ]);
+        $this->submission->refresh();
+        $this->assertSame($before, $this->submission->classification_id);
+    }
+
+    public function test_evidence_editor_uses_the_same_pmid_normalization_as_uploads(): void
+    {
+        Pubmed::create([
+            'pmid' => '12345678',
+            'uid' => '12345678',
+            'status' => Pubmed::STATUS_ACTIVE,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'evidence',
+                'evidence' => ['PMID:0012345678', 'not-a-pmid'],
+            ]);
+
+        $response->assertJson(['success' => 'true', 'status_code' => 200]);
+        $this->submission->refresh();
+        $this->assertSame(['12345678'], $this->submission->evidence);
+        $this->assertSame('12345678', $this->submission->normalized_pmids);
+        $this->assertSame(
+            ['leading_zeros_stripped', 'non_numeric'],
+            array_column($this->submission->pmid_issues, 'reason')
+        );
+        $this->assertSame('12345678', $this->submission->submission_data->evidence[0]->pmid);
+    }
+
+    public function test_evidence_editor_rejects_an_all_invalid_change_without_mutating_the_record(): void
+    {
+        $data = $this->submission->submission_data;
+        $data->evidence = [(object) ['pmid' => '12345678']];
+        $this->submission->update([
+            'evidence' => ['12345678'],
+            'normalized_pmids' => '12345678',
+            'submission_data' => $data,
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'evidence',
+                'evidence' => ['not-a-pmid', 'NULL'],
+            ]);
+
+        $response->assertJson(['success' => 'false', 'status_code' => 3006]);
+        $this->submission->refresh();
+        $this->assertSame(['12345678'], $this->submission->evidence);
+        $this->assertSame('12345678', $this->submission->normalized_pmids);
+    }
+
+    public function test_correcting_a_relationship_field_clears_an_imported_duplicate_error(): void
+    {
+        $gene = Gene::create([
+            'hgnc_id' => 'HGNC:6',
+            'symbol' => 'A2M',
+            'name' => 'alpha-2-macroglobulin',
+            'locus_group' => 'protein-coding gene',
+            'locus_type' => 'gene with protein product',
+            'location' => '12p13.31',
+            'status' => Gene::STATUS_ACTIVE,
+        ]);
+        $this->submission->update([
+            'submission_errors' => (object) [
+                'duplicate_submission' => 'Duplicate submission found.',
+            ],
+        ]);
+
+        $response = $this->actingAs($this->user)
+            ->post('/api/submissions/'.$this->submission->sid, [
+                'type' => 'gene',
+                'curie' => $gene->hgnc_id,
+            ]);
+
+        $response->assertJson(['success' => 'true', 'status_code' => 200]);
+        $this->submission->refresh();
+        $this->assertSame($gene->id, $this->submission->gene_id);
+        $this->assertNull($this->submission->submission_errors);
     }
 }

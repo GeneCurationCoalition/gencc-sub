@@ -11,7 +11,6 @@ use App\Models\Inheritance;
 use App\Models\Submitter;
 use App\Models\Submission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
 use Mockery;
 
 class SubmissionFileValidationTest extends TestCase
@@ -249,7 +248,7 @@ class SubmissionFileValidationTest extends TestCase
         }
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_file_format', $errors[0]['error_type']);
@@ -267,7 +266,7 @@ class SubmissionFileValidationTest extends TestCase
         }
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         // Empty headers are treated as invalid headers, not missing headers
@@ -294,7 +293,7 @@ class SubmissionFileValidationTest extends TestCase
         $worksheet[] = $this->createValidDataRow();
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_header_columns', $errors[0]['error_type']);
@@ -310,7 +309,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertStringContainsString('action', strtolower($errors[0]['message']));
@@ -329,7 +328,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('new_with_sgc_id', $errors[0]['error_type']);
@@ -348,7 +347,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('action_missing_sgc_id', $errors[0]['error_type']);
@@ -367,10 +366,10 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
-        $this->assertEquals('missing_required_field', $errors[0]['error_type']);
+        $this->assertContains('action_missing_sgc_id', array_column($errors, 'error_type'));
     }
 
     /**
@@ -389,7 +388,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('unpublish_has_data', $errors[0]['error_type']);
@@ -408,118 +407,10 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('invalid_sgc_id_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 10: HGNC_ID format validation
-     */
-    public function test_fails_when_hgnc_id_has_invalid_format(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'hgnc_id' => 'INVALID' // Not numeric or HGNC:####
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 11: Disease_ID format validation
-     */
-    public function test_fails_when_disease_id_has_invalid_format(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'disease_id' => 'INVALID:123' // Not MONDO, OMIM, or ORPHA
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 12: Date format validation
-     */
-    public function test_fails_when_date_has_invalid_format(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'date' => '01-15-2024' // Wrong format, should be YYYY-MM-DD
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 13: URL format validation
-     */
-    public function test_fails_when_url_has_invalid_format(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'public_report_url' => 'not-a-url' // Invalid URL
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('invalid_field_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 14: PMID format validation - completely invalid PMIDs produce errors
-     */
-    public function test_fails_when_pmid_has_invalid_format(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'pmids' => 'abc,xyz' // Non-numeric values - no valid PMIDs extractable
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('invalid_pmid_format', $errors[0]['error_type']);
-    }
-
-    /**
-     * Test 15: Required fields validation
-     */
-    public function test_fails_when_required_field_missing(): void
-    {
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'hgnc_id' => '' // Required field missing
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        $this->assertNotEmpty($errors);
-        $this->assertEquals('missing_required_field', $errors[0]['error_type']);
     }
 
     /**
@@ -539,10 +430,10 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
-        $this->assertEquals('unique_column_requirement', $errors[0]['error_type']);
+        $this->assertEquals('duplicate_sgc_id', $errors[0]['error_type']);
     }
 
     /**
@@ -555,7 +446,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertEmpty($errors, 'Valid submission should not have errors. Errors: ' . json_encode($errors));
     }
@@ -606,7 +497,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertEquals('republish_gene_change', $errors[0]['error_type']);
@@ -647,7 +538,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         // Should not have gene change error
         $geneChangeErrors = array_filter($errors, function($error) {
@@ -691,7 +582,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         // Should not have gene change error
         $geneChangeErrors = array_filter($errors, function($error) {
@@ -699,99 +590,6 @@ class SubmissionFileValidationTest extends TestCase
         });
 
         $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when using numeric HGNC ID');
-    }
-
-    /**
-     * Test: Republish fails when gene relationship is null (gene_id = null)
-     *
-     * When the submission has no gene relationship, we should still detect gene changes
-     * by falling back to original_submission_data.
-     */
-    public function test_republish_with_null_gene_relationship_uses_fallback(): void
-    {
-        // Create a published submission with null gene_id but original_submission_data has the gene
-        // Note: Don't use json_encode() - the 'object' cast handles serialization
-        $submission = Submission::create([
-            'sid' => 'SGC-100004',
-            'gene_id' => null, // No gene relationship
-            'disease_id' => 1,
-            'original_disease_id' => 1,
-            'classification_id' => 1,
-            'inheritance_id' => 1,
-            'submitter_id' => $this->testSubmitter->id,
-            'job_id' => 1,
-            'user_id' => 1,
-            'status' => 'published',
-            'is_live' => true,
-            'submission_data' => (object)['test' => 'data'],
-            'original_submission_data' => (object)[
-                'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
-            ],
-        ]);
-
-        // Try to republish with a DIFFERENT gene - should fail
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'action' => 'R',
-                'sgc_id' => 'SGC-100004',
-                'hgnc_id' => 'HGNC:9673' // Different gene
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        // Should have gene change error
-        $geneChangeErrors = array_filter($errors, function($error) {
-            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
-        });
-
-        $this->assertNotEmpty($geneChangeErrors, 'Should detect gene change when using original_submission_data fallback');
-    }
-
-    /**
-     * Test: Republish with null gene relationship and matching gene in original_submission_data
-     */
-    public function test_republish_with_null_gene_relationship_same_gene_passes(): void
-    {
-        // Create a published submission with null gene_id but original_submission_data has the gene
-        // Note: Don't use json_encode() - the 'object' cast handles serialization
-        $submission = Submission::create([
-            'sid' => 'SGC-100005',
-            'gene_id' => null, // No gene relationship
-            'disease_id' => 1,
-            'original_disease_id' => 1,
-            'classification_id' => 1,
-            'inheritance_id' => 1,
-            'submitter_id' => $this->testSubmitter->id,
-            'job_id' => 1,
-            'user_id' => 1,
-            'status' => 'published',
-            'is_live' => true,
-            'submission_data' => (object)['test' => 'data'],
-            'original_submission_data' => (object)[
-                'gene' => (object)['id' => 'HGNC:5', 'symbol' => 'A1BG']
-            ],
-        ]);
-
-        // Try to republish with the SAME gene - should pass
-        $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow([
-                'action' => 'R',
-                'sgc_id' => 'SGC-100005',
-                'hgnc_id' => 'HGNC:5' // Same gene as in original_submission_data
-            ])
-        ]);
-
-        SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
-
-        // Should NOT have gene change error
-        $geneChangeErrors = array_filter($errors, function($error) {
-            return isset($error['error_type']) && $error['error_type'] === 'republish_gene_change';
-        });
-
-        $this->assertEmpty($geneChangeErrors, 'Should not have gene change error when original_submission_data gene matches');
     }
 
     /**
@@ -841,7 +639,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         // Should NOT have gene change error because gene relationship matches
         $geneChangeErrors = array_filter($errors, function($error) {
@@ -883,7 +681,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         // Should NOT have gene change error - case insensitive match
         $geneChangeErrors = array_filter($errors, function($error) {
@@ -898,88 +696,25 @@ class SubmissionFileValidationTest extends TestCase
     // =========================================================================
 
     /**
-     * Test: Field-level errors include column and value fields
-     */
-    public function test_field_errors_include_column_and_value(): void
-    {
-        $row = $this->createValidDataRow(['hgnc_id' => 'INVALID']);
-
-        $errors = SubmissionFileValidation::validate_data_row($row, 13);
-
-        $formatError = collect($errors)->firstWhere('error_type', 'invalid_field_format');
-        $this->assertNotNull($formatError, 'Should have invalid_field_format error');
-        $this->assertEquals('hgnc_id', $formatError['column']);
-        $this->assertEquals('INVALID', $formatError['value']);
-        $this->assertStringContainsString('INVALID', $formatError['message']);
-    }
-
-    /**
-     * Test: Enum validation errors include column and value
-     */
-    public function test_enum_errors_include_column_and_value(): void
-    {
-        $row = $this->createValidDataRow(['classification_id' => 'GENCC:999999']);
-
-        $errors = SubmissionFileValidation::validate_data_row($row, 13);
-
-        $valueError = collect($errors)->first(fn($e) => ($e['error_type'] ?? '') === 'invalid_field_value' && ($e['column'] ?? '') === 'classification_id');
-        $this->assertNotNull($valueError, 'Should have invalid_field_value error for classification_id');
-        $this->assertEquals('classification_id', $valueError['column']);
-        $this->assertEquals('GENCC:999999', $valueError['value']);
-        $this->assertStringContainsString('GENCC:999999', $valueError['message']);
-    }
-
-    /**
-     * Test: Database lookup errors include column and value
-     */
-    public function test_database_lookup_errors_include_column_and_value(): void
-    {
-        $row = $this->createValidDataRow(['disease_id' => 'MONDO:9999999']);
-
-        $errors = SubmissionFileValidation::validate_data_row($row, 13);
-
-        $valueError = collect($errors)->firstWhere('error_type', 'invalid_field_value');
-        $this->assertNotNull($valueError, 'Should have invalid_field_value error for unknown disease');
-        $this->assertEquals('disease_id', $valueError['column']);
-        $this->assertEquals('MONDO:9999999', $valueError['value']);
-    }
-
-    /**
-     * Test: Long values are truncated to 80 characters
-     */
-    public function test_long_values_are_truncated(): void
-    {
-        $longValue = str_repeat('x', 120);
-        $row = $this->createValidDataRow(['assertion_criteria_url' => $longValue]);
-
-        $errors = SubmissionFileValidation::validate_data_row($row, 13);
-
-        $formatError = collect($errors)->firstWhere('column', 'assertion_criteria_url');
-        $this->assertNotNull($formatError);
-        $this->assertEquals(83, mb_strlen($formatError['value'])); // 80 + '...'
-        $this->assertStringEndsWith('...', $formatError['value']);
-    }
-
-    /**
-     * Test: Errors with same column are grouped together in validate_spreadsheet
+     * Test: Errors with same column are grouped together in validate_upload_gate
      */
     public function test_errors_grouped_by_column(): void
     {
         $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow(['disease_id' => 'MONDO:9999999']),
-            $this->createValidDataRow(['disease_id' => 'MONDO:8888888', 'local_key' => 'TEST002']),
+            $this->createValidDataRow(['action' => 'INVALID']),
+            $this->createValidDataRow(['action' => 'UNKNOWN', 'local_key' => 'TEST002']),
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
-        // Filter to just disease_id errors
-        $diseaseErrors = collect($errors)->filter(fn($e) => ($e['column'] ?? null) === 'disease_id');
+        // Filter to just action errors
+        $actionErrors = collect($errors)->filter(fn($e) => ($e['column'] ?? null) === 'action');
 
         // Should be grouped into one entry (not two separate ones)
-        $this->assertCount(1, $diseaseErrors, 'Disease ID errors should be grouped into one entry');
+        $this->assertCount(1, $actionErrors, 'Action errors should be grouped into one entry');
 
-        $grouped = $diseaseErrors->first();
+        $grouped = $actionErrors->first();
         $this->assertStringContainsString('2 rows', $grouped['message']);
         $this->assertArrayHasKey('details', $grouped);
         $this->assertCount(2, $grouped['details']); // Two distinct values
@@ -991,27 +726,27 @@ class SubmissionFileValidationTest extends TestCase
     public function test_grouped_errors_have_details_structure(): void
     {
         $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow(['disease_id' => 'MONDO:9999999']),
-            $this->createValidDataRow(['disease_id' => 'MONDO:9999999', 'local_key' => 'TEST002']),
-            $this->createValidDataRow(['disease_id' => 'MONDO:8888888', 'local_key' => 'TEST003']),
+            $this->createValidDataRow(['action' => 'INVALID']),
+            $this->createValidDataRow(['action' => 'INVALID', 'local_key' => 'TEST002']),
+            $this->createValidDataRow(['action' => 'UNKNOWN', 'local_key' => 'TEST003']),
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
-        $diseaseError = collect($errors)->firstWhere('column', 'disease_id');
-        $this->assertNotNull($diseaseError);
+        $actionError = collect($errors)->firstWhere('column', 'action');
+        $this->assertNotNull($actionError);
 
         // 3 total rows
-        $this->assertStringContainsString('3 rows', $diseaseError['message']);
+        $this->assertStringContainsString('3 rows', $actionError['message']);
 
         // Details sorted by count descending
-        $this->assertCount(2, $diseaseError['details']);
-        $this->assertEquals(2, $diseaseError['details'][0]['count']); // MONDO:9999999 appears twice
-        $this->assertEquals(1, $diseaseError['details'][1]['count']); // MONDO:8888888 appears once
+        $this->assertCount(2, $actionError['details']);
+        $this->assertEquals(2, $actionError['details'][0]['count']); // INVALID appears twice
+        $this->assertEquals(1, $actionError['details'][1]['count']); // UNKNOWN appears once
 
         // Each detail has required fields
-        foreach ($diseaseError['details'] as $detail) {
+        foreach ($actionError['details'] as $detail) {
             $this->assertArrayHasKey('value', $detail);
             $this->assertArrayHasKey('rows', $detail);
             $this->assertArrayHasKey('count', $detail);
@@ -1035,7 +770,7 @@ class SubmissionFileValidationTest extends TestCase
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         // duplicate_sgc_id errors should be grouped (same message, no column field)
         $dupErrors = collect($errors)->where('error_type', 'duplicate_sgc_id');
@@ -1053,11 +788,11 @@ class SubmissionFileValidationTest extends TestCase
     public function test_grouped_errors_clean_internal_fields(): void
     {
         $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow(['hgnc_id' => 'INVALID']),
+            $this->createValidDataRow(['action' => 'INVALID']),
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         foreach ($errors as $error) {
             $this->assertArrayNotHasKey('_values', $error, 'Internal _values should be removed');
@@ -1084,7 +819,7 @@ class SubmissionFileValidationTest extends TestCase
         $worksheet[] = $this->createValidDataRow();
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
         $this->assertNotEmpty($errors);
         $this->assertTrue($errors[0]['is_file_format_error'] ?? false);
@@ -1098,15 +833,240 @@ class SubmissionFileValidationTest extends TestCase
     public function test_single_row_error_grouped_with_singular_count(): void
     {
         $worksheet = $this->createValidSpreadsheet([
-            $this->createValidDataRow(['hgnc_id' => 'INVALID']),
+            $this->createValidDataRow(['action' => 'INVALID']),
         ]);
 
         SubmissionFileValidation::set_submitter_id($this->testSubmitter->id);
-        $errors = SubmissionFileValidation::validate_spreadsheet($worksheet, $this->testSubmitter->id, true);
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
 
-        $hgncError = collect($errors)->firstWhere('column', 'hgnc_id');
-        $this->assertNotNull($hgncError);
-        $this->assertStringContainsString('1 row)', $hgncError['message']);
-        $this->assertStringNotContainsString('1 rows', $hgncError['message']);
+        $actionError = collect($errors)->firstWhere('column', 'action');
+        $this->assertNotNull($actionError);
+        $this->assertStringContainsString('1 row)', $actionError['message']);
+        $this->assertStringNotContainsString('1 rows', $actionError['message']);
+    }
+
+    public function test_upload_gate_allows_content_errors_to_become_record_errors(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'hgnc_id' => '',
+                'disease_id' => 'NOT_A_DISEASE',
+                'moi_id' => 'HP:9999999',
+                'classification_id' => 'GENCC:999999',
+                'date' => '2024-02-30',
+                'public_report_url' => 'not-a-url',
+                'pmids' => 'not-a-pmid',
+                'assertion_criteria_url' => 'not-a-url',
+            ]),
+        ]);
+
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate(
+            $worksheet,
+            $this->testSubmitter->id
+        ));
+    }
+
+    public function test_upload_gate_requires_the_exact_header_order(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
+        [$worksheet[5][3], $worksheet[5][5]] = [$worksheet[5][5], $worksheet[5][3]];
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertSame('invalid_header_columns', $errors[0]['error_type']);
+        $this->assertStringContainsString('exact order', $errors[0]['user_message']);
+    }
+
+    public function test_upload_gate_rejects_extra_headers(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
+        $worksheet[5][] = 'unexpected_column';
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertSame('invalid_header_columns', $errors[0]['error_type']);
+        $this->assertStringContainsString('Unexpected columns', $errors[0]['user_message']);
+    }
+
+    public function test_upload_gate_does_not_compress_an_internal_blank_header_cell(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
+        array_splice($worksheet[5], 3, 0, ['']);
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertSame('invalid_header_columns', $errors[0]['error_type']);
+        $this->assertStringContainsString('exact order', $errors[0]['user_message']);
+    }
+
+    public function test_upload_gate_rejects_values_beyond_the_declared_columns(): void
+    {
+        $row = $this->createValidDataRow();
+        $row[] = 'unexpected value';
+        $worksheet = $this->createValidSpreadsheet([$row]);
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertNotNull(collect($errors)->firstWhere('error_type', 'unexpected_data_columns'));
+    }
+
+    public function test_upload_gate_ignores_template_content_above_row_thirteen(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
+        $worksheet[7] = $this->createValidDataRow();
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertSame([], $errors);
+    }
+
+    public function test_upload_gate_rejects_a_file_without_submission_rows(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([]);
+        $worksheet[] = array_fill(0, 18, '');
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertNotNull(collect($errors)->firstWhere('error_type', 'missing_submission_rows'));
+    }
+
+    public function test_upload_gate_rejects_duplicate_relationship_keys_within_the_file(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['local_key' => 'FIRST']),
+            $this->createValidDataRow(['local_key' => 'SECOND']),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $duplicate = collect($errors)->firstWhere('error_type', 'duplicate_submission');
+        $this->assertNotNull($duplicate);
+        $this->assertStringContainsString('(13, 14)', $duplicate['message']);
+    }
+
+    public function test_upload_gate_does_not_reject_a_relationship_matching_an_existing_submission(): void
+    {
+        $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();
+        $disease = Disease::where('curie', 'MONDO:0000001')->firstOrFail();
+        $inheritance = Inheritance::where('curie', 'HP:0000006')->firstOrFail();
+
+        Submission::factory()->create([
+            'submitter_id' => $this->testSubmitter->id,
+            'gene_id' => $gene->id,
+            'disease_id' => $disease->id,
+            'original_disease_id' => $disease->id,
+            'inheritance_id' => $inheritance->id,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
+            'submission_data' => (object) [],
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([$this->createValidDataRow()]);
+
+        $this->assertSame([], SubmissionFileValidation::validate_upload_gate(
+            $worksheet,
+            $this->testSubmitter->id
+        ));
+    }
+
+    public function test_upload_gate_preserves_missing_field_language_when_grouping(): void
+    {
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(['action' => '', 'submitter_id' => '']),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $action = collect($errors)->firstWhere('column', 'action');
+        $submitter = collect($errors)->firstWhere('column', 'submitter_id');
+        $this->assertStringContainsString("Required field 'action' is missing", $action['message']);
+        $this->assertStringContainsString("Required field 'submitter_id' is missing", $submitter['message']);
+    }
+
+    public function test_upload_gate_requires_a_republish_sgc_to_match_the_relationship(): void
+    {
+        $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();
+        $disease = Disease::where('curie', 'MONDO:0000001')->firstOrFail();
+        $inheritance = Inheritance::where('curie', 'HP:0000006')->firstOrFail();
+        $classification = Classification::where('curie', 'GENCC:100001')->firstOrFail();
+
+        Submission::create([
+            'sid' => 'SGC-100099',
+            'gene_id' => $gene->id,
+            'disease_id' => $disease->id,
+            'original_disease_id' => $disease->id,
+            'inheritance_id' => $inheritance->id,
+            'classification_id' => $classification->id,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
+            'submission_data' => (object) [],
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow([
+                'sgc_id' => 'SGC-100099',
+                'action' => 'R',
+                'moi_id' => 'HP:0000005',
+            ]),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_upload_gate($worksheet, $this->testSubmitter->id);
+
+        $this->assertNotNull(collect($errors)->firstWhere('error_type', 'republish_relationship_mismatch'));
+    }
+
+    /**
+     * @dataProvider invalidRepublishRelationshipValues
+     */
+    public function test_upload_gate_rejects_an_invalid_republish_relationship_value(
+        array $override,
+        string $errorType
+    ): void
+    {
+        $gene = Gene::where('hgnc_id', 'HGNC:5')->firstOrFail();
+        $disease = Disease::where('curie', 'MONDO:0000001')->firstOrFail();
+        $inheritance = Inheritance::where('curie', 'HP:0000006')->firstOrFail();
+        $classification = Classification::where('curie', 'GENCC:100001')->firstOrFail();
+
+        Submission::create([
+            'sid' => 'SGC-100098',
+            'gene_id' => $gene->id,
+            'disease_id' => $disease->id,
+            'original_disease_id' => $disease->id,
+            'inheritance_id' => $inheritance->id,
+            'classification_id' => $classification->id,
+            'submitter_id' => $this->testSubmitter->id,
+            'job_id' => 1,
+            'user_id' => 1,
+            'status' => Submission::STATUS_PUBLISHED,
+            'is_live' => true,
+            'submission_data' => (object) [],
+        ]);
+
+        $worksheet = $this->createValidSpreadsheet([
+            $this->createValidDataRow(array_merge([
+                'sgc_id' => 'SGC-100098',
+                'action' => 'R',
+            ], $override)),
+        ]);
+
+        $errors = SubmissionFileValidation::validate_upload_gate(
+            $worksheet,
+            $this->testSubmitter->id
+        );
+
+        $this->assertNotNull(collect($errors)->firstWhere('error_type', $errorType));
+    }
+
+    public static function invalidRepublishRelationshipValues(): array
+    {
+        return [
+            'gene' => [['hgnc_id' => 'NOT_A_GENE'], 'republish_invalid_gene'],
+            'disease' => [['disease_id' => 'NOT_A_DISEASE'], 'republish_invalid_disease'],
+            'mode of inheritance' => [['moi_id' => 'HP:9999999'], 'republish_invalid_moi'],
+        ];
     }
 }

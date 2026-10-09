@@ -46,6 +46,8 @@ class SubmissionController extends Controller
         $errors = false;
 
         $submissions = $this->getEffectiveSubmitter($request)->submissions()->forListing()->get();
+        // Listings show only shared-MONDO warnings; replacement advice is on each submission's page.
+        \App\Services\MondoRelationshipWarnings::attach($submissions, allOfSubmitter: true);
 
         // dd($submissions);
 
@@ -140,11 +142,13 @@ class SubmissionController extends Controller
             }
         }
 
+        \App\Services\SubmissionDiseaseAdvice::attach(collect([$submission]));
         return Inertia::render('Submission', [
             'submission' => $submission,
             'criterias' => $criteria_options,
             'hasSubmittedJob' => $hasSubmittedJob,
-            'unpublishedDuplicateWarning' => $unpublishedDuplicateWarning
+            'unpublishedDuplicateWarning' => $unpublishedDuplicateWarning,
         ]);
     }
+
 }

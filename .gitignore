@@ -27,6 +27,8 @@ php81.sh
 
 # PHPUnit and testing artifacts
 .phpunit.result.cache
+/storage/framework/disease-ontology-audit.lock
+/storage/framework/testing-disease-ontology-audit.lock
 
 # Vite dev server
 /public/hot
@@ -82,4 +84,3 @@ data/uniprot_sprot_human.dat
 deployment/ansible/gencc-prod-ansible-vault-passphrase.txt
 storage/.gcloud-credentials.json
 tmp/
-

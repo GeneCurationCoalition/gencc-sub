@@ -48,6 +48,12 @@ class JobController extends Controller
                                 $query->select('id', 'job_id', 'upload_state');
                             }])
                             ->withCount(['submissions'])
+                            ->withCount(['submissions as deprecated_disease_count' => function ($query) {
+                                $query->where(function ($q) {
+                                    $q->whereHas('disease', fn ($d) => $d->where('status', \App\Models\Disease::STATUS_DEPRECATED))
+                                        ->orWhereHas('originalDisease', fn ($d) => $d->where('status', \App\Models\Disease::STATUS_DEPRECATED));
+                                });
+                            }])
                             ->withCount(['submissions as published_or_staged_count' => function ($query) {
                                 $query->where('status', Submission::STATUS_PUBLISHED)
                                       ->orWhereNotNull('publish_date');
@@ -136,6 +142,8 @@ class JobController extends Controller
         }
 
         $submissions = $job->submissions()->forListing()->get();
+        // Listings show only shared-MONDO warnings; replacement advice is on each submission's page.
+        \App\Services\MondoRelationshipWarnings::attach($submissions);
 
         // Check if THIS specific job is submitted OR if there are ANY submitted jobs for this submitter
         // Used to disable bulk actions/checkboxes to prevent:

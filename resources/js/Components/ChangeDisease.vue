@@ -2,12 +2,16 @@
     import { ref, watch, computed } from 'vue'
     import { useForm } from 'vee-validate';
     import * as yup from 'yup';
+    import DiseaseReplacementAdvice from '@/Components/DiseaseReplacementAdvice.vue';
 
     const props = defineProps(['visible', 'input', 'title', 'label', 'apiError']);
 
     // component side validations
     const schema = yup.object({
-        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|Orphanet):[0-9]+$/gi, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
+        // Kept in step with the disease_id column regex in SubmissionFileValidation.php:
+        // 'ORPHA' is an accepted spelling of 'Orphanet', and dropping /g avoids yup
+        // reusing a stateful .test() lastIndex across submits
+        disease: yup.string().required().label('Disease ID').max(248).matches(/^(MONDO|OMIM|ORPHA|Orphanet):[0-9]+$/i, 'Please enter a valid MONDO, OMIM, or Orphanet ID'),
     });
 
     const { defineField, handleSubmit, resetForm, errors } = useForm({
@@ -23,6 +27,8 @@
     // other local vars
     const visible = defineModel('visible');
     const cardTitle = ref('');
+    const recommendations = ref([]);
+    const submittedId = ref('');
     const cardBody = ref('Enter a MONDO, OMIM, or Orphanet ID (Example: MONDO:0013212, OMIM:613287, or Orphanet:722) and click on search to view disease information before updating.');
 
     // both the child and parent can trigger visibility, so we need a watcher
@@ -35,7 +41,11 @@
      */
     async function checkEntry() {
         try {
-            const response = await axios.get('/api/lookup/disease/' + disease.value);
+            const searchedId = disease.value;
+            const response = await axios.get('/api/lookup/disease/' + searchedId);
+            if (disease.value !== searchedId) return;
+            recommendations.value = response.data.disease_recommendations || [];
+            submittedId.value = response.data.submitted_id || '';
 
             const nodata = response.data.hasOwnProperty('status_code');
 
@@ -60,6 +70,8 @@
     // Watch for value changes to clear API error
     watch(disease, () => {
         emit('clear_api_error');
+        recommendations.value = [];
+        submittedId.value = '';
     });
 
     /**
@@ -84,10 +96,6 @@
     function initializeInput()
     {
         disease.value = props.input;
-
-        // 001 is only used as a placeholder.  don't let it into the dialog
-        if (disease.value == "MONDO:0000001")
-            disease.value = "";
     }
 
 </script>
@@ -103,9 +111,9 @@
 
             <!-- API Error Display -->
             <div v-if="apiError" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
-                <p class="font-bold">Duplicate Submission</p>
+                <p class="font-bold">Unable to update disease</p>
                 <p class="text-sm">{{ apiError }}</p>
-                <p class="text-sm mt-2 italic">Consider modifying the existing submission or selecting a different disease.</p>
+                <a :href="route('help.disease-mapping')" target="_blank" class="mt-2 inline-block text-sm font-medium text-sky-800 underline">How disease mapping works</a>
             </div>
 
             <div class="grid grid-cols-4">
@@ -123,7 +131,10 @@
                     <div class="font-sm ml-2 italic">&nbsp;</div>
                 </div>
                 <div v-else class="flex items-center col-span-3">
-                    <small id="username-help" class="text-red-600">{{ errors.disease }}</small>
+                    <small id="username-help" class="text-red-600">
+                        {{ errors.disease }}
+                        <a :href="route('help.disease-mapping')" target="_blank" class="ml-1 font-medium text-sky-800 underline">Accepted disease identifiers</a>
+                    </small>
                 </div>
             </div>
 
@@ -136,6 +147,8 @@
                         </p>
                     </template>
                 </Card>
+                <p v-if="submittedId" class="text-sm">Submitted identifier: {{ submittedId }}. The preview above uses exact-match resolution, not replacement advice.</p>
+                <DiseaseReplacementAdvice :recommendations="recommendations" />
             </div>
                 
             <template #footer>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run gencc-sub audit:disease-ontologies inside container
+# No timer: started by gencc-sub-update-diseases.service (OnSuccess=) and by deploys.
+# The command refuses to run while update:diseases is running.
+
+[Service]
+Type=oneshot
+User={{ gencc_deploy_user }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ _gencc_deploy_uid.stdout }}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ _gencc_deploy_uid.stdout }}/bus
+ExecStart=/usr/bin/podman exec gencc-sub php artisan audit:disease-ontologies

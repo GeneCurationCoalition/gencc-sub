@@ -2,6 +2,10 @@
 
 ## Overview
 
+For the current upload gate and record-validation boundaries, see
+[Submission validation flow](SUBMISSION_VALIDATION_FLOW.md). The examples below
+include historical validation messages.
+
 This document provides a comprehensive reference for all validation errors that can occur during spreadsheet upload in the GenCC Submission Portal. The validation system now uses intelligent error grouping and short-circuit validation to provide clear, actionable feedback.
 
 ## Table of Contents
@@ -562,11 +566,10 @@ Rows: 14, 16
 **File:** `app/Services/SubmissionFileValidation.php`
 
 **Key Methods:**
-- `validate_spreadsheet()` - Main validation entry point
-- `validate_data_row()` - Field-level validation with short-circuit logic
+- `validate_upload_gate()` - File structure and action validation
+- `SubmissionValueValidation` - Shared record-level field rules
 - `validate_action_rules()` - Action-specific business rules
-- `validate_pmid_format()` - Fast PMID format validation
-- `validate_and_cache_pmids()` - Full PMID validation with PubMed lookup
+- `SubmissionValueValidation::pmids()` - Record-level PMID normalization
 - `validate_duplicate_sgc_ids()` - Checks for duplicate SGC IDs within spreadsheet
 - `validate_sgc_ids_batch()` - Batch validation of SGC IDs against submitter
 - `get_column_guidance()` - Provides column-specific help text

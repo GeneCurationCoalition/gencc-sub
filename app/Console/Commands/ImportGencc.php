@@ -103,9 +103,9 @@ class ImportGencc extends Command
                         throw new \Exception("Disease not found: {$row['disease_curie']}");
                     }
 
-                    // Original disease as submitted (could be MONDO, OMIM, or Orphanet)
-                    // Use disease_original_curie column and do DIRECT lookup to preserve the original disease type
-                    // Do NOT use rosetta() here as it resolves to MONDO
+                    // Original disease as submitted (could be MONDO, OMIM, or Orphanet).
+                    // A direct curie lookup, not resolution, so the source record is kept
+                    // rather than its MONDO equivalent
                     $original_disease = Disease::curie($row['disease_original_curie'])->first();
 
                     // If not found, fall back to the normalized disease

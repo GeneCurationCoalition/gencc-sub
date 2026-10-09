@@ -7,7 +7,63 @@
     - base
     - ops_scripts
     - mysql
+    - deployment_prepare
     - quadlet
     - db_bootstrap
     - nginx_tls
     - timers
+
+  post_tasks:
+    # A failure before post-tasks leaves the portal in maintenance mode, search
+    # stopped, and the queue worker stopped for inspection.
+    - name: Restart search after a maintenance-mode deployment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        systemctl --user start gencc-search.service
+      args:
+        executable: /bin/bash
+      become_user: "{{ gencc_deploy_user }}"
+      when: gencc_deploy_with_maintenance_mode | bool
+
+    - name: Clear search release cache markers after restarting search
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-search php artisan releases:clear-cache'
+      args:
+        executable: /bin/bash
+      failed_when: false
+      when:
+        - gencc_deploy_with_maintenance_mode | bool
+        - gencc_should_regenerate_exports | bool
+
+    - name: Restart the application queue worker after a maintenance-mode deployment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub pm2 restart gencc-queue-worker'
+      args:
+        executable: /bin/bash
+      when: gencc_deploy_with_maintenance_mode | bool
+
+    - name: Start scheduled timers after a maintenance-mode deployment
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - gencc-sub-pubmed-sync.timer
+        - gencc-sub-update-genes.timer
+        - gencc-sub-update-diseases.timer
+        - gencc-sub-release.timer
+        - gencc-backup-db.timer
+      when:
+        - gencc_deploy_with_maintenance_mode | bool
+        - gencc_enable_timers | bool
+
+    - name: Leave application maintenance mode after a successful deployment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -iu {{ gencc_deploy_user }} bash -lc 'export XDG_RUNTIME_DIR="/run/user/$(id -u {{ gencc_deploy_user }})"; podman exec gencc-sub php artisan up'
+      args:
+        executable: /bin/bash
+      when: gencc_deploy_with_maintenance_mode | bool
