@@ -728,7 +728,8 @@ class DocumentController extends Controller
         }
 
         // Import Excel file with processed headers for data processing
-        $worksheets = Excel::toCollection(new SubmissionImport, $tempPath);
+        $import = new SubmissionImport;
+        $worksheets = Excel::toCollection($import, $tempPath);
         $firstsheet = $worksheets[0];
 
         // Clean up temp file now that we've loaded it into memory
@@ -974,7 +975,8 @@ class DocumentController extends Controller
             $data->evidence_items = $rawPmids === '' ? [] : [$rawPmids];
 
             $data->notes_display = $row['notes'];
-            $data->notes_private = "File " . $document->file_name . " Row " . $rownum;
+            // The collection starts after the worksheet's heading row.
+            $data->notes_private = "File " . $document->file_name . " Row " . ($rownum + $import->headingRow());
 
             // Capture submitter info for original_submission_data
             $data->submitter_curie = $document->submitter->curie ?? '';
