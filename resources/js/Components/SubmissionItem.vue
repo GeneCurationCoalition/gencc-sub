@@ -1168,7 +1168,7 @@ console.log(props.submission)
                 <p class="mt-1">
                     Fields with errors are highlighted below in red.  Click on the field edit button to correct.
                     For a submission to be published to GenCC, all errors must be resolved.
-                    Once all errors have been cleared, the system will automatically stage the submission for publishing.
+                    After resolving all errors in the job, submit the job for publication in the next GenCC release.
                 </p>
             </div>
             <!-- Obsolete disease term warning banner - informational, never blocking -->
