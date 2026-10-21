@@ -43,3 +43,4 @@
   loop:
     - zz-security-hardening.ini
     - zz-security-hardening.conf
+    - zz-security-search-pool.conf

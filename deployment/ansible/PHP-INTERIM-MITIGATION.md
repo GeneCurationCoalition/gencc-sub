@@ -56,16 +56,22 @@ mitigations. Neither playbook has been executed as part of preparing this branch
 | Host nginx | Portal body limit 8 MiB; search 1 MiB | Bounds request bodies, including chunked requests. Portal JSON submissions exceeding 8 MiB fail with 413; response downloads are unaffected. |
 | PHP startup INI | `session.upload_progress.enabled=Off` | Disables native upload-progress processing before request parsing. |
 | FPM pool | `pm.max_requests=1` | A worker handles one request then exits; this breaks documented same-worker, later-request stale-state sequences. Increased process churn can reduce throughput. |
+| Search FPM pool | `pm.max_children=25` | Reduces maximum concurrent PHP requests from 50; excess requests wait subject to backlog and timeout limits. Portal concurrency is unchanged. |
 | FPM pool | `php_admin_value[memory_limit]=-1` | Removes PHP's predictable memory-limit failure; application `ini_set()` cannot restore a finite value. Does not eliminate underlying allocation failures. |
 | FPM pool | `post_max_size=8M`, `upload_max_filesize=2M` | Conservative body limits with upload size below POST size. Multipart remains blocked at nginx. |
 | FPM pool | `max_input_vars=1000`, `max_input_nesting_level=32` | Retains the field-count bound and reduces nesting from 64. Does not limit arbitrary JSON decoding or all allocations caused by application code. |
 | Quadlet/Podman | Portal 3072 MiB; search 2048 MiB | Kernel cgroup limits apply before any container processes start. Includes FPM, nginx, queues, and process managers. |
 
-The `quadlet` role writes two root-owned files under `gencc_php_config_dir`
-(default `/etc/gencc/php`) and mounts them read-only into **both** containers:
+The `quadlet` role writes root-owned files under `gencc_php_config_dir`
+(default `/etc/gencc/php`). These two are mounted read-only into **both** containers:
 
 - `zz-security-hardening.ini` → `/usr/local/etc/php/conf.d/zz-security-hardening.ini`
 - `zz-security-hardening.conf` → `/usr/local/etc/php-fpm.d/zz-security-hardening.conf`
+
+Search also mounts `zz-security-search-pool.conf` read-only at
+`/usr/local/etc/php-fpm.d/zz-security-search-pool.conf` to limit concurrency to 25.
+Its existing dynamic-pool settings (10 starting workers, 5 minimum and 20 maximum
+spare workers) remain compatible with this limit.
 
 These survive container replacement and VM reboot because the files live on the
 host and the mounts are in the Quadlet units. They supersede the previous
@@ -87,7 +93,7 @@ enough physical RAM for both caps plus at least 2 GiB for host services. The
 approximately 8 GiB VMs leave roughly 2.75 GiB outside the two app budgets.
 
 These are temporary incident budgets, not validated peak-workload capacity.
-Concurrent exports or imports may hit them. Search still permits 50 concurrent
+Concurrent exports or imports may hit them. Search permits up to 25 concurrent
 FPM children. A cgroup OOM may kill another process in the same container, not
 necessarily the offending request, and does not guarantee prevention of all
 allocation failures. No per-worker cgroup isolation is implemented.
