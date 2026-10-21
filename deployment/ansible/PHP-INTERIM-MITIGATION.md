@@ -156,13 +156,13 @@ not expose a public diagnostic route.
 settings are not replaced. Shared host/nginx roles still reconcile their normal
 configuration; verify search externally after each phase.
 
-From `deployment/ansible`, deploy staging in two phases. Phase one overrides the
-staging inventory's public-routing setting to keep the maintenance page active
-through the runtime replacement and post-start verification:
+From `deployment/ansible`, deploy an existing staging VM in two phases. Phase
+one preserves its live environment and keeps the existing maintenance page active
+through runtime replacement and post-start verification. It does not reconcile
+MySQL, migrate/restore data, or change timers:
 
 ```sh
-ansible-playbook -i inventories/staging.ini playbooks/site.yml --ask-vault-pass \
-  -e '{"gencc_deploy_apps":["gencc-sub"],"gencc_php_incident_portal_offline":true}'
+ansible-playbook -i inventories/staging.ini playbooks/portal-runtime.yml --ask-vault-pass
 # After the patched CLI/FPM checks and local portal application checks pass:
 ansible-playbook -i inventories/staging.ini playbooks/php-incident-edge.yml --ask-vault-pass
 ```
