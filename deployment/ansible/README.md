@@ -70,7 +70,9 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 **Interim PHP CVE mitigation (October 2026)** — Ansible installs host-managed PHP
 configuration into both containers, enforces container memory budgets, replaces
 FPM workers after each request, and rejects multipart requests in every nginx
-server block. No PHP image upgrade is included. See
+server block. Both public portals default to a static nginx 503 maintenance
+notice. `playbooks/php-incident-edge.yml` applies only the edge role on an existing
+VM, without application/container deployment or database work. No PHP image upgrade is included. See
 [PHP-INTERIM-MITIGATION.md](PHP-INTERIM-MITIGATION.md) for settings, operational
 tradeoffs, local validation, and coordinated removal after patching PHP.
 

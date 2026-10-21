@@ -1,4 +1,4 @@
-  # Interim PHP mitigation: reject multipart before any proxying or redirect.
+  # PHP INCIDENT 2026-10: reject multipart before any proxying or redirect.
   if ($http_content_type ~* "multipart/form-data") {
     return 415;
   }

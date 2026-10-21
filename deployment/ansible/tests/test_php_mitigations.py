@@ -1,10 +1,11 @@
 """Local-only deployment checks; never connect to an inventory host.
 
-Requires Jinja2/PyYAML (included with ansible-core). Optional container tests use
+Requires ansible-core (including Jinja2/PyYAML). Optional container tests use
 already cached images, override their entrypoints, and never pull images.
 See ../PHP-INTERIM-MITIGATION.md for invocation and limitations.
 """
 import http.client
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import unittest
 
 import jinja2
 import yaml
+from ansible.plugins.filter.core import to_bool
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ROOT / 'roles/quadlet/files'
@@ -33,6 +35,7 @@ def context(environment):
 def render(role, name, values):
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(ROOT / f'roles/{role}/templates'),
                              undefined=jinja2.StrictUndefined, trim_blocks=True)
+    env.filters['bool'] = to_bool
     return env.get_template(name).render(values)
 
 
@@ -44,6 +47,42 @@ def command(*args):
 
 
 class Templates(unittest.TestCase):
+    def test_deployment_assertions_accept_maintenance_and_restored_routes(self):
+        tasks = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/php_incident_validate.yml').read_text())
+        tasks += [task for task in yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/main.yml').read_text())
+                  if task['name'] == 'Assert hardened HTTPS nginx config is rendered']
+        env = jinja2.Environment()
+        env.filters['bool'] = to_bool
+        for offline in [True, False]:
+            values = context('production') | {'gencc_php_incident_portal_offline': offline}
+            config = render('nginx_tls', 'gencc-https.conf.j2', values)
+            values['gencc_nginx_rendered_config'] = {'stdout': config}
+            for task in tasks:
+                if task['name'] == 'Require static portal maintenance with no portal upstream' and not offline:
+                    continue
+                for expression in task['ansible.builtin.assert']['that']:
+                    self.assertTrue(env.compile_expression(expression)(**values), expression)
+
+    def test_incident_edge_entrypoint_excludes_application_deployment(self):
+        play = yaml.safe_load((ROOT / 'playbooks/php-incident-edge.yml').read_text())[0]
+        self.assertEqual(play['roles'], ['nginx_tls'])
+        self.assertFalse(play.get('tasks') or play.get('pre_tasks') or play.get('post_tasks'))
+
+    def test_portal_offline_removes_every_upstream_and_can_be_reversed(self):
+        for environment in ['staging', 'production']:
+            values = context(environment)
+            self.assertTrue(values['gencc_php_incident_portal_offline'])
+            for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
+                for offline in [True, False]:
+                    with self.subTest(environment=environment, template=template, offline=offline):
+                        config = render('nginx_tls', template, values | {'gencc_php_incident_portal_offline': offline})
+                        self.assertEqual('proxy_pass http://127.0.0.1:8080;' not in config, offline)
+                        self.assertIn('proxy_pass http://127.0.0.1:8081;', config)
+                        self.assertEqual('return 503' in config, offline)
+                        if offline:
+                            self.assertIn('default_type text/plain;', config)
+                            self.assertIn('https://www.php.net/archive/2026.php#2026-10-21-5', config)
+
     def test_every_http_tls_and_redirect_server_rejects_multipart_first(self):
         for environment in ['staging', 'production']:
             values = context(environment)
@@ -70,7 +109,7 @@ class Templates(unittest.TestCase):
                     self.assertIn(f'Volume={values["gencc_php_config_dir"]}/{filename}:/usr/local/etc/{destination}/{filename}:ro', config)
 
     def test_memory_budget_guard_accepts_vm_and_rejects_unbounded_or_oversized_caps(self):
-        task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/main.yml').read_text())[0]
+        task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_prepare.yml').read_text())[0]
         env = jinja2.Environment()
         conditions = [env.compile_expression(c) for c in task['ansible.builtin.assert']['that']]
         values = DEFAULTS | {'ansible_facts': {'memtotal_mb': 7937}}
@@ -157,7 +196,8 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
         acme = self.directory / 'acme/.well-known/acme-challenge'
         acme.mkdir(parents=True)
         (acme / 'test').write_text('challenge')
-        for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
+        for template, offline in product(['gencc-http.conf.j2', 'gencc-https.conf.j2'], [False, True]):
+            values['gencc_php_incident_portal_offline'] = offline
             config = render('nginx_tls', template, values)
             config = config.replace('/etc/nginx/snippets/', '/test/')
             config = config.replace('/etc/letsencrypt/live/gencc-prod/', '/test/')
@@ -177,8 +217,18 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
                     for content_type in ['multipart/form-data; boundary=test', 'MuLtIpArT/FoRm-DaTa']:
                         self.assertEqual(http_status(ports, host, tls, content_type=content_type), 415)
             tls = template == 'gencc-https.conf.j2'
-            for host in hosts[:2]:
-                self.assertEqual(http_status(ports, host, tls, content_type='application/json'), 200)
+            self.assertEqual(http_status(ports, hosts[0], tls, content_type='application/json'), 503 if offline else 200)
+            self.assertEqual(http_status(ports, hosts[1], tls, content_type='application/json'), 200)
+            if offline:
+                for path in ['/', '/login', '/api/submit', '/api/pubmed', '/index.php', '/-/healthz']:
+                    status, headers, body = http_status(ports, hosts[0], tls, path=path, details=True)
+                    self.assertEqual(status, 503)
+                    self.assertEqual(headers['Content-Type'], 'text/plain')
+                    self.assertEqual(headers['Cache-Control'], 'no-store')
+                    self.assertIn('temporarily down for maintenance', body)
+                    self.assertIn('https://www.php.net/archive/2026.php#2026-10-21-5', body)
+                    if tls:
+                        self.assertIn('Strict-Transport-Security', headers)
             self.assertEqual(http_status(ports, hosts[0], False, path='/.well-known/acme-challenge/test'), 200)
             self.assertEqual(http_status(ports, hosts[0], tls, oversized_length=8*1024*1024+1), 413)
             self.assertEqual(http_status(ports, hosts[1], tls, chunked=True), 413)
@@ -218,7 +268,7 @@ def fastcgi(port):
     return json.loads(output.split(b'\r\n\r\n', 1)[1])
 
 
-def http_status(ports, host, tls, content_type=None, path='/-/healthz', oversized_length=None, chunked=False):
+def http_status(ports, host, tls, content_type=None, path='/-/healthz', oversized_length=None, chunked=False, details=False):
     if tls:
         connection = http.client.HTTPSConnection('127.0.0.1', ports[443], context=ssl._create_unverified_context(), timeout=10)
     else:
@@ -237,7 +287,10 @@ def http_status(ports, host, tls, content_type=None, path='/-/healthz', oversize
             if content_type:
                 headers['Content-Type'] = content_type
             connection.request('POST' if content_type else 'GET', path, body=b'{}' if content_type else None, headers=headers)
-        return connection.getresponse().status
+        response = connection.getresponse()
+        if details:
+            return response.status, dict(response.getheaders()), response.read().decode()
+        return response.status
     finally:
         connection.close()
 

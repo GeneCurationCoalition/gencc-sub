@@ -1,0 +1,25 @@
+---
+# PHP INCIDENT 2026-10: remove with the corresponding nginx templates.
+- name: Assert interim PHP multipart rejection is installed
+  ansible.builtin.assert:
+    that:
+      - "'if ($http_content_type ~* \"multipart/form-data\")' in gencc_nginx_rendered_config.stdout"
+      - "'return 415;' in gencc_nginx_rendered_config.stdout"
+      - "'client_max_body_size 8m;' in gencc_nginx_rendered_config.stdout"
+      - "'client_max_body_size 1m;' in gencc_nginx_rendered_config.stdout"
+    fail_msg: "Rendered nginx config is missing interim PHP request restrictions."
+
+- name: Require static portal maintenance with no portal upstream
+  ansible.builtin.assert:
+    that:
+      - "'return 503' in gencc_nginx_rendered_config.stdout"
+      - "'default_type text/plain;' in gencc_nginx_rendered_config.stdout"
+      - "'https://www.php.net/archive/2026.php#2026-10-21-5' in gencc_nginx_rendered_config.stdout"
+      - >-
+        ('proxy_pass http://127.0.0.1:' ~ (gencc_sub_port | string) ~ ';')
+        not in gencc_nginx_rendered_config.stdout
+      - >-
+        ('proxy_pass http://127.0.0.1:' ~ (gencc_search_port | string) ~ ';')
+        in gencc_nginx_rendered_config.stdout
+    fail_msg: "Portal maintenance must remove every portal upstream while retaining search routing."
+  when: gencc_php_incident_portal_offline | bool

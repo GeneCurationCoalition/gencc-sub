@@ -11,10 +11,12 @@ PublishPort=127.0.0.1:{{ gencc_search_port }}:80
 Environment=DB_HOST={{ gencc_container_db_host }}
 Volume={{ gencc_secrets_dir }}/gencc-search.env:/var/www/html/.env:ro
 Volume={{ gencc_data_dir }}/gencc-search/storage:/var/www/html/storage
+# BEGIN PHP INCIDENT 2026-10: mounts and cap must be removed together safely.
 Volume={{ gencc_php_config_dir }}/zz-security-hardening.ini:/usr/local/etc/php/conf.d/zz-security-hardening.ini:ro
 Volume={{ gencc_php_config_dir }}/zz-security-hardening.conf:/usr/local/etc/php-fpm.d/zz-security-hardening.conf:ro
 # Apply the cgroup cap before starting PHP with memory_limit=-1.
 PodmanArgs=--memory={{ gencc_search_memory_limit_mb }}m
+# END PHP INCIDENT 2026-10
 
 [Service]
 Restart=always

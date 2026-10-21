@@ -5,6 +5,49 @@ PHP remains unpatched. It does **not** completely mitigate either vulnerability.
 It applies to gencc-sub and gencc-search on both staging and production through
 the normal `playbooks/site.yml` deployment. It does not manage web1–web4.
 
+## Portal maintenance
+
+`gencc_php_incident_portal_offline: true` is enabled in shared inventory defaults,
+so both `portal-stage.thegencc.org` and `portal.thegencc.org` serve a static nginx
+maintenance response after the configuration is deployed. The response uses
+HTTP 503, `Content-Type: text/plain`, and `Cache-Control: no-store`:
+
+```text
+The GenCC Submission Portal is temporarily down for maintenance.
+
+We are addressing PHP security vulnerabilities. For details, see:
+https://www.php.net/archive/2026.php#2026-10-21-5
+```
+
+Every portal upstream is omitted, including API, authentication, PHP paths, and
+`/-/healthz`. No PHP or Laravel execution is needed to serve the notice. Ordinary
+HTTP requests still redirect to HTTPS when TLS is configured; the HTTP-only
+bootstrap configuration serves the notice directly. ACME HTTP-01 challenges
+remain available. Multipart requests still receive the existing 415 rejection;
+oversized/malformed requests may be rejected before the notice.
+
+This takes the **public portal** offline. It does not stop its container, queues,
+scheduled jobs, or localhost-only backend. Search routing remains enabled with
+the incident protections. Search remains an exposed unpatched PHP application.
+
+For an already-provisioned VM, `playbooks/php-incident-edge.yml` invokes only the
+`nginx_tls` role, allowing the portal to be closed before any app deployment. It
+does not run database migrations, replace containers, or stop background jobs.
+It also reconciles the role's existing nginx/certbot/fail2ban configuration and
+packages; it does not install the separate PHP/FPM/container-cap changes.
+Commands for a later authorized rollout, from `deployment/ansible`:
+
+```sh
+ansible-playbook -i inventories/staging.ini playbooks/php-incident-edge.yml --ask-vault-pass
+ansible-playbook -i inventories/production.ini playbooks/php-incident-edge.yml --ask-vault-pass
+```
+
+The full `site.yml` deployment also retains maintenance mode. Its final Laravel
+`artisan up` task cannot reopen nginx routing. After patched runtime validation,
+set `gencc_php_incident_portal_offline: false` for the intended environment and
+reapply the edge playbook to restore normal routes while retaining other incident
+mitigations. Neither playbook has been executed as part of preparing this branch.
+
 ## Settings and persistence
 
 | Layer | Setting | Purpose / impact |
@@ -56,8 +99,10 @@ setting is not introduced before the cap. Deployment verifies actual
 syntax-checked and its rendered request restrictions asserted before the final
 reload. Startup of the new containers replaces every old FPM worker.
 
-Deploy to staging first using the existing runbook. Check login, search/Livewire,
-small JSON API requests, downloads, exports, and background jobs. Confirm
+Deploy to staging first using the existing runbook. Confirm the public portal
+returns the static maintenance notice, including API and health paths. Check
+search/Livewire, downloads, exports, and background jobs. Portal login/API checks
+must use an isolated validation setup while public routing is disabled. Confirm
 multipart rejection, inspect `memory.events`, and watch worker churn, latency,
 and 5xx responses before production. Local smoke tests do not establish workload
 capacity. This branch does not deploy itself or change image pins.
@@ -75,8 +120,8 @@ capacity. This branch does not deploy itself or change image pins.
 
 ## Local validation (no VM access)
 
-Use a Python environment with Jinja2 and PyYAML, such as the environment containing
-ansible-core. From the repository root:
+Use a Python environment containing ansible-core (including Jinja2 and PyYAML).
+From the repository root:
 
 ```sh
 python deployment/ansible/tests/test_php_mitigations.py
@@ -101,7 +146,28 @@ settings, failed attempts to override the memory limit, unique worker PIDs per
 request, caps/settings after container restart, HTTP/HTTPS multipart rejection,
 redirect ordering, ACME accessibility, ordinary JSON requests, and oversized
 declared/chunked bodies. Template tests cover both inventories and optional
-redirects, and reject unsafe memory budget configurations.
+redirects, reject unsafe memory budget configurations, and exercise both portal
+maintenance and restored routing. Maintenance response tests include API, login,
+health, and PHP paths; they assert plain text, no-store, and the advisory URL.
+
+## Incident change boundaries
+
+Search for `PHP INCIDENT 2026-10` to find the temporary deployment changes:
+
+- Shared defaults group the portal toggle, configuration path, and memory budgets.
+- `roles/quadlet/tasks/php_incident_prepare.yml` and `php_incident_verify.yml`
+  contain incident tasks, imported at the required points in the main role.
+- Both Quadlet templates mark the temporary mounts and memory caps together.
+- The two `zz-security-hardening` files contain only incident configuration.
+- nginx templates isolate rejection and maintenance in `gencc-php-mitigation`
+  and `gencc-portal-maintenance` includes and label request-size limits.
+- `roles/nginx_tls/tasks/php_incident_validate.yml` contains incident assertions;
+  normal HTTPS validation permits the portal-specific routes to be absent while
+  maintenance mode is enabled.
+- `playbooks/php-incident-edge.yml` is the incident-specific edge entrypoint.
+
+Use the coordinated removal order below; deleting only the cap or only the
+maintenance response is not a safe rollback of the remaining configuration.
 
 ## Removal / rollback
 

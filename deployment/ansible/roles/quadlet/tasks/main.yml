@@ -1,46 +1,8 @@
 ---
-- name: Require finite container memory budgets with room for host services
-  ansible.builtin.assert:
-    that:
-      - gencc_sub_memory_limit_mb | int > 0
-      - gencc_search_memory_limit_mb | int > 0
-      - gencc_host_memory_reserve_mb | int >= 2048
-      - >-
-        (gencc_sub_memory_limit_mb | int + gencc_search_memory_limit_mb | int
-        + gencc_host_memory_reserve_mb | int) <= ansible_facts.memtotal_mb
-    fail_msg: >-
-      FPM memory_limit=-1 requires finite container caps and at least 2 GiB
-      reserved for host services. Check the GenCC memory budget variables.
-
-- name: Check for cgroup v2 memory controller
-  ansible.builtin.slurp:
-    src: /sys/fs/cgroup/cgroup.controllers
-  register: gencc_cgroup_controllers
-
-- name: Require cgroup v2 memory limits for rootless PHP containers
-  ansible.builtin.assert:
-    that:
-      - "'memory' in (gencc_cgroup_controllers.content | b64decode).split()"
-    fail_msg: "Refusing unlimited FPM memory without the cgroup v2 memory controller."
-
-- name: Create host-managed PHP mitigation configuration directory
-  ansible.builtin.file:
-    path: "{{ gencc_php_config_dir }}"
-    state: directory
-    owner: root
-    group: "{{ gencc_deploy_user }}"
-    mode: "0755"
-
-- name: Install persistent PHP mitigation configuration for both applications
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "{{ gencc_php_config_dir }}/{{ item }}"
-    owner: root
-    group: "{{ gencc_deploy_user }}"
-    mode: "0644"
-  loop:
-    - zz-security-hardening.ini
-    - zz-security-hardening.conf
+# BEGIN PHP INCIDENT 2026-10 (see PHP-INTERIM-MITIGATION.md)
+- name: Prepare interim PHP incident mitigations
+  ansible.builtin.import_tasks: php_incident_prepare.yml
+# END PHP INCIDENT 2026-10
 
 - name: Write application .env files from vault
   ansible.builtin.copy:
@@ -111,35 +73,7 @@
     executable: /bin/bash
   become_user: "{{ gencc_deploy_user }}"
 
-- name: Verify actual container memory caps after startup
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec {{ item.name }} cat /sys/fs/cgroup/memory.max
-  args:
-    executable: /bin/bash
-    chdir: /
-  become_user: "{{ gencc_deploy_user }}"
-  loop:
-    - { name: gencc-sub, memory_mb: "{{ gencc_sub_memory_limit_mb }}" }
-    - { name: gencc-search, memory_mb: "{{ gencc_search_memory_limit_mb }}" }
-  register: gencc_memory_cap_check
-  changed_when: false
-  failed_when: >-
-    gencc_memory_cap_check.rc != 0 or
-    (gencc_memory_cap_check.stdout | trim) != ((item.memory_mb | int * 1048576) | string)
-
-- name: Validate PHP-FPM configuration after mounting mitigation files
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec {{ item }} php-fpm -t
-    podman exec {{ item }} php -r 'exit(in_array(ini_get("session.upload_progress.enabled"), ["", "0"], true) ? 0 : 1);'
-  args:
-    executable: /bin/bash
-    chdir: /
-  become_user: "{{ gencc_deploy_user }}"
-  loop:
-    - gencc-sub
-    - gencc-search
-  changed_when: false
+# BEGIN PHP INCIDENT 2026-10
+- name: Verify interim PHP incident mitigations
+  ansible.builtin.import_tasks: php_incident_verify.yml
+# END PHP INCIDENT 2026-10

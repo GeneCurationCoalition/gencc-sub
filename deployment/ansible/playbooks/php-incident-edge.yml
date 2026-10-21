@@ -1,0 +1,9 @@
+---
+# PHP INCIDENT 2026-10: narrow entrypoint for already-provisioned GenCC VMs.
+# Apply nginx routing/notice and existing edge security without app deployments,
+# database work, queue changes, or container restarts. No tasks run automatically.
+- name: Apply GenCC PHP incident edge configuration
+  hosts: gcp_vms
+  become: true
+  roles:
+    - nginx_tls
