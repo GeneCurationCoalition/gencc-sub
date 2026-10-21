@@ -360,14 +360,6 @@ GET /api/query/job/{job_id}
 
 See [DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed production deployment instructions.
 
-For the October 2026 PHP incident, follow the
-[patched portal rollout and rollback procedure](deployment/ansible/PHP-INTERIM-MITIGATION.md#patched-portal-rollout-verify-first-restore-routing-second).
-Staging selects portal image `2.3.0` with patched PHP 8.3.36; production retains
-maintenance and interim protections until a separately verified rollout. Deploy
-the portal with `gencc_deploy_apps: ['gencc-sub']`, keep the public maintenance
-page enabled through runtime verification, then restore routing with the edge
-playbook. Search keeps its incident protections.
-
 ### Quick Deploy
 ```bash
 # Pull latest changes

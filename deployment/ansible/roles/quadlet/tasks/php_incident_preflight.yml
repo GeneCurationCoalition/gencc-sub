@@ -43,7 +43,7 @@
   become_user: "{{ gencc_deploy_user }}"
   register: gencc_php_incident_candidate
 
-- name: Validate both candidate images without application entrypoints or data
+- name: Validate selected images without application entrypoints or data
   block:
     - name: Stage candidate PHP incident files separately from active mounts
       ansible.builtin.copy:
@@ -55,7 +55,6 @@
         - zz-security-hardening.ini
         - zz-security-hardening.conf
         - zz-security-search-pool.conf
-        - php-incident-verify.php
 
     - name: Ensure intended images are available before downtime
       ansible.builtin.shell: |
@@ -79,6 +78,10 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        {% if item.mode == 'patched' %}
+        podman run --rm -i --pull=never --network=none --entrypoint=/bin/sh \
+          {{ item.image | quote }} -c 'php /dev/stdin && php-fpm -t'
+        {% else %}
         cid=''
         cleanup() {
           rc=$?
@@ -90,20 +93,19 @@
         }
         trap cleanup EXIT
         cid=$(podman run -d --pull=never --network=none --entrypoint=php-fpm \
-        {% if item.mode == 'mitigated' %}
           --memory={{ item.memory_mb }}m \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.ini:/usr/local/etc/php/conf.d/zz-security-hardening.ini:ro') | quote }} \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.conf:/usr/local/etc/php-fpm.d/zz-security-hardening.conf:ro') | quote }} \
-        {% endif %}
         {% if item.name == 'gencc-search' %}
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-search-pool.conf:/usr/local/etc/php-fpm.d/zz-security-search-pool.conf:ro') | quote }} \
         {% endif %}
           {{ item.image | quote }} -F)
-        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} {{ item.mode }} \
-          < {{ (gencc_php_incident_candidate.path ~ '/php-incident-verify.php') | quote }}
+        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }}
+        {% endif %}
       args:
         executable: /bin/bash
         chdir: /
+        stdin: "{{ lookup('file', role_path ~ '/files/' ~ ('php-patched-version.php' if item.mode == 'patched' else 'php-incident-verify.php')) }}"
       become_user: "{{ gencc_deploy_user }}"
       loop: "{{ gencc_php_incident_targets }}"
       loop_control:

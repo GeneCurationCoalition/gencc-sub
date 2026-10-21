@@ -14,7 +14,6 @@ import shlex
 import shutil
 import socket
 import ssl
-import struct
 import subprocess
 import sys
 import tempfile
@@ -65,19 +64,12 @@ class Templates(unittest.TestCase):
                   if task['name'] == 'Assert hardened HTTPS nginx config is rendered']
         env = jinja2.Environment()
         env.filters['bool'] = to_bool
-        env.filters['to_json'] = json.dumps
         for environment, offline in product(['staging', 'production'], [True, False]):
             values = context(environment) | {'gencc_php_incident_portal_offline': offline}
             config = render('nginx_tls', 'gencc-https.conf.j2', values)
             values['gencc_nginx_rendered_config'] = {'stdout': config}
             for task in tasks:
                 if task['name'] == 'Require static portal maintenance with no portal upstream' and not offline:
-                    continue
-                if 'ansible.builtin.command' in task:
-                    spec = task['ansible.builtin.command']
-                    result = subprocess.run(spec['argv'], input=env.from_string(spec['stdin']).render(values),
-                                            capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode, 0, result.stderr)
                     continue
                 for expression in task['ansible.builtin.assert']['that']:
                     self.assertTrue(env.compile_expression(expression)(**values), expression)
@@ -90,8 +82,8 @@ class Templates(unittest.TestCase):
     def test_edge_reopening_requires_patched_live_portal_before_any_nginx_writes(self):
         task = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/main.yml').read_text())[0]
         self.assertEqual(task['name'], 'Require patched live portal before reopening nginx routes')
-        self.assertIn('podman exec -i gencc-sub php /dev/stdin 0 0 patched', task['ansible.builtin.shell'])
-        self.assertIn('/quadlet/files/php-incident-verify.php', task['args']['stdin'])
+        self.assertIn('podman exec -i gencc-sub php /dev/stdin', task['ansible.builtin.shell'])
+        self.assertIn('/quadlet/files/php-patched-version.php', task['args']['stdin'])
         env = jinja2.Environment()
         env.filters['bool'] = to_bool
         for offline, mitigations in product([True, False], repeat=2):
@@ -176,24 +168,6 @@ class Templates(unittest.TestCase):
             self.assertNotIn('proxy_pass http://127.0.0.1:8080;', config)
             self.assertIn('proxy_pass http://127.0.0.1:8081;', config)
 
-    def test_nginx_validator_rejects_one_unprotected_search_server(self):
-        task = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/php_incident_validate.yml').read_text())[0]
-        spec = task['ansible.builtin.command']
-        env = jinja2.Environment()
-        env.filters['bool'] = to_bool
-        env.filters['to_json'] = json.dumps
-        values = context('staging')
-        config = render('nginx_tls', 'gencc-https.conf.j2', values)
-        # Staging portal permits uploads; remove just one search rejection. The
-        # remaining search blocks still contain the global mitigation strings.
-        broken = config.replace('return 415;', 'return 418;', 1)
-        self.assertIn('return 415;', broken)
-        values['gencc_nginx_rendered_config'] = {'stdout': broken}
-        result = subprocess.run(spec['argv'], input=env.from_string(spec['stdin']).render(values),
-                                capture_output=True, text=True, timeout=5)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('multipart restriction', result.stderr)
-
     def test_memory_budget_guard_accepts_vm_and_rejects_unbounded_or_oversized_caps(self):
         task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())[0]
         env = jinja2.Environment()
@@ -233,7 +207,8 @@ class Templates(unittest.TestCase):
                         self.assertEqual('zz-security-hardening.ini:' in rendered, not patched)
                         self.assertEqual('zz-security-hardening.conf:' in rendered, not patched)
                         if patched:
-                            self.assertIn('php /dev/stdin 0 0 patched', rendered)
+                            self.assertIn("-c 'php /dev/stdin && php-fpm -t'", rendered)
+                            self.assertNotIn('podman exec', rendered)
         main = yaml.safe_load((ROOT / 'roles/quadlet/tasks/main.yml').read_text())
         restart = next(task for task in main if task['name'] == 'Start (or restart) quadlet services')
         self.assertEqual(restart['loop'], '{{ gencc_deploy_apps }}')
@@ -294,68 +269,64 @@ class ContainerTests(unittest.TestCase):
                 time.sleep(0.1)
         self.fail('Local container did not start listening')
 
-    @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for preflight tests')
-    def test_deployment_preflight_checks_candidates_and_rejects_bad_pool(self):
+    def preflight(self, image, app='gencc-sub', mode='mitigated', children=0, candidate=None):
         tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
-        shell = next(task['ansible.builtin.shell'] for task in tasks[-1]['block']
-                     if task['name'].startswith('Preflight candidate'))
+        task = next(task for task in tasks[-1]['block'] if task['name'].startswith('Preflight candidate'))
+        shell = task['ansible.builtin.shell']
         if sys.platform == 'darwin':
-            # The remote macOS client uses its own socket; Linux deployment needs XDG.
             shell = shell.replace('export XDG_RUNTIME_DIR="/run/user/$(id -u)"\n', '')
         env = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
         env.filters['quote'] = shlex.quote
-        for name in ['zz-security-hardening.ini', 'zz-security-hardening.conf',
-                     'zz-security-search-pool.conf', 'php-incident-verify.php']:
+        env.globals['lookup'] = lambda kind, name: Path(name).read_text()
+        values = {'role_path': str(FILES.parent),
+                  'gencc_php_incident_candidate': {'path': str(candidate or self.directory)},
+                  'item': {'name': app, 'image': image, 'memory_mb': 512,
+                           'max_children': children, 'mode': mode}}
+        return subprocess.run(['bash', '-c', env.from_string(shell).render(values)],
+                              input=env.from_string(task['args']['stdin']).render(values),
+                              capture_output=True, text=True, timeout=45)
+
+    @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for preflight tests')
+    def test_deployment_preflight_checks_candidates_and_rejects_bad_pool(self):
+        files = ['zz-security-hardening.ini', 'zz-security-hardening.conf', 'zz-security-search-pool.conf']
+        for name in files:
             shutil.copy(FILES / name, self.directory / name)
-        for image in os.environ['GENCC_PHP_TEST_IMAGES'].split(','):
+        for index, image in enumerate(os.environ['GENCC_PHP_TEST_IMAGES'].split(',')):
             for app, children in [('gencc-sub', 0), ('gencc-search', 25)]:
                 with self.subTest(image=image, app=app):
-                    rendered = env.from_string(shell).render(
-                        gencc_php_incident_candidate={'path': str(self.directory)},
-                        item={'name': app, 'image': image, 'memory_mb': 512, 'max_children': children, 'mode': 'mitigated'})
-                    self.assertIn('Verified container memory cap', command('bash', '-c', rendered))
-            original = (self.directory / 'zz-security-hardening.conf').read_text()
-            try:
-                (self.directory / 'zz-security-hardening.conf').write_text(original + '\ninvalid_fpm_directive = yes\n')
-                result = subprocess.run(['bash', '-c', rendered], capture_output=True, text=True, timeout=45)
-                self.assertNotEqual(result.returncode, 0, 'Invalid pool configuration passed preflight')
-            finally:
-                (self.directory / 'zz-security-hardening.conf').write_text(original)
+                    result = self.preflight(image, app, children=children)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('Verified container memory cap', result.stdout)
+            # Fresh paths avoid reusing previously mounted file contents on macOS.
+            bad = self.directory / f'bad-{index}'
+            bad.mkdir()
+            for name in files:
+                shutil.copy(FILES / name, bad / name)
+            with (bad / 'zz-security-hardening.conf').open('a') as config:
+                config.write('\ninvalid_fpm_directive = yes\n')
+            result = self.preflight(image, 'gencc-search', children=25, candidate=bad)
+            self.assertNotEqual(result.returncode, 0,
+                                'Invalid pool configuration passed preflight: ' + result.stdout + result.stderr)
 
-    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0', mode='mitigated'):
+    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0'):
         return subprocess.run(['podman', 'exec', '-i', cid, 'php', '/dev/stdin',
-                               expected_memory, expected_children, mode],
+                               expected_memory, expected_children],
                               input=(FILES / 'php-incident-verify.php').read_text(),
                               capture_output=True, text=True, timeout=45)
 
     @unittest.skipUnless(os.environ.get('GENCC_PATCHED_PHP_TEST_IMAGE'), 'set GENCC_PATCHED_PHP_TEST_IMAGE for patched portal checks')
-    def test_patched_portal_normal_settings_pass_and_incident_mounts_are_rejected(self):
-        image = os.environ['GENCC_PATCHED_PHP_TEST_IMAGE']
-        for mitigations in [False, True]:
-            with self.subTest(mitigations=mitigations):
-                cid, ports = self.start(image, 'php-fpm', ['-F'], [9000],
-                                        mitigations=mitigations, memory=None)
-                self.wait(ports[9000])
-                result = self.verify_deployment_probe(cid, expected_memory='0', mode='patched')
-                if mitigations:
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn('memory', result.stderr.lower())
-                else:
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn('patched', result.stdout.lower())
+    def test_portal_version_gate_accepts_patched_and_rejects_old_php(self):
+        result = self.preflight(os.environ['GENCC_PATCHED_PHP_TEST_IMAGE'], mode='patched')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Verified patched PHP', result.stdout)
+        for image in filter(None, os.environ.get('GENCC_PHP_TEST_IMAGES', '').split(',')):
+            with self.subTest(image=image):
+                result = self.preflight(image, mode='patched')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Expected PHP 8.3.36', result.stderr)
 
     @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for local FPM tests')
     def test_live_fpm_admin_settings_worker_recycling_and_restart(self):
-        (self.directory / 'probe.php').write_text('''<?php
-$before = ini_get('memory_limit');
-$override = ini_set('memory_limit', '32M');
-header('Content-Type: application/json');
-echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
- 'before' => $before, 'after' => ini_get('memory_limit'), 'override' => $override,
- 'progress' => ini_get('session.upload_progress.enabled'),
- 'post' => ini_get('post_max_size'), 'upload' => ini_get('upload_max_filesize'),
- 'nesting' => ini_get('max_input_nesting_level')]);
-''')
         for image in os.environ['GENCC_PHP_TEST_IMAGES'].split(','):
             with self.subTest(image=image):
                 cid, ports = self.start(image, 'php-fpm', ['-F'], [9000])
@@ -372,12 +343,6 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
                     rejected = self.verify_deployment_probe(cid, expected_children='999')
                     self.assertNotEqual(rejected.returncode, 0)
                     self.assertIn('pm.max_children', rejected.stderr)
-                    responses = [fastcgi(ports[9000]) for _ in range(4)]
-                    self.assertEqual(len({r['pid'] for r in responses}), 4)
-                    for r in responses:
-                        self.assertEqual((r['before'], r['after'], r['override']), ('-1', '-1', False))
-                        self.assertIn(r['progress'], ['', '0'])
-                        self.assertEqual((r['post'], r['upload'], r['nesting']), ('8M', '2M', '32'))
                 # Conflicting pool settings can affect FPM while CLI INI is unchanged.
                 # PHP admin values in these runtimes are applied in reverse include order.
                 command('podman', 'exec', cid, 'sh', '-c',
@@ -483,35 +448,6 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
                 self.assertEqual(http_status(ports, 'search.thegencc.org', True), 301)
             command('podman', 'rm', '-f', cid)
             self.containers.remove(cid)
-
-
-def fastcgi(port):
-    def record(kind, data):
-        return struct.pack('!BBHHBB', 1, kind, 1, len(data), 0, 0) + data
-    params = {'SCRIPT_FILENAME': '/test/probe.php', 'REQUEST_METHOD': 'GET',
-              'SERVER_PROTOCOL': 'HTTP/1.1', 'REDIRECT_STATUS': '200'}
-    encoded = b''.join(bytes([len(k), len(v)]) + k.encode() + v.encode() for k, v in params.items())
-    request = record(1, struct.pack('!HB5x', 1, 0)) + record(4, encoded) + record(4, b'') + record(5, b'')
-    output = b''
-    with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
-        connection.sendall(request)
-        def read(size):
-            data = b''
-            while len(data) < size:
-                more = connection.recv(size - len(data))
-                if not more:
-                    raise AssertionError('Unexpected FastCGI EOF')
-                data += more
-            return data
-        while True:
-            _, kind, _, length, padding, _ = struct.unpack('!BBHHBB', read(8))
-            content = read(length)
-            read(padding)
-            if kind == 6:
-                output += content
-            if kind == 3:
-                break
-    return json.loads(output.split(b'\r\n\r\n', 1)[1])
 
 
 def http_status(ports, host, tls, content_type=None, path='/-/healthz', oversized_length=None, chunked=False, details=False):

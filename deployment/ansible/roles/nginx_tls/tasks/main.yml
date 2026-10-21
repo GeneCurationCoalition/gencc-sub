@@ -4,11 +4,11 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec -i gencc-sub php /dev/stdin 0 0 patched
+    podman exec -i gencc-sub php /dev/stdin
   args:
     executable: /bin/bash
     chdir: /
-    stdin: "{{ lookup('file', role_path ~ '/../quadlet/files/php-incident-verify.php') }}"
+    stdin: "{{ lookup('file', role_path ~ '/../quadlet/files/php-patched-version.php') }}"
   become_user: "{{ gencc_deploy_user }}"
   changed_when: false
   when:

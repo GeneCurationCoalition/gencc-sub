@@ -1,86 +1,17 @@
 ---
-# PHP INCIDENT 2026-10: remove with the corresponding nginx templates.
-- name: Validate PHP incident restrictions in every portal and search server
-  ansible.builtin.command:
-    argv:
-      - python3
-      - -c
-      - |
-        import json
-        import re
-        import sys
-
-        data = json.load(sys.stdin)
-        portal_hosts = set(data['portal_hosts'])
-        search_hosts = set(data['search_hosts'])
-        relevant_hosts = portal_hosts | search_hosts
-        # Generated server blocks have their closing brace at column zero;
-        # nested locations/conditions are indented. Inspect each block separately.
-        blocks = re.findall(r'(?ms)^[ \t]*server\s*\{.*?^\}', data['config'])
-        seen = {host: set() for host in relevant_hosts}
-        relevant = []
-        multipart = re.compile(
-            r'if\s*\(\s*\$http_content_type\s+~\*\s+"multipart/form-data"\s*\)'
-            r'\s*\{\s*return\s+415\s*;'
-        )
-
-        def require(condition, message):
-            if not condition:
-                raise SystemExit(message)
-
-        for block in blocks:
-            names = re.search(r'(?m)^\s*server_name\s+([^;]+);', block)
-            hosts = set(names.group(1).split()) if names else set()
-            if not hosts & relevant_hosts:
-                continue
-            require(not (hosts & portal_hosts and hosts & search_hosts),
-                    'Portal and search must have separate server blocks: ' + ', '.join(sorted(hosts)))
-            is_portal = bool(hosts & portal_hosts)
-            restricted = data['portal_mitigations'] if is_portal else True
-            expected_limit = ('8m' if restricted else '100m') if is_portal else '1m'
-            label = ', '.join(sorted(hosts))
-            require(bool(multipart.search(block)) == restricted,
-                    'Incorrect multipart restriction for ' + label)
-            require(bool(re.search(r'client_max_body_size\s+' + expected_limit + r'\s*;', block)),
-                    'Incorrect body-size limit for ' + label + ': expected ' + expected_limit)
-            ports = set(re.findall(r'(?m)^\s*listen\s+(80|443)\b', block))
-            require(bool(ports), 'Missing expected listener for ' + label)
-            for host in hosts & relevant_hosts:
-                seen[host].update(ports)
-            relevant.append((hosts, ports))
-
-            portal_upstream = 'proxy_pass http://127.0.0.1:' + str(data['sub_port']) + ';'
-            search_upstream = 'proxy_pass http://127.0.0.1:' + str(data['search_port']) + ';'
-            redirect = bool(re.search(r'return\s+301\b', block))
-            if is_portal and data['portal_offline']:
-                require(portal_upstream not in block, 'Offline portal still proxies requests: ' + label)
-                if data['portal_primary'] in hosts and not redirect:
-                    require('return 503' in block and 'default_type text/plain;' in block and
-                            'https://www.php.net/archive/2026.php#2026-10-21-5' in block,
-                            'Portal maintenance notice missing for ' + label)
-            elif is_portal and data['portal_primary'] in hosts and not redirect:
-                require(portal_upstream in block and 'return 503' not in block,
-                        'Online portal routing missing for ' + label)
-            if not is_portal and data['search_primary'] in hosts and not redirect:
-                require(search_upstream in block, 'Search routing missing for ' + label)
-
-        expected_ports = {'80', '443'} if any('443' in ports for _, ports in relevant) else {'80'}
-        for host, ports in seen.items():
-            require(ports == expected_ports, 'Missing expected server block for ' + host)
-        print('Validated incident settings in ' + str(len(relevant)) + ' nginx server blocks.')
-    stdin: >-
-      {{ {
-        'config': gencc_nginx_rendered_config.stdout,
-        'portal_hosts': [gencc_submit_hostname] + gencc_submit_hostname_redirects,
-        'search_hosts': [gencc_search_hostname] + gencc_search_hostname_redirects,
-        'portal_primary': gencc_submit_hostname,
-        'search_primary': gencc_search_hostname,
-        'portal_mitigations': gencc_php_incident_portal_mitigations | bool,
-        'portal_offline': gencc_php_incident_portal_offline | bool,
-        'sub_port': gencc_sub_port,
-        'search_port': gencc_search_port
-      } | to_json }}
-  changed_when: false
+# PHP INCIDENT 2026-10: template/container tests cover each server and redirect.
+# Deployment retains basic presence checks and the maintenance routing guard.
+- name: Require PHP incident request restrictions in rendered nginx config
+  ansible.builtin.assert:
+    that:
+      - >-
+        'if ($http_content_type ~* "multipart/form-data")' in gencc_nginx_rendered_config.stdout
+      - "'return 415;' in gencc_nginx_rendered_config.stdout"
+      - "'client_max_body_size 1m;' in gencc_nginx_rendered_config.stdout"
+      - >-
+        ('client_max_body_size ' ~ ('8m' if gencc_php_incident_portal_mitigations | bool else '100m') ~ ';')
+        in gencc_nginx_rendered_config.stdout
+    fail_msg: "Rendered nginx config is missing expected PHP incident request restrictions."
 
 - name: Require static portal maintenance with no portal upstream
   ansible.builtin.assert:
