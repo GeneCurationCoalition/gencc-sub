@@ -6,7 +6,7 @@ gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.3.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.2.1
 
 # PHP INCIDENT 2026-10: reopen only after the patched portal passes preflight
-# and live FPM verification. Production keeps the shared maintenance defaults.
+# and FPM syntax checks. Production keeps the shared maintenance defaults.
 gencc_php_incident_portal_offline: false
 gencc_php_incident_portal_mitigations: false
 

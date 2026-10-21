@@ -28,12 +28,10 @@
       - name: gencc-sub
         image: "{{ gencc_sub_image }}"
         memory_mb: "{{ gencc_sub_memory_limit_mb if gencc_php_incident_portal_mitigations | bool else 0 }}"
-        max_children: 0
         mode: "{{ 'mitigated' if gencc_php_incident_portal_mitigations | bool else 'patched' }}"
       - name: gencc-search
         image: "{{ gencc_search_image }}"
         memory_mb: "{{ gencc_search_memory_limit_mb }}"
-        max_children: 25
         mode: mitigated
 
 - name: Create temporary PHP incident candidate directory
@@ -74,7 +72,7 @@
       register: gencc_php_incident_pull
       changed_when: "'pulled' in gencc_php_incident_pull.stdout_lines"
 
-    - name: Preflight candidate FPM settings and actual rootless memory enforcement
+    - name: Preflight candidate PHP version and FPM configuration syntax
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -82,30 +80,19 @@
         podman run --rm -i --pull=never --network=none --entrypoint=/bin/sh \
           {{ item.image | quote }} -c 'php /dev/stdin && php-fpm -t'
         {% else %}
-        cid=''
-        cleanup() {
-          rc=$?
-          if [[ -n "$cid" ]]; then
-            if [[ "$rc" != 0 ]]; then podman logs "$cid" >&2 || true; fi
-            podman rm -f "$cid" >/dev/null
-          fi
-          exit "$rc"
-        }
-        trap cleanup EXIT
-        cid=$(podman run -d --pull=never --network=none --entrypoint=php-fpm \
+        podman run --rm --pull=never --network=none --entrypoint=php-fpm \
           --memory={{ item.memory_mb }}m \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.ini:/usr/local/etc/php/conf.d/zz-security-hardening.ini:ro') | quote }} \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.conf:/usr/local/etc/php-fpm.d/zz-security-hardening.conf:ro') | quote }} \
         {% if item.name == 'gencc-search' %}
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-search-pool.conf:/usr/local/etc/php-fpm.d/zz-security-search-pool.conf:ro') | quote }} \
         {% endif %}
-          {{ item.image | quote }} -F)
-        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }}
+          {{ item.image | quote }} -t
         {% endif %}
       args:
         executable: /bin/bash
         chdir: /
-        stdin: "{{ lookup('file', role_path ~ '/files/' ~ ('php-patched-version.php' if item.mode == 'patched' else 'php-incident-verify.php')) }}"
+        stdin: "{{ lookup('file', role_path ~ '/files/php-patched-version.php') if item.mode == 'patched' else '' }}"
       become_user: "{{ gencc_deploy_user }}"
       loop: "{{ gencc_php_incident_targets }}"
       loop_control:

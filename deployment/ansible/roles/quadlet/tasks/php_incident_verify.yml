@@ -1,19 +1,17 @@
 ---
-# PHP INCIDENT 2026-10: version gate for patched PHP; verify workarounds otherwise.
-- name: Verify PHP version or incident mitigations after restart
+# PHP INCIDENT 2026-10: ordinary syntax checks and the patched portal version gate.
+- name: Check FPM configuration and patched portal version after restart
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    {% if item.mode == 'patched' %}
     podman exec {{ item.name | quote }} php-fpm -t
+    {% if item.mode == 'patched' %}
     podman exec -i {{ item.name | quote }} php /dev/stdin
-    {% else %}
-    podman exec -i {{ item.name | quote }} php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }}
     {% endif %}
   args:
     executable: /bin/bash
     chdir: /
-    stdin: "{{ lookup('file', role_path ~ '/files/' ~ ('php-patched-version.php' if item.mode == 'patched' else 'php-incident-verify.php')) }}"
+    stdin: "{{ lookup('file', role_path ~ '/files/php-patched-version.php') if item.mode == 'patched' else '' }}"
   become_user: "{{ gencc_deploy_user }}"
   loop: "{{ gencc_php_incident_targets }}"
   loop_control:

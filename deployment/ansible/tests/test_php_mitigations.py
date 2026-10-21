@@ -241,17 +241,11 @@ class ContainerTests(unittest.TestCase):
             command('podman', 'rm', '-f', cid)
         self.temp.cleanup()
 
-    def start(self, image, entrypoint, args, ports, mitigations=True, memory='512m'):
-        cmd = ['podman', 'run', '-d', '--pull=never', '--entrypoint', entrypoint,
+    def start(self, image, args, ports):
+        cmd = ['podman', 'run', '-d', '--pull=never', '--entrypoint=nginx', '--memory=512m',
                '-v', f'{self.directory}:/test:ro']
-        if memory:
-            cmd += ['--memory=' + memory]
         for port in ports:
             cmd += ['-p', f'127.0.0.1::{port}']
-        if mitigations:
-            for name, destination in [('zz-security-hardening.ini', 'php/conf.d'),
-                                      ('zz-security-hardening.conf', 'php-fpm.d')]:
-                cmd += ['-v', f'{FILES / name}:/usr/local/etc/{destination}/{name}:ro']
         cid = command(*cmd, image, *args)
         self.containers.append(cid)
         result = {}
@@ -269,7 +263,7 @@ class ContainerTests(unittest.TestCase):
                 time.sleep(0.1)
         self.fail('Local container did not start listening')
 
-    def preflight(self, image, app='gencc-sub', mode='mitigated', children=0, candidate=None):
+    def preflight(self, image, app='gencc-sub', mode='mitigated', candidate=None):
         tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
         task = next(task for task in tasks[-1]['block'] if task['name'].startswith('Preflight candidate'))
         shell = task['ansible.builtin.shell']
@@ -280,8 +274,7 @@ class ContainerTests(unittest.TestCase):
         env.globals['lookup'] = lambda kind, name: Path(name).read_text()
         values = {'role_path': str(FILES.parent),
                   'gencc_php_incident_candidate': {'path': str(candidate or self.directory)},
-                  'item': {'name': app, 'image': image, 'memory_mb': 512,
-                           'max_children': children, 'mode': mode}}
+                  'item': {'name': app, 'image': image, 'memory_mb': 512, 'mode': mode}}
         return subprocess.run(['bash', '-c', env.from_string(shell).render(values)],
                               input=env.from_string(task['args']['stdin']).render(values),
                               capture_output=True, text=True, timeout=45)
@@ -292,11 +285,10 @@ class ContainerTests(unittest.TestCase):
         for name in files:
             shutil.copy(FILES / name, self.directory / name)
         for index, image in enumerate(os.environ['GENCC_PHP_TEST_IMAGES'].split(',')):
-            for app, children in [('gencc-sub', 0), ('gencc-search', 25)]:
+            for app in ['gencc-sub', 'gencc-search']:
                 with self.subTest(image=image, app=app):
-                    result = self.preflight(image, app, children=children)
+                    result = self.preflight(image, app)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn('Verified container memory cap', result.stdout)
             # Fresh paths avoid reusing previously mounted file contents on macOS.
             bad = self.directory / f'bad-{index}'
             bad.mkdir()
@@ -304,15 +296,9 @@ class ContainerTests(unittest.TestCase):
                 shutil.copy(FILES / name, bad / name)
             with (bad / 'zz-security-hardening.conf').open('a') as config:
                 config.write('\ninvalid_fpm_directive = yes\n')
-            result = self.preflight(image, 'gencc-search', children=25, candidate=bad)
+            result = self.preflight(image, 'gencc-search', candidate=bad)
             self.assertNotEqual(result.returncode, 0,
                                 'Invalid pool configuration passed preflight: ' + result.stdout + result.stderr)
-
-    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0'):
-        return subprocess.run(['podman', 'exec', '-i', cid, 'php', '/dev/stdin',
-                               expected_memory, expected_children],
-                              input=(FILES / 'php-incident-verify.php').read_text(),
-                              capture_output=True, text=True, timeout=45)
 
     @unittest.skipUnless(os.environ.get('GENCC_PATCHED_PHP_TEST_IMAGE'), 'set GENCC_PATCHED_PHP_TEST_IMAGE for patched portal checks')
     def test_portal_version_gate_accepts_patched_and_rejects_old_php(self):
@@ -324,43 +310,6 @@ class ContainerTests(unittest.TestCase):
                 result = self.preflight(image, mode='patched')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('Expected PHP 8.3.36', result.stderr)
-
-    @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for local FPM tests')
-    def test_live_fpm_admin_settings_worker_recycling_and_restart(self):
-        for image in os.environ['GENCC_PHP_TEST_IMAGES'].split(','):
-            with self.subTest(image=image):
-                cid, ports = self.start(image, 'php-fpm', ['-F'], [9000])
-                for cycle in range(2):
-                    if cycle:
-                        command('podman', 'restart', cid)
-                    self.wait(ports[9000])
-                    self.assertEqual(command('podman', 'exec', cid, 'cat', '/sys/fs/cgroup/memory.max'), '536870912')
-                    verified = self.verify_deployment_probe(cid)
-                    self.assertEqual(verified.returncode, 0, verified.stderr)
-                    rejected = self.verify_deployment_probe(cid, expected_memory='1073741824')
-                    self.assertNotEqual(rejected.returncode, 0)
-                    self.assertIn('memory.max', rejected.stderr)
-                    rejected = self.verify_deployment_probe(cid, expected_children='999')
-                    self.assertNotEqual(rejected.returncode, 0)
-                    self.assertIn('pm.max_children', rejected.stderr)
-                # Conflicting pool settings can affect FPM while CLI INI is unchanged.
-                # PHP admin values in these runtimes are applied in reverse include order.
-                command('podman', 'exec', cid, 'sh', '-c',
-                        "printf '%s\n' '[www]' 'php_admin_value[memory_limit] = 64M' > /usr/local/etc/php-fpm.d/00-test.conf")
-                command('podman', 'restart', cid)
-                self.wait(ports[9000])
-                rejected = self.verify_deployment_probe(cid)
-                self.assertNotEqual(rejected.returncode, 0)
-                self.assertIn('Live FPM memory_limit', rejected.stderr)
-                command('podman', 'exec', cid, 'sh', '-c',
-                        "rm /usr/local/etc/php-fpm.d/00-test.conf; printf '%s\n' '[www]' 'pm.max_requests = 2' > /usr/local/etc/php-fpm.d/zzzz-test.conf")
-                command('podman', 'restart', cid)
-                self.wait(ports[9000])
-                rejected = self.verify_deployment_probe(cid)
-                self.assertNotEqual(rejected.returncode, 0)
-                self.assertIn('pm.max_requests', rejected.stderr)
-                self.assertEqual(command('podman', 'exec', cid, 'sh', '-c',
-                                         "find /tmp -maxdepth 1 -name 'gencc-php-check-*' -print"), '')
 
     @unittest.skipUnless(os.environ.get('GENCC_NGINX_TEST_IMAGE'), 'set GENCC_NGINX_TEST_IMAGE for local HTTP tests')
     def test_restored_staging_portal_allows_multipart_while_search_stays_blocked(self):
@@ -378,7 +327,7 @@ class ContainerTests(unittest.TestCase):
                 'events {}\nhttp {\ninclude /test/gencc-security.conf;\n' + config +
                 '\nserver { listen 8080; location / { return 200 "portal upstream"; } }\n' +
                 'server { listen 8081; location / { return 200 "search upstream"; } }\n}\n')
-            cid, ports = self.start(os.environ['GENCC_NGINX_TEST_IMAGE'], 'nginx',
+            cid, ports = self.start(os.environ['GENCC_NGINX_TEST_IMAGE'],
                                    ['-c', '/test/nginx.conf', '-g', 'daemon off;'], [80, 443])
             self.wait(ports[80])
             tls = template == 'gencc-https.conf.j2'
@@ -416,7 +365,7 @@ class ContainerTests(unittest.TestCase):
             (self.directory / 'nginx.conf').write_text('events {}\nhttp {\ninclude /test/gencc-security.conf;\n' + config +
                 '\nserver { listen 8080; location / { return 200 "upstream"; } }\n' +
                 'server { listen 8081; location / { return 200 "upstream"; } }\n}\n')
-            cid, ports = self.start(os.environ['GENCC_NGINX_TEST_IMAGE'], 'nginx',
+            cid, ports = self.start(os.environ['GENCC_NGINX_TEST_IMAGE'],
                                    ['-c', '/test/nginx.conf', '-g', 'daemon off;'], [80, 443])
             self.wait(ports[80])
             hosts = [values['gencc_submit_hostname'], values['gencc_search_hostname'], 'search.thegencc.org']

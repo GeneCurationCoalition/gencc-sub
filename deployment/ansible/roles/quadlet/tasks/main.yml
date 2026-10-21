@@ -98,6 +98,6 @@
   loop: "{{ gencc_deploy_apps }}"
 
 # BEGIN PHP INCIDENT 2026-10
-- name: Verify interim PHP incident mitigations
+- name: Check PHP configuration after restart
   ansible.builtin.import_tasks: php_incident_verify.yml
 # END PHP INCIDENT 2026-10
