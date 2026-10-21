@@ -73,6 +73,9 @@ Search also mounts `zz-security-search-pool.conf` read-only at
 Its existing dynamic-pool settings (10 starting workers, 5 minimum and 20 maximum
 spare workers) remain compatible with this limit.
 
+The role also installs `php-incident-verify.php` in the same host directory. It
+is streamed to the container's CLI for verification, not mounted into a web root.
+
 These survive container replacement and VM reboot because the files live on the
 host and the mounts are in the Quadlet units. They supersede the previous
 container-layer INI hot patches. Existing published images can be used: no image
@@ -88,7 +91,7 @@ or substitute `RLIMIT_AS`/`RLIMIT_DATA` for kernel cgroup limits.
 
 Shared inventory variables define `gencc_sub_memory_limit_mb` (3072),
 `gencc_search_memory_limit_mb` (2048), and `gencc_host_memory_reserve_mb` (2048).
-The playbook requires positive caps, cgroup v2 with a memory controller, and
+The playbook requires positive caps, working rootless cgroup v2 memory limits, and
 enough physical RAM for both caps plus at least 2 GiB for host services. The
 approximately 8 GiB VMs leave roughly 2.75 GiB outside the two app budgets.
 
@@ -98,12 +101,27 @@ FPM children. A cgroup OOM may kill another process in the same container, not
 necessarily the offending request, and does not guarantee prevention of all
 allocation failures. No per-worker cgroup isolation is implemented.
 
-The normal playbook writes the configuration, regenerates Quadlets, and restarts
-both containers. Podman receives `--memory` at creation time, so FPM's unlimited
-setting is not introduced before the cap. Deployment verifies actual
-`memory.max`, PHP-FPM syntax, and the startup upload-progress setting. nginx is
-syntax-checked and its rendered request restrictions asserted before the final
-reload. Startup of the new containers replaces every old FPM worker.
+Before the deployment's maintenance/downtime steps, preflight stages candidate
+files in a temporary directory and tests both intended images as the deployment
+user. Missing images are pulled before downtime. Disposable containers run only
+PHP-FPM, with the proposed configuration and memory caps, no network access, no
+published ports, and no application credentials or data mounts. The checks verify
+actual `memory.max`, valid pool configuration, and live FPM behavior. Containers
+and candidate files are cleaned up on success or failure. A failure stops the
+play before active mitigation files, application services, or Quadlets change.
+
+After preflight passes, the normal playbook installs the configuration,
+regenerates Quadlets, and restarts both containers. Podman receives `--memory`
+at creation time, so FPM's unlimited setting is not introduced before the cap.
+The same verifier then checks each running application container: its actual
+memory cap, resolved `www` pool's `pm.max_requests=1`, and search's
+`pm.max_children=25`. Four local FastCGI requests check actual FPM INI settings,
+the administrative memory-limit lock, and distinct worker PIDs. These synthetic
+requests execute no application code. Their temporary PHP file lives outside the
+web root and is removed afterward. Pool process-manager values come from FPM's
+configuration dump; request settings are read from the live workers. nginx is
+syntax-checked and its rendered request restrictions asserted before reload.
+Startup of the new containers replaces every old FPM worker.
 
 Deploy to staging first using the existing runbook. Confirm the public portal
 returns the static maintenance notice, including API and health paths. Check
@@ -155,16 +173,21 @@ declared/chunked bodies. Template tests cover both inventories and optional
 redirects, reject unsafe memory budget configurations, and exercise both portal
 maintenance and restored routing. Maintenance response tests include API, login,
 health, and PHP paths; they assert plain text, no-store, and the advisory URL.
+The deployment preflight command is also exercised against cached images, with
+an invalid-pool rejection case. Verifier regression checks reject mismatched
+memory caps, incorrect worker limits, and conflicting FPM-only configuration.
 
 ## Incident change boundaries
 
 Search for `PHP INCIDENT 2026-10` to find the temporary deployment changes:
 
 - Shared defaults group the portal toggle, configuration path, and memory budgets.
-- `roles/quadlet/tasks/php_incident_prepare.yml` and `php_incident_verify.yml`
-  contain incident tasks, imported at the required points in the main role.
+- `roles/quadlet/tasks/php_incident_preflight.yml`, `php_incident_prepare.yml`,
+  and `php_incident_verify.yml` contain incident tasks. `deployment_prepare`
+  imports preflight before downtime; direct Quadlet invocation also runs it.
 - Both Quadlet templates mark the temporary mounts and memory caps together.
-- The two `zz-security-hardening` files contain only incident configuration.
+- The two `zz-security-hardening` files, `zz-security-search-pool.conf`, and
+  `php-incident-verify.php` contain only incident configuration/verification.
 - nginx templates isolate rejection and maintenance in `gencc-php-mitigation`
   and `gencc-portal-maintenance` includes and label request-size limits.
 - `roles/nginx_tls/tasks/php_incident_validate.yml` contains incident assertions;

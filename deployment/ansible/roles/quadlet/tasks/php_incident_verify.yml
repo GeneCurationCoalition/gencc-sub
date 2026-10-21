@@ -1,34 +1,20 @@
 ---
-# PHP INCIDENT 2026-10: validate the containment accompanying unlimited FPM memory.
-- name: Verify actual container memory caps after startup
+# PHP INCIDENT 2026-10: inspect running FPM, not CLI INI values alone.
+- name: Verify container caps and live PHP-FPM mitigation settings after restart
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec {{ item.name }} cat /sys/fs/cgroup/memory.max
+    podman exec -i {{ item.name | quote }} php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} \
+      < {{ (gencc_php_config_dir ~ '/php-incident-verify.php') | quote }}
   args:
     executable: /bin/bash
     chdir: /
   become_user: "{{ gencc_deploy_user }}"
   loop:
-    - { name: gencc-sub, memory_mb: "{{ gencc_sub_memory_limit_mb }}" }
-    - { name: gencc-search, memory_mb: "{{ gencc_search_memory_limit_mb }}" }
-  register: gencc_memory_cap_check
-  changed_when: false
-  failed_when: >-
-    gencc_memory_cap_check.rc != 0 or
-    (gencc_memory_cap_check.stdout | trim) != ((item.memory_mb | int * 1048576) | string)
-
-- name: Validate PHP-FPM configuration after mounting mitigation files
-  ansible.builtin.shell: |
-    set -euo pipefail
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec {{ item }} php-fpm -t
-    podman exec {{ item }} php -r 'exit(in_array(ini_get("session.upload_progress.enabled"), ["", "0"], true) ? 0 : 1);'
-  args:
-    executable: /bin/bash
-    chdir: /
-  become_user: "{{ gencc_deploy_user }}"
-  loop:
-    - gencc-sub
-    - gencc-search
+    - { name: gencc-sub, memory_mb: "{{ gencc_sub_memory_limit_mb }}", max_children: 0 }
+    - { name: gencc-search, memory_mb: "{{ gencc_search_memory_limit_mb }}", max_children: 25 }
+  register: gencc_php_incident_live_check
+  until: gencc_php_incident_live_check.rc == 0
+  retries: 5
+  delay: 3
   changed_when: false

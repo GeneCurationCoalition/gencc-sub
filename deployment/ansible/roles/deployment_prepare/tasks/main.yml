@@ -1,4 +1,11 @@
 ---
+# BEGIN PHP INCIDENT 2026-10: run before stopping apps or entering maintenance.
+- name: Preflight interim PHP incident mitigation before downtime
+  ansible.builtin.import_role:
+    name: quadlet
+    tasks_from: php_incident_preflight
+# END PHP INCIDENT 2026-10
+
 - name: Validate restore settings before preparing the deployment
   ansible.builtin.assert:
     that:

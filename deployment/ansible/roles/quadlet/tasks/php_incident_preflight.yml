@@ -1,0 +1,97 @@
+---
+# PHP INCIDENT 2026-10: validate before maintenance, active config writes or restarts.
+- name: Require finite container memory budgets with room for host services
+  ansible.builtin.assert:
+    that:
+      - gencc_sub_memory_limit_mb | int > 0
+      - gencc_search_memory_limit_mb | int > 0
+      - gencc_host_memory_reserve_mb | int >= 2048
+      - >-
+        (gencc_sub_memory_limit_mb | int + gencc_search_memory_limit_mb | int
+        + gencc_host_memory_reserve_mb | int) <= ansible_facts.memtotal_mb
+    fail_msg: >-
+      FPM memory_limit=-1 requires finite container caps and at least 2 GiB
+      reserved for host services. Check the GenCC memory budget variables.
+
+- name: Create temporary PHP incident candidate directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: gencc-php-preflight-
+  become_user: "{{ gencc_deploy_user }}"
+  register: gencc_php_incident_candidate
+
+- name: Validate both candidate images without application entrypoints or data
+  block:
+    - name: Stage candidate PHP incident files separately from active mounts
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ gencc_php_incident_candidate.path }}/{{ item }}"
+        owner: "{{ gencc_deploy_user }}"
+        mode: "0644"
+      loop:
+        - zz-security-hardening.ini
+        - zz-security-hardening.conf
+        - zz-security-search-pool.conf
+        - php-incident-verify.php
+
+    - name: Ensure intended images are available before downtime
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        if ! podman image exists {{ item | quote }}; then
+          podman pull {{ item | quote }}
+          echo pulled
+        fi
+      args:
+        executable: /bin/bash
+        chdir: /
+      become_user: "{{ gencc_deploy_user }}"
+      loop:
+        - "{{ gencc_sub_image }}"
+        - "{{ gencc_search_image }}"
+      register: gencc_php_incident_pull
+      changed_when: "'pulled' in gencc_php_incident_pull.stdout_lines"
+
+    - name: Preflight candidate FPM settings and actual rootless memory enforcement
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        cid=''
+        cleanup() {
+          rc=$?
+          if [[ -n "$cid" ]]; then
+            if [[ "$rc" != 0 ]]; then podman logs "$cid" >&2 || true; fi
+            podman rm -f "$cid" >/dev/null
+          fi
+          exit "$rc"
+        }
+        trap cleanup EXIT
+        cid=$(podman run -d --pull=never --network=none \
+          --memory={{ item.memory_mb }}m --entrypoint=php-fpm \
+          -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.ini:/usr/local/etc/php/conf.d/zz-security-hardening.ini:ro') | quote }} \
+          -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.conf:/usr/local/etc/php-fpm.d/zz-security-hardening.conf:ro') | quote }} \
+        {% if item.name == 'gencc-search' %}
+          -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-search-pool.conf:/usr/local/etc/php-fpm.d/zz-security-search-pool.conf:ro') | quote }} \
+        {% endif %}
+          {{ item.image | quote }} -F)
+        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} \
+          < {{ (gencc_php_incident_candidate.path ~ '/php-incident-verify.php') | quote }}
+      args:
+        executable: /bin/bash
+        chdir: /
+      become_user: "{{ gencc_deploy_user }}"
+      loop:
+        - { name: gencc-sub, image: "{{ gencc_sub_image }}", memory_mb: "{{ gencc_sub_memory_limit_mb }}", max_children: 0 }
+        - { name: gencc-search, image: "{{ gencc_search_image }}", memory_mb: "{{ gencc_search_memory_limit_mb }}", max_children: 25 }
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Record successful PHP incident preflight for this deployment
+      ansible.builtin.set_fact:
+        gencc_php_incident_preflight_passed: true
+  always:
+    - name: Remove temporary PHP incident candidate files
+      ansible.builtin.file:
+        path: "{{ gencc_php_incident_candidate.path }}"
+        state: absent

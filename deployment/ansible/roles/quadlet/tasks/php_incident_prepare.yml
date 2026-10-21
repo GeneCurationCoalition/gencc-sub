@@ -1,29 +1,9 @@
 ---
 # PHP INCIDENT 2026-10: CVE-2026-109618 / CVE-2026-109619.
 # Remove in coordination with the memory-limit override and Quadlet mounts.
-- name: Require finite container memory budgets with room for host services
-  ansible.builtin.assert:
-    that:
-      - gencc_sub_memory_limit_mb | int > 0
-      - gencc_search_memory_limit_mb | int > 0
-      - gencc_host_memory_reserve_mb | int >= 2048
-      - >-
-        (gencc_sub_memory_limit_mb | int + gencc_search_memory_limit_mb | int
-        + gencc_host_memory_reserve_mb | int) <= ansible_facts.memtotal_mb
-    fail_msg: >-
-      FPM memory_limit=-1 requires finite container caps and at least 2 GiB
-      reserved for host services. Check the GenCC memory budget variables.
-
-- name: Check for cgroup v2 memory controller
-  ansible.builtin.slurp:
-    src: /sys/fs/cgroup/cgroup.controllers
-  register: gencc_cgroup_controllers
-
-- name: Require cgroup v2 memory limits for rootless PHP containers
-  ansible.builtin.assert:
-    that:
-      - "'memory' in (gencc_cgroup_controllers.content | b64decode).split()"
-    fail_msg: "Refusing unlimited FPM memory without the cgroup v2 memory controller."
+- name: Preflight when the Quadlet role is invoked without deployment preparation
+  ansible.builtin.include_tasks: php_incident_preflight.yml
+  when: not (gencc_php_incident_preflight_passed | default(false) | bool)
 
 - name: Create host-managed PHP mitigation configuration directory
   ansible.builtin.file:
@@ -44,3 +24,4 @@
     - zz-security-hardening.ini
     - zz-security-hardening.conf
     - zz-security-search-pool.conf
+    - php-incident-verify.php

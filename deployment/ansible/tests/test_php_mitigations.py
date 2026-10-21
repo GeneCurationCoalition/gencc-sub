@@ -10,10 +10,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import socket
 import ssl
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -47,6 +50,15 @@ def command(*args):
 
 
 class Templates(unittest.TestCase):
+    def test_php_preflight_precedes_downtime_and_active_configuration(self):
+        prepare = yaml.safe_load((ROOT / 'roles/deployment_prepare/tasks/main.yml').read_text())
+        self.assertEqual(prepare[0]['ansible.builtin.import_role'],
+                         {'name': 'quadlet', 'tasks_from': 'php_incident_preflight'})
+        install = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_prepare.yml').read_text())
+        self.assertEqual(install[0]['ansible.builtin.include_tasks'], 'php_incident_preflight.yml')
+        preflight = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
+        self.assertEqual(preflight[-1]['always'][0]['ansible.builtin.file']['state'], 'absent')
+
     def test_deployment_assertions_accept_maintenance_and_restored_routes(self):
         tasks = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/php_incident_validate.yml').read_text())
         tasks += [task for task in yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/main.yml').read_text())
@@ -109,7 +121,7 @@ class Templates(unittest.TestCase):
                     self.assertIn(f'Volume={values["gencc_php_config_dir"]}/{filename}:/usr/local/etc/{destination}/{filename}:ro', config)
 
     def test_memory_budget_guard_accepts_vm_and_rejects_unbounded_or_oversized_caps(self):
-        task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_prepare.yml').read_text())[0]
+        task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())[0]
         env = jinja2.Environment()
         conditions = [env.compile_expression(c) for c in task['ansible.builtin.assert']['that']]
         values = DEFAULTS | {'ansible_facts': {'memtotal_mb': 7937}}
@@ -158,6 +170,40 @@ class ContainerTests(unittest.TestCase):
                 time.sleep(0.1)
         self.fail('Local container did not start listening')
 
+    @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for preflight tests')
+    def test_deployment_preflight_checks_candidates_and_rejects_bad_pool(self):
+        tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
+        shell = next(task['ansible.builtin.shell'] for task in tasks[-1]['block']
+                     if task['name'].startswith('Preflight candidate'))
+        if sys.platform == 'darwin':
+            # The remote macOS client uses its own socket; Linux deployment needs XDG.
+            shell = shell.replace('export XDG_RUNTIME_DIR="/run/user/$(id -u)"\n', '')
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
+        env.filters['quote'] = shlex.quote
+        for name in ['zz-security-hardening.ini', 'zz-security-hardening.conf',
+                     'zz-security-search-pool.conf', 'php-incident-verify.php']:
+            shutil.copy(FILES / name, self.directory / name)
+        for image in os.environ['GENCC_PHP_TEST_IMAGES'].split(','):
+            for app, children in [('gencc-sub', 0), ('gencc-search', 25)]:
+                with self.subTest(image=image, app=app):
+                    rendered = env.from_string(shell).render(
+                        gencc_php_incident_candidate={'path': str(self.directory)},
+                        item={'name': app, 'image': image, 'memory_mb': 512, 'max_children': children})
+                    self.assertIn('Verified container memory cap', command('bash', '-c', rendered))
+            original = (self.directory / 'zz-security-hardening.conf').read_text()
+            try:
+                (self.directory / 'zz-security-hardening.conf').write_text(original + '\ninvalid_fpm_directive = yes\n')
+                result = subprocess.run(['bash', '-c', rendered], capture_output=True, text=True, timeout=45)
+                self.assertNotEqual(result.returncode, 0, 'Invalid pool configuration passed preflight')
+            finally:
+                (self.directory / 'zz-security-hardening.conf').write_text(original)
+
+    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0'):
+        return subprocess.run(['podman', 'exec', '-i', cid, 'php', '/dev/stdin',
+                               expected_memory, expected_children],
+                              input=(FILES / 'php-incident-verify.php').read_text(),
+                              capture_output=True, text=True, timeout=45)
+
     @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for local FPM tests')
     def test_live_fpm_admin_settings_worker_recycling_and_restart(self):
         (self.directory / 'probe.php').write_text('''<?php
@@ -178,12 +224,38 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
                         command('podman', 'restart', cid)
                     self.wait(ports[9000])
                     self.assertEqual(command('podman', 'exec', cid, 'cat', '/sys/fs/cgroup/memory.max'), '536870912')
+                    verified = self.verify_deployment_probe(cid)
+                    self.assertEqual(verified.returncode, 0, verified.stderr)
+                    rejected = self.verify_deployment_probe(cid, expected_memory='1073741824')
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn('memory.max', rejected.stderr)
+                    rejected = self.verify_deployment_probe(cid, expected_children='999')
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn('pm.max_children', rejected.stderr)
                     responses = [fastcgi(ports[9000]) for _ in range(4)]
                     self.assertEqual(len({r['pid'] for r in responses}), 4)
                     for r in responses:
                         self.assertEqual((r['before'], r['after'], r['override']), ('-1', '-1', False))
                         self.assertIn(r['progress'], ['', '0'])
                         self.assertEqual((r['post'], r['upload'], r['nesting']), ('8M', '2M', '32'))
+                # Conflicting pool settings can affect FPM while CLI INI is unchanged.
+                # PHP admin values in these runtimes are applied in reverse include order.
+                command('podman', 'exec', cid, 'sh', '-c',
+                        "printf '%s\n' '[www]' 'php_admin_value[memory_limit] = 64M' > /usr/local/etc/php-fpm.d/00-test.conf")
+                command('podman', 'restart', cid)
+                self.wait(ports[9000])
+                rejected = self.verify_deployment_probe(cid)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn('Live FPM memory_limit', rejected.stderr)
+                command('podman', 'exec', cid, 'sh', '-c',
+                        "rm /usr/local/etc/php-fpm.d/00-test.conf; printf '%s\n' '[www]' 'pm.max_requests = 2' > /usr/local/etc/php-fpm.d/zzzz-test.conf")
+                command('podman', 'restart', cid)
+                self.wait(ports[9000])
+                rejected = self.verify_deployment_probe(cid)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn('pm.max_requests', rejected.stderr)
+                self.assertEqual(command('podman', 'exec', cid, 'sh', '-c',
+                                         "find /tmp -maxdepth 1 -name 'gencc-php-check-*' -print"), '')
 
     @unittest.skipUnless(os.environ.get('GENCC_NGINX_TEST_IMAGE'), 'set GENCC_NGINX_TEST_IMAGE for local HTTP tests')
     def test_nginx_bootstrap_tls_redirects_and_chunked_body_limit(self):
