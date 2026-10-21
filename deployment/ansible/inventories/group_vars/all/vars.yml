@@ -17,6 +17,15 @@ gencc_search_port: 8081
 gencc_secrets_dir: /etc/gencc
 gencc_data_dir: /var/lib/gencc
 
+# Interim PHP CVE-2026-109618 / CVE-2026-109619 mitigation.
+# These host-managed files are mounted into BOTH apps, including existing images.
+gencc_php_config_dir: /etc/gencc/php
+# External caps must accompany FPM memory_limit=-1. Leave room for host MySQL.
+# Incident budgets, not guaranteed capacity for concurrent exports/imports.
+gencc_sub_memory_limit_mb: 3072
+gencc_search_memory_limit_mb: 2048
+gencc_host_memory_reserve_mb: 2048
+
 # MySQL
 gencc_mysql_database: gencc_sub
 gencc_mysql_bind_address: "127.0.0.1"

@@ -67,6 +67,13 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 
 ## Security hardening
 
+**Interim PHP CVE mitigation (October 2026)** — Ansible installs host-managed PHP
+configuration into both containers, enforces container memory budgets, replaces
+FPM workers after each request, and rejects multipart requests in every nginx
+server block. No PHP image upgrade is included. See
+[PHP-INTERIM-MITIGATION.md](PHP-INTERIM-MITIGATION.md) for settings, operational
+tradeoffs, local validation, and coordinated removal after patching PHP.
+
 The `nginx_tls` role deploys several layers of abuse prevention, configured via templates in `roles/nginx_tls/templates/`:
 
 **Bot blocking** — A user-agent map (`gencc-security.conf.j2`) blocks known SEO crawlers, AI training bots, and vulnerability scanners. Certain paths (downloads, health checks, robots.txt) are exempt so external tools can still fetch exports.

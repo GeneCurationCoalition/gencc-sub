@@ -1,0 +1,123 @@
+# Interim PHP mitigation — October 2026
+
+This deployment reduces exposure to CVE-2026-109618 and CVE-2026-109619 while
+PHP remains unpatched. It does **not** completely mitigate either vulnerability.
+It applies to gencc-sub and gencc-search on both staging and production through
+the normal `playbooks/site.yml` deployment. It does not manage web1–web4.
+
+## Settings and persistence
+
+| Layer | Setting | Purpose / impact |
+|---|---|---|
+| Host nginx | Case-insensitive `multipart/form-data` rejection, status 415 | Preserves the incident hot patch in HTTP bootstrap, HTTP redirects, both HTTPS apps, and legacy HTTPS redirects. Upload forms fail while enabled. |
+| Host nginx | Portal body limit 8 MiB; search 1 MiB | Bounds request bodies, including chunked requests. Portal JSON submissions exceeding 8 MiB fail with 413; response downloads are unaffected. |
+| PHP startup INI | `session.upload_progress.enabled=Off` | Disables native upload-progress processing before request parsing. |
+| FPM pool | `pm.max_requests=1` | A worker handles one request then exits; this breaks documented same-worker, later-request stale-state sequences. Increased process churn can reduce throughput. |
+| FPM pool | `php_admin_value[memory_limit]=-1` | Removes PHP's predictable memory-limit failure; application `ini_set()` cannot restore a finite value. Does not eliminate underlying allocation failures. |
+| FPM pool | `post_max_size=8M`, `upload_max_filesize=2M` | Conservative body limits with upload size below POST size. Multipart remains blocked at nginx. |
+| FPM pool | `max_input_vars=1000`, `max_input_nesting_level=32` | Retains the field-count bound and reduces nesting from 64. Does not limit arbitrary JSON decoding or all allocations caused by application code. |
+| Quadlet/Podman | Portal 3072 MiB; search 2048 MiB | Kernel cgroup limits apply before any container processes start. Includes FPM, nginx, queues, and process managers. |
+
+The `quadlet` role writes two root-owned files under `gencc_php_config_dir`
+(default `/etc/gencc/php`) and mounts them read-only into **both** containers:
+
+- `zz-security-hardening.ini` → `/usr/local/etc/php/conf.d/zz-security-hardening.ini`
+- `zz-security-hardening.conf` → `/usr/local/etc/php-fpm.d/zz-security-hardening.conf`
+
+These survive container replacement and VM reboot because the files live on the
+host and the mounts are in the Quadlet units. They supersede the previous
+container-layer INI hot patches. Existing published images can be used: no image
+rebuild or sibling-repository change is required. Running these images outside
+this Ansible/Quadlet deployment does not automatically enable these mitigations.
+
+Only FPM gets unlimited PHP memory; CLI jobs keep their existing PHP limits.
+The container cgroup budgets cover both. Do not copy the FPM override into an
+uncapped deployment, use nginx per-request `PHP_VALUE`/`PHP_ADMIN_VALUE` overrides,
+or substitute `RLIMIT_AS`/`RLIMIT_DATA` for kernel cgroup limits.
+
+## Memory budget and deployment
+
+Shared inventory variables define `gencc_sub_memory_limit_mb` (3072),
+`gencc_search_memory_limit_mb` (2048), and `gencc_host_memory_reserve_mb` (2048).
+The playbook requires positive caps, cgroup v2 with a memory controller, and
+enough physical RAM for both caps plus at least 2 GiB for host services. The
+approximately 8 GiB VMs leave roughly 2.75 GiB outside the two app budgets.
+
+These are temporary incident budgets, not validated peak-workload capacity.
+Concurrent exports or imports may hit them. Search still permits 50 concurrent
+FPM children. A cgroup OOM may kill another process in the same container, not
+necessarily the offending request, and does not guarantee prevention of all
+allocation failures. No per-worker cgroup isolation is implemented.
+
+The normal playbook writes the configuration, regenerates Quadlets, and restarts
+both containers. Podman receives `--memory` at creation time, so FPM's unlimited
+setting is not introduced before the cap. Deployment verifies actual
+`memory.max`, PHP-FPM syntax, and the startup upload-progress setting. nginx is
+syntax-checked and its rendered request restrictions asserted before the final
+reload. Startup of the new containers replaces every old FPM worker.
+
+Deploy to staging first using the existing runbook. Check login, search/Livewire,
+small JSON API requests, downloads, exports, and background jobs. Confirm
+multipart rejection, inspect `memory.events`, and watch worker churn, latency,
+and 5xx responses before production. Local smoke tests do not establish workload
+capacity. This branch does not deploy itself or change image pins.
+
+## Scope of the PHP recommendations
+
+- `fatal_error_backtraces=0` applies to PHP 8.5, not our 8.1/7.4 runtimes.
+- The deployment supplies startup/pool settings, not early per-request INI
+  diagnostics. Existing nginx configurations had no `PHP_VALUE`/`PHP_ADMIN_VALUE`.
+- No blanket timeout reduction is made: PHP execution timeouts can themselves
+  produce stale state. Attacker-reachable application fatal errors still need
+  application-specific investigation; this deployment does not claim to fix them.
+- nginx body limits and multipart rejection do not constitute a general-purpose
+  field/header/JSON complexity filter. Ordinary multipart uploads are unavailable.
+
+## Local validation (no VM access)
+
+Use a Python environment with Jinja2 and PyYAML, such as the environment containing
+ansible-core. From the repository root:
+
+```sh
+python deployment/ansible/tests/test_php_mitigations.py
+cd deployment/ansible
+ansible-playbook -i localhost, --syntax-check playbooks/site.yml
+```
+
+Optional container tests require cached PHP-FPM images and an image containing
+nginx (the portal image contains both). They use `--pull=never`, replace image
+entrypoints with PHP-FPM/nginx binaries, bind ephemeral localhost ports, use a
+small synthetic PHP probe instead of Laravel, and remove their containers/files.
+No remote scripts or exploits are executed. Example from the repository root:
+
+```sh
+GENCC_PHP_TEST_IMAGES=php:8.1-fpm,php:7.4-fpm-alpine \
+GENCC_NGINX_TEST_IMAGE=ghcr.io/genecurationcoalition/gencc-sub:2.2.1 \
+python deployment/ansible/tests/test_php_mitigations.py
+```
+
+Choose native-architecture cached images when possible. Tests check live FPM
+settings, failed attempts to override the memory limit, unique worker PIDs per
+request, caps/settings after container restart, HTTP/HTTPS multipart rejection,
+redirect ordering, ACME accessibility, ordinary JSON requests, and oversized
+declared/chunked bodies. Template tests cover both inventories and optional
+redirects, and reject unsafe memory budget configurations.
+
+## Removal / rollback
+
+After deploying patched PHP, remove the FPM unlimited-memory override and restore
+appropriate finite PHP limits **before** relaxing external memory caps. Remove
+the relevant Quadlet mounts and host files together, then recreate the containers
+and verify effective FPM settings. Removing only a mount may reveal an old baked
+or hot-patched file beneath it; inspect the resulting configuration.
+
+Restore upload support and larger request limits separately after deciding it is
+safe; native upload progress may remain disabled if unused. Do not use a blanket
+revert as an incident rollback: it would also remove nginx rejection and memory
+containment. Prefer correcting the specific failing layer while keeping the
+other mitigations active.
+
+Sources: [PHP announcement](https://www.php.net/archive/2026.php#2026-10-21-5),
+[OOM advisory](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w),
+[stale-state advisory](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp),
+[FPM configuration](https://www.php.net/manual/en/install.fpm.configuration.php).

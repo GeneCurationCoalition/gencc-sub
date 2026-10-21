@@ -1,5 +1,7 @@
 # TLS termination on-host (Let's Encrypt). HTTP redirects to HTTPS.
 server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
   listen 80;
   server_name {{ gencc_submit_hostname }}{% for r in gencc_submit_hostname_redirects %} {{ r }}{% endfor %} {{ gencc_search_hostname }}{% for r in gencc_search_hostname_redirects %} {{ r }}{% endfor %};
 
@@ -16,13 +18,15 @@ server {
 # gencc-sub (submission portal)
 # ---------------------------------------------------------------------------
 server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
   listen 443 ssl http2;
   server_name {{ gencc_submit_hostname }};
 
   ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
 
-  client_max_body_size 100m;
+  client_max_body_size 8m;
 
   access_log /var/log/nginx/access.log gencc;
   error_log  /var/log/nginx/error.log;
@@ -78,8 +82,11 @@ server {
 # gencc-search (public search site)
 # ---------------------------------------------------------------------------
 server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
   listen 443 ssl http2;
   server_name {{ gencc_search_hostname }};
+  client_max_body_size 1m;
 
   ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
@@ -138,6 +145,8 @@ server {
 {% if gencc_submit_hostname_redirects %}
 
 server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
   listen 443 ssl http2;
   server_name {% for r in gencc_submit_hostname_redirects %}{{ r }} {% endfor %};
 
@@ -150,6 +159,8 @@ server {
 {% if gencc_search_hostname_redirects %}
 
 server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
   listen 443 ssl http2;
   server_name {% for r in gencc_search_hostname_redirects %}{{ r }} {% endfor %};
 
