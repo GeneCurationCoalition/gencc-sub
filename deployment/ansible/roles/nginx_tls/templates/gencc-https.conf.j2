@@ -1,9 +1,30 @@
 # TLS termination on-host (Let's Encrypt). HTTP redirects to HTTPS.
+# Keep portal and search separate so patched portal uploads can be restored
+# while the unpatched search application retains its incident restrictions.
+server {
+{% if gencc_php_incident_portal_mitigations | bool %}
+{% include 'gencc-php-mitigation.conf.j2' %}
+{% endif %}
+
+  listen 80;
+  server_name {{ gencc_submit_hostname }}{% for r in gencc_submit_hostname_redirects %} {{ r }}{% endfor %};
+  client_max_body_size {{ '8m' if (gencc_php_incident_portal_mitigations | bool) else '100m' }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/acme-challenge;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
 server {
 {% include 'gencc-php-mitigation.conf.j2' %}
 
   listen 80;
-  server_name {{ gencc_submit_hostname }}{% for r in gencc_submit_hostname_redirects %} {{ r }}{% endfor %} {{ gencc_search_hostname }}{% for r in gencc_search_hostname_redirects %} {{ r }}{% endfor %};
+  server_name {{ gencc_search_hostname }}{% for r in gencc_search_hostname_redirects %} {{ r }}{% endfor %};
+  client_max_body_size 1m;
 
   location /.well-known/acme-challenge/ {
     root /var/www/acme-challenge;
@@ -18,7 +39,9 @@ server {
 # gencc-sub (submission portal)
 # ---------------------------------------------------------------------------
 server {
+{% if gencc_php_incident_portal_mitigations | bool %}
 {% include 'gencc-php-mitigation.conf.j2' %}
+{% endif %}
 
   listen 443 ssl http2;
   server_name {{ gencc_submit_hostname }};
@@ -26,8 +49,8 @@ server {
   ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
 
-  # PHP INCIDENT 2026-10: temporary request-size limit.
-  client_max_body_size 8m;
+  # PHP INCIDENT 2026-10: restore the portal's normal limit after patching.
+  client_max_body_size {{ '8m' if (gencc_php_incident_portal_mitigations | bool) else '100m' }};
 
   access_log /var/log/nginx/access.log gencc;
   error_log  /var/log/nginx/error.log;
@@ -152,10 +175,13 @@ server {
 {% if gencc_submit_hostname_redirects %}
 
 server {
+{% if gencc_php_incident_portal_mitigations | bool %}
 {% include 'gencc-php-mitigation.conf.j2' %}
+{% endif %}
 
   listen 443 ssl http2;
   server_name {% for r in gencc_submit_hostname_redirects %}{{ r }} {% endfor %};
+  client_max_body_size {{ '8m' if (gencc_php_incident_portal_mitigations | bool) else '100m' }};
 
   ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;
@@ -170,6 +196,7 @@ server {
 
   listen 443 ssl http2;
   server_name {% for r in gencc_search_hostname_redirects %}{{ r }} {% endfor %};
+  client_max_body_size 1m;
 
   ssl_certificate     /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/privkey.pem;

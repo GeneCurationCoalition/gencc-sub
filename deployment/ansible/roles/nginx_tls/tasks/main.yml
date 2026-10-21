@@ -1,4 +1,20 @@
 ---
+# Also protect the nginx-only entrypoint from reopening an old portal image.
+- name: Require patched live portal before reopening nginx routes
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec -i gencc-sub php /dev/stdin 0 0 patched
+  args:
+    executable: /bin/bash
+    chdir: /
+    stdin: "{{ lookup('file', role_path ~ '/../quadlet/files/php-incident-verify.php') }}"
+  become_user: "{{ gencc_deploy_user }}"
+  changed_when: false
+  when:
+    - not (gencc_php_incident_portal_offline | bool)
+    - not (gencc_php_incident_portal_mitigations | bool)
+
 - name: Install nginx + certbot + fail2ban dependencies
   ansible.builtin.apt:
     name:

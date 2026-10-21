@@ -4,17 +4,18 @@
   ansible.builtin.shell: |
     set -euo pipefail
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    podman exec -i {{ item.name | quote }} php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} \
+    podman exec -i {{ item.name | quote }} php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} {{ item.mode }} \
       < {{ (gencc_php_config_dir ~ '/php-incident-verify.php') | quote }}
   args:
     executable: /bin/bash
     chdir: /
   become_user: "{{ gencc_deploy_user }}"
-  loop:
-    - { name: gencc-sub, memory_mb: "{{ gencc_sub_memory_limit_mb }}", max_children: 0 }
-    - { name: gencc-search, memory_mb: "{{ gencc_search_memory_limit_mb }}", max_children: 25 }
+  loop: "{{ gencc_php_incident_targets }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.mode }})"
   register: gencc_php_incident_live_check
   until: gencc_php_incident_live_check.rc == 0
-  retries: 5
+  # Existing entrypoints can spend several minutes fixing storage ownership.
+  retries: 60
   delay: 3
   changed_when: false

@@ -9,6 +9,11 @@ gencc_deploy_user: gencc
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0
 
+# Limit configuration writes and container restarts for a targeted rollout.
+gencc_deploy_apps: [gencc-sub, gencc-search]
+# Runtime-only rollouts may preserve the existing host environment files.
+gencc_deploy_write_env: true
+
 # Host bind ports (nginx routes to these)
 gencc_sub_port: 8080
 gencc_search_port: 8081
@@ -22,6 +27,7 @@ gencc_data_dir: /var/lib/gencc
 # See PHP-INTERIM-MITIGATION.md for coordinated removal after patching.
 # Public portal traffic receives a static nginx response; jobs keep running.
 gencc_php_incident_portal_offline: true
+gencc_php_incident_portal_mitigations: true
 # These host-managed files are mounted into BOTH apps, including existing images.
 gencc_php_config_dir: /etc/gencc/php
 # External caps must accompany FPM memory_limit=-1. Leave room for host MySQL.

@@ -1,11 +1,13 @@
 # HTTP-only bootstrap config (used before a certificate exists).
 server {
+{% if gencc_php_incident_portal_mitigations | bool %}
 {% include 'gencc-php-mitigation.conf.j2' %}
+{% endif %}
 
   listen 80;
   server_name {{ gencc_submit_hostname }}{% for r in gencc_submit_hostname_redirects %} {{ r }}{% endfor %};
-  # PHP INCIDENT 2026-10: temporary request-size limit.
-  client_max_body_size 8m;
+  # PHP INCIDENT 2026-10: restore the portal's normal limit after patching.
+  client_max_body_size {{ '8m' if (gencc_php_incident_portal_mitigations | bool) else '100m' }};
 
   location /.well-known/acme-challenge/ {
     root /var/www/acme-challenge;

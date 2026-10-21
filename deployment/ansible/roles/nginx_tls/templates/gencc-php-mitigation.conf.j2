@@ -1,4 +1,5 @@
   # PHP INCIDENT 2026-10: reject multipart before any proxying or redirect.
+  # Search always includes this; portal includes it until its runtime is patched.
   if ($http_content_type ~* "multipart/form-data") {
     return 415;
   }

@@ -1,0 +1,13 @@
+---
+# Runtime-only PHP upgrade: preserve live credentials, data, MySQL and timers.
+# Deploy behind maintenance first; use php-incident-edge.yml to reopen afterward.
+- name: Upgrade the portal runtime while preserving existing host configuration
+  hosts: gcp_vms
+  become: true
+  vars:
+    gencc_deploy_apps: [gencc-sub]
+    gencc_deploy_write_env: false
+    gencc_php_incident_portal_offline: true
+  roles:
+    - quadlet
+    - nginx_tls

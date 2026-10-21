@@ -17,6 +17,9 @@
   loop:
     - { name: "gencc-sub", content: "{{ gencc_sub_env | default('') }}" }
     - { name: "gencc-search", content: "{{ gencc_search_env | default('') }}" }
+  when:
+    - item.name in gencc_deploy_apps
+    - gencc_deploy_write_env | bool
   no_log: true
 
 - name: Ensure application .env files are set
@@ -27,6 +30,25 @@
       - gencc_sub_env | length > 0
       - gencc_search_env | length > 0
     fail_msg: "Set app .env contents in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
+  when: gencc_deploy_write_env | bool
+
+- name: Check preserved application environment files
+  ansible.builtin.stat:
+    path: "{{ gencc_secrets_dir }}/{{ item }}.env"
+  loop: "{{ gencc_deploy_apps }}"
+  register: gencc_preserved_env_files
+  when: not (gencc_deploy_write_env | bool)
+
+- name: Require existing nonempty environment files when preserving configuration
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - item.stat.size | default(0) | int > 0
+    fail_msg: "Cannot preserve a missing or empty application environment file."
+  loop: "{{ gencc_preserved_env_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not (gencc_deploy_write_env | bool)
 
 - name: Ensure Quadlet directory exists for deploy user
   ansible.builtin.file:
@@ -43,6 +65,7 @@
     owner: "{{ gencc_deploy_user }}"
     group: "{{ gencc_deploy_user }}"
     mode: "0644"
+  when: "'gencc-sub' in gencc_deploy_apps"
 
 - name: Install gencc-search quadlet unit
   ansible.builtin.template:
@@ -51,6 +74,7 @@
     owner: "{{ gencc_deploy_user }}"
     group: "{{ gencc_deploy_user }}"
     mode: "0644"
+  when: "'gencc-search' in gencc_deploy_apps"
 
 - name: Reload user systemd for Quadlet (requires lingering)
   ansible.builtin.shell: |
@@ -67,11 +91,11 @@
     set -euo pipefail
     uid="$(id -u {{ gencc_deploy_user }})"
     export XDG_RUNTIME_DIR="/run/user/${uid}"
-    systemctl --user restart gencc-sub.service
-    systemctl --user restart gencc-search.service
+    systemctl --user restart {{ item }}.service
   args:
     executable: /bin/bash
   become_user: "{{ gencc_deploy_user }}"
+  loop: "{{ gencc_deploy_apps }}"
 
 # BEGIN PHP INCIDENT 2026-10
 - name: Verify interim PHP incident mitigations

@@ -3,15 +3,38 @@
 - name: Require finite container memory budgets with room for host services
   ansible.builtin.assert:
     that:
-      - gencc_sub_memory_limit_mb | int > 0
+      - not (gencc_php_incident_portal_mitigations | bool) or gencc_sub_memory_limit_mb | int > 0
       - gencc_search_memory_limit_mb | int > 0
       - gencc_host_memory_reserve_mb | int >= 2048
       - >-
-        (gencc_sub_memory_limit_mb | int + gencc_search_memory_limit_mb | int
+        ((gencc_sub_memory_limit_mb | int if gencc_php_incident_portal_mitigations | bool else 0) + gencc_search_memory_limit_mb | int
         + gencc_host_memory_reserve_mb | int) <= ansible_facts.memtotal_mb
     fail_msg: >-
       FPM memory_limit=-1 requires finite container caps and at least 2 GiB
       reserved for host services. Check the GenCC memory budget variables.
+
+- name: Require a nonempty selection of known application containers
+  ansible.builtin.assert:
+    that:
+      - gencc_deploy_apps | length > 0
+      - gencc_deploy_apps | difference(['gencc-sub', 'gencc-search']) | length == 0
+      - gencc_deploy_apps | unique | length == gencc_deploy_apps | length
+
+- name: Select application runtime checks for this deployment
+  ansible.builtin.set_fact:
+    gencc_php_incident_targets: "{{ gencc_php_incident_applications | selectattr('name', 'in', gencc_deploy_apps) | list }}"
+  vars:
+    gencc_php_incident_applications:
+      - name: gencc-sub
+        image: "{{ gencc_sub_image }}"
+        memory_mb: "{{ gencc_sub_memory_limit_mb if gencc_php_incident_portal_mitigations | bool else 0 }}"
+        max_children: 0
+        mode: "{{ 'mitigated' if gencc_php_incident_portal_mitigations | bool else 'patched' }}"
+      - name: gencc-search
+        image: "{{ gencc_search_image }}"
+        memory_mb: "{{ gencc_search_memory_limit_mb }}"
+        max_children: 25
+        mode: mitigated
 
 - name: Create temporary PHP incident candidate directory
   ansible.builtin.tempfile:
@@ -38,17 +61,17 @@
       ansible.builtin.shell: |
         set -euo pipefail
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-        if ! podman image exists {{ item | quote }}; then
-          podman pull {{ item | quote }}
+        if ! podman image exists {{ item.image | quote }}; then
+          podman pull {{ item.image | quote }}
           echo pulled
         fi
       args:
         executable: /bin/bash
         chdir: /
       become_user: "{{ gencc_deploy_user }}"
-      loop:
-        - "{{ gencc_sub_image }}"
-        - "{{ gencc_search_image }}"
+      loop: "{{ gencc_php_incident_targets }}"
+      loop_control:
+        label: "{{ item.name }}"
       register: gencc_php_incident_pull
       changed_when: "'pulled' in gencc_php_incident_pull.stdout_lines"
 
@@ -66,23 +89,23 @@
           exit "$rc"
         }
         trap cleanup EXIT
-        cid=$(podman run -d --pull=never --network=none \
-          --memory={{ item.memory_mb }}m --entrypoint=php-fpm \
+        cid=$(podman run -d --pull=never --network=none --entrypoint=php-fpm \
+        {% if item.mode == 'mitigated' %}
+          --memory={{ item.memory_mb }}m \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.ini:/usr/local/etc/php/conf.d/zz-security-hardening.ini:ro') | quote }} \
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-hardening.conf:/usr/local/etc/php-fpm.d/zz-security-hardening.conf:ro') | quote }} \
+        {% endif %}
         {% if item.name == 'gencc-search' %}
           -v {{ (gencc_php_incident_candidate.path ~ '/zz-security-search-pool.conf:/usr/local/etc/php-fpm.d/zz-security-search-pool.conf:ro') | quote }} \
         {% endif %}
           {{ item.image | quote }} -F)
-        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} \
+        podman exec -i "$cid" php /dev/stdin {{ item.memory_mb | int * 1048576 }} {{ item.max_children }} {{ item.mode }} \
           < {{ (gencc_php_incident_candidate.path ~ '/php-incident-verify.php') | quote }}
       args:
         executable: /bin/bash
         chdir: /
       become_user: "{{ gencc_deploy_user }}"
-      loop:
-        - { name: gencc-sub, image: "{{ gencc_sub_image }}", memory_mb: "{{ gencc_sub_memory_limit_mb }}", max_children: 0 }
-        - { name: gencc-search, image: "{{ gencc_search_image }}", memory_mb: "{{ gencc_search_memory_limit_mb }}", max_children: 25 }
+      loop: "{{ gencc_php_incident_targets }}"
       loop_control:
         label: "{{ item.name }}"
       changed_when: false

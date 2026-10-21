@@ -1,11 +1,18 @@
 <?php
 // PHP INCIDENT 2026-10. Run via CLI inside the container, never through nginx.
-// Usage: php /dev/stdin EXPECTED_MEMORY_BYTES EXPECTED_MAX_CHILDREN (0 = image default).
+// Usage: php /dev/stdin EXPECTED_MEMORY_BYTES EXPECTED_MAX_CHILDREN [mitigated|patched].
+// Zero skips the corresponding cap/worker check for the patched portal.
 function requireCheck($condition, $message)
 {
     if (!$condition) {
         throw new RuntimeException($message);
     }
+}
+
+function requirePatchedPortal($version)
+{
+    requireCheck(version_compare($version, '8.3.36', '>=') && version_compare($version, '8.4.0', '<'),
+        'Portal requires patched PHP 8.3.36 or a later 8.3 release');
 }
 
 function fcgiRecord($type, $body)
@@ -71,8 +78,19 @@ function probeFpm($path)
 $directory = '/tmp/gencc-php-check-' . bin2hex(random_bytes(8));
 $exitCode = 0;
 try {
-    requireCheck(trim(file_get_contents('/sys/fs/cgroup/memory.max')) === ($argv[1] ?? ''),
-        'Container memory.max does not match the deployment budget');
+    $mode = $argv[3] ?? 'mitigated';
+    requireCheck(in_array($mode, ['mitigated', 'patched'], true), 'Unknown runtime verification mode');
+    if ($mode === 'patched') {
+        requirePatchedPortal(PHP_VERSION);
+        requireCheck(ini_get('memory_limit') === '2048M', 'Portal CLI memory limit must be restored to 2048M');
+        foreach (['pdo_mysql', 'mbstring', 'zip', 'pcntl', 'gd', 'Zend OPcache'] as $extension) {
+            requireCheck(extension_loaded($extension), 'Portal extension is missing: ' . $extension);
+        }
+    }
+    if (($argv[1] ?? '0') !== '0') {
+        requireCheck(trim(file_get_contents('/sys/fs/cgroup/memory.max')) === $argv[1],
+            'Container memory.max does not match the deployment budget');
+    }
     requireCheck(mkdir($directory, 0755), 'Cannot create temporary probe directory');
     chmod($directory, 0755);
     // Override diagnostic logging only: the included pool configuration is unchanged.
@@ -89,7 +107,9 @@ try {
             $settings[$match[1]] = trim($match[2]);
         }
     }
-    requireCheck(($settings['pm.max_requests'] ?? '') === '1', 'FPM pm.max_requests must be 1');
+    if ($mode === 'mitigated') {
+        requireCheck(($settings['pm.max_requests'] ?? '') === '1', 'FPM pm.max_requests must be 1');
+    }
     if (($argv[2] ?? '0') !== '0') {
         requireCheck(($settings['pm.max_children'] ?? '') === $argv[2], 'Unexpected FPM pm.max_children');
     }
@@ -100,7 +120,7 @@ try {
 $memory = ini_get('memory_limit');
 $override = ini_set('memory_limit', '32M');
 header('Content-Type: application/json');
-echo json_encode(['pid' => getmypid(), 'memory' => $memory,
+echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION, 'memory' => $memory,
     'after' => ini_get('memory_limit'), 'override' => $override,
     'progress' => ini_get('session.upload_progress.enabled'),
     'post' => ini_get('post_max_size'), 'upload' => ini_get('upload_max_filesize'),
@@ -111,15 +131,25 @@ PHP
     $pids = [];
     for ($request = 0; $request < 4; $request++) {
         $result = probeFpm($directory . '/probe.php');
-        requireCheck($result['memory'] === '-1' && $result['after'] === '-1' && $result['override'] === false,
-            'Live FPM memory_limit must be administratively locked to -1');
-        requireCheck(in_array($result['progress'], ['', '0'], true), 'Live FPM upload progress is enabled');
-        requireCheck([$result['post'], $result['upload'], $result['vars'], $result['nesting']]
-            === ['8M', '2M', '1000', '32'], 'Live FPM input limits do not match mitigation settings');
+        if ($mode === 'patched') {
+            requirePatchedPortal($result['version']);
+            requireCheck([$result['memory'], $result['post'], $result['upload']] === ['2048M', '20M', '20M'],
+                'Live portal FPM memory/upload limits have not been restored');
+        } else {
+            requireCheck($result['memory'] === '-1' && $result['after'] === '-1' && $result['override'] === false,
+                'Live FPM memory_limit must be administratively locked to -1');
+            requireCheck(in_array($result['progress'], ['', '0'], true), 'Live FPM upload progress is enabled');
+            requireCheck([$result['post'], $result['upload'], $result['vars'], $result['nesting']]
+                === ['8M', '2M', '1000', '32'], 'Live FPM input limits do not match mitigation settings');
+        }
         $pids[] = $result['pid'];
     }
-    requireCheck(count(array_unique($pids)) === 4, 'FPM reused a worker across probe requests');
-    echo "Verified container memory cap, www pool limits, live FPM settings and worker recycling.\n";
+    if ($mode === 'mitigated') {
+        requireCheck(count(array_unique($pids)) === 4, 'FPM reused a worker across probe requests');
+        echo "Verified container memory cap, www pool limits, live FPM settings and worker recycling.\n";
+    } else {
+        echo "Verified patched PHP 8.3 in CLI/FPM and restored portal memory/upload settings.\n";
+    }
 } catch (Throwable $error) {
     fwrite(STDERR, $error->getMessage() . "\n");
     $exitCode = 1;

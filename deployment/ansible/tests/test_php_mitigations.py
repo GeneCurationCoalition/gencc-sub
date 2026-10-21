@@ -65,12 +65,19 @@ class Templates(unittest.TestCase):
                   if task['name'] == 'Assert hardened HTTPS nginx config is rendered']
         env = jinja2.Environment()
         env.filters['bool'] = to_bool
-        for offline in [True, False]:
-            values = context('production') | {'gencc_php_incident_portal_offline': offline}
+        env.filters['to_json'] = json.dumps
+        for environment, offline in product(['staging', 'production'], [True, False]):
+            values = context(environment) | {'gencc_php_incident_portal_offline': offline}
             config = render('nginx_tls', 'gencc-https.conf.j2', values)
             values['gencc_nginx_rendered_config'] = {'stdout': config}
             for task in tasks:
                 if task['name'] == 'Require static portal maintenance with no portal upstream' and not offline:
+                    continue
+                if 'ansible.builtin.command' in task:
+                    spec = task['ansible.builtin.command']
+                    result = subprocess.run(spec['argv'], input=env.from_string(spec['stdin']).render(values),
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
                     continue
                 for expression in task['ansible.builtin.assert']['that']:
                     self.assertTrue(env.compile_expression(expression)(**values), expression)
@@ -80,10 +87,23 @@ class Templates(unittest.TestCase):
         self.assertEqual(play['roles'], ['nginx_tls'])
         self.assertFalse(play.get('tasks') or play.get('pre_tasks') or play.get('post_tasks'))
 
+    def test_edge_reopening_requires_patched_live_portal_before_any_nginx_writes(self):
+        task = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/main.yml').read_text())[0]
+        self.assertEqual(task['name'], 'Require patched live portal before reopening nginx routes')
+        self.assertIn('podman exec -i gencc-sub php /dev/stdin 0 0 patched', task['ansible.builtin.shell'])
+        self.assertIn('/quadlet/files/php-incident-verify.php', task['args']['stdin'])
+        env = jinja2.Environment()
+        env.filters['bool'] = to_bool
+        for offline, mitigations in product([True, False], repeat=2):
+            values = {'gencc_php_incident_portal_offline': offline,
+                      'gencc_php_incident_portal_mitigations': mitigations}
+            checks = [env.compile_expression(expression)(**values) for expression in task['when']]
+            self.assertEqual(all(checks), not offline and not mitigations)
+
     def test_portal_offline_removes_every_upstream_and_can_be_reversed(self):
         for environment in ['staging', 'production']:
             values = context(environment)
-            self.assertTrue(values['gencc_php_incident_portal_offline'])
+            self.assertEqual(values['gencc_php_incident_portal_offline'], environment == 'production')
             for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
                 for offline in [True, False]:
                     with self.subTest(environment=environment, template=template, offline=offline):
@@ -97,7 +117,7 @@ class Templates(unittest.TestCase):
 
     def test_every_http_tls_and_redirect_server_rejects_multipart_first(self):
         for environment in ['staging', 'production']:
-            values = context(environment)
+            values = context(environment) | {'gencc_php_incident_portal_mitigations': True}
             # Also exercise the optional portal redirect, absent in inventories.
             values['gencc_submit_hostname_redirects'] = ['old-portal.example.test']
             for name in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
@@ -106,13 +126,13 @@ class Templates(unittest.TestCase):
                     servers = re.split(r'(?m)^server \{', config)[1:]
                     self.assertGreaterEqual(len(servers), 2)
                     for server in servers:
-                        self.assertRegex(server, r'^\s*#.*\n\s*if \(\$http_content_type ~\* "multipart/form-data"\) \{\s*return 415;')
+                        self.assertRegex(server, r'^\s*(?:#[^\n]*\n\s*)*if \(\$http_content_type ~\* "multipart/form-data"\) \{\s*return 415;')
                     self.assertIn('client_max_body_size 8m;', config)
                     self.assertIn('client_max_body_size 1m;', config)
 
     def test_recreated_containers_get_both_readonly_configs_and_finite_caps(self):
         for environment in ['staging', 'production']:
-            values = context(environment)
+            values = context(environment) | {'gencc_php_incident_portal_mitigations': True}
             for app in ['sub', 'search']:
                 config = render('quadlet', f'gencc-{app}.container.j2', values)
                 self.assertIn(f'PodmanArgs=--memory={values[f"gencc_{app}_memory_limit_mb"]}m', config)
@@ -120,9 +140,64 @@ class Templates(unittest.TestCase):
                                                ('zz-security-hardening.conf', 'php-fpm.d')]:
                     self.assertIn(f'Volume={values["gencc_php_config_dir"]}/{filename}:/usr/local/etc/{destination}/{filename}:ro', config)
 
+    def test_staging_restores_only_patched_portal_and_production_stays_closed(self):
+        for environment in ['staging', 'production']:
+            values = context(environment) | {'gencc_submit_hostname_redirects': ['old-portal.example.test']}
+            protected = environment == 'production'
+            self.assertEqual(values['gencc_php_incident_portal_mitigations'], protected)
+            self.assertEqual(values['gencc_php_incident_portal_offline'], protected)
+            if not protected:
+                self.assertTrue(values['gencc_sub_image'].endswith(':2.3.0'))
+            sub = render('quadlet', 'gencc-sub.container.j2', values)
+            self.assertEqual('PodmanArgs=--memory=' in sub, protected)
+            self.assertEqual('zz-security-hardening.ini:' in sub, protected)
+            self.assertEqual('zz-security-hardening.conf:' in sub, protected)
+            self.assertNotIn('zz-security-search-pool.conf:', sub)
+            search = render('quadlet', 'gencc-search.container.j2', values)
+            self.assertIn('PodmanArgs=--memory=2048m', search)
+            for filename in ['zz-security-hardening.ini', 'zz-security-hardening.conf', 'zz-security-search-pool.conf']:
+                self.assertIn(filename + ':ro', search)
+            for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
+                config = render('nginx_tls', template, values)
+                self.assertEqual('return 503' in config, protected)
+                for server in re.split(r'(?m)^server \{', config)[1:]:
+                    names = re.search(r'\bserver_name\s+([^;]+);', server).group(1).split()
+                    portal = any(name in [values['gencc_submit_hostname'], 'old-portal.example.test'] for name in names)
+                    with self.subTest(environment=environment, template=template, names=names):
+                        self.assertEqual('return 415;' in server, protected if portal else True)
+                        limit = ('8m' if protected else '100m') if portal else '1m'
+                        self.assertIn(f'client_max_body_size {limit};', server)
+
+    def test_portal_maintenance_can_precede_relaxing_patched_runtime_restrictions(self):
+        values = context('staging') | {'gencc_php_incident_portal_offline': True}
+        for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
+            config = render('nginx_tls', template, values)
+            self.assertIn('return 503', config)
+            self.assertNotIn('proxy_pass http://127.0.0.1:8080;', config)
+            self.assertIn('proxy_pass http://127.0.0.1:8081;', config)
+
+    def test_nginx_validator_rejects_one_unprotected_search_server(self):
+        task = yaml.safe_load((ROOT / 'roles/nginx_tls/tasks/php_incident_validate.yml').read_text())[0]
+        spec = task['ansible.builtin.command']
+        env = jinja2.Environment()
+        env.filters['bool'] = to_bool
+        env.filters['to_json'] = json.dumps
+        values = context('staging')
+        config = render('nginx_tls', 'gencc-https.conf.j2', values)
+        # Staging portal permits uploads; remove just one search rejection. The
+        # remaining search blocks still contain the global mitigation strings.
+        broken = config.replace('return 415;', 'return 418;', 1)
+        self.assertIn('return 415;', broken)
+        values['gencc_nginx_rendered_config'] = {'stdout': broken}
+        result = subprocess.run(spec['argv'], input=env.from_string(spec['stdin']).render(values),
+                                capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('multipart restriction', result.stderr)
+
     def test_memory_budget_guard_accepts_vm_and_rejects_unbounded_or_oversized_caps(self):
         task = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())[0]
         env = jinja2.Environment()
+        env.filters['bool'] = to_bool
         conditions = [env.compile_expression(c) for c in task['ansible.builtin.assert']['that']]
         values = DEFAULTS | {'ansible_facts': {'memtotal_mb': 7937}}
         self.assertTrue(all(c(**values) for c in conditions))
@@ -130,6 +205,52 @@ class Templates(unittest.TestCase):
                           {'gencc_host_memory_reserve_mb': 0}, {'gencc_sub_memory_limit_mb': 7000},
                           {'ansible_facts': {'memtotal_mb': 4096}}]:
             self.assertFalse(all(c(**(values | overrides)) for c in conditions))
+
+    def test_selected_portal_preflight_has_no_incident_mounts_or_cap(self):
+        tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
+        selection = next(task for task in tasks if 'gencc_php_incident_applications' in task.get('vars', {}))
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined, trim_blocks=True)
+        env.filters['bool'] = to_bool
+        env.filters['quote'] = shlex.quote
+        for environment in ['staging', 'production']:
+            for selected in [['gencc-sub'], ['gencc-search'], ['gencc-sub', 'gencc-search']]:
+                values = context(environment) | {'gencc_deploy_apps': selected}
+                apps = [{key: env.from_string(value).render(values) if isinstance(value, str) else value
+                         for key, value in app.items()}
+                        for app in selection['vars']['gencc_php_incident_applications']]
+                expression = selection['ansible.builtin.set_fact']['gencc_php_incident_targets'].strip()[2:-2]
+                targets = env.compile_expression(expression)(**values, gencc_php_incident_applications=apps)
+                self.assertEqual([item['name'] for item in targets], selected)
+                shell = next(task['ansible.builtin.shell'] for task in tasks[-1]['block']
+                             if task['name'].startswith('Preflight candidate'))
+                for item in targets:
+                    rendered = env.from_string(shell).render(values, item=item,
+                        gencc_php_incident_candidate={'path': '/tmp/candidate'})
+                    patched = item['name'] == 'gencc-sub' and environment == 'staging'
+                    with self.subTest(environment=environment, selected=selected, app=item['name']):
+                        self.assertEqual(item['mode'], 'patched' if patched else 'mitigated')
+                        self.assertEqual('--memory=' in rendered, not patched)
+                        self.assertEqual('zz-security-hardening.ini:' in rendered, not patched)
+                        self.assertEqual('zz-security-hardening.conf:' in rendered, not patched)
+                        if patched:
+                            self.assertIn('php /dev/stdin 0 0 patched', rendered)
+        main = yaml.safe_load((ROOT / 'roles/quadlet/tasks/main.yml').read_text())
+        restart = next(task for task in main if task['name'] == 'Start (or restart) quadlet services')
+        self.assertEqual(restart['loop'], '{{ gencc_deploy_apps }}')
+        verify = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_verify.yml').read_text())[0]
+        self.assertEqual(verify['loop'], '{{ gencc_php_incident_targets }}')
+
+    def test_runtime_only_rollout_preserves_environment_and_stays_in_maintenance(self):
+        play = yaml.safe_load((ROOT / 'playbooks/portal-runtime.yml').read_text())[0]
+        self.assertEqual(play['roles'], ['quadlet', 'nginx_tls'])
+        self.assertEqual(play['vars']['gencc_deploy_apps'], ['gencc-sub'])
+        self.assertFalse(play['vars']['gencc_deploy_write_env'])
+        self.assertTrue(play['vars']['gencc_php_incident_portal_offline'])
+        tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/main.yml').read_text())
+        write = next(task for task in tasks if task['name'] == 'Write application .env files from vault')
+        self.assertIn('gencc_deploy_write_env | bool', write['when'])
+        check = next(task for task in tasks if task['name'].startswith('Require existing nonempty'))
+        self.assertEqual(check['when'], 'not (gencc_deploy_write_env | bool)')
 
 
 class ContainerTests(unittest.TestCase):
@@ -145,14 +266,17 @@ class ContainerTests(unittest.TestCase):
             command('podman', 'rm', '-f', cid)
         self.temp.cleanup()
 
-    def start(self, image, entrypoint, args, ports):
-        cmd = ['podman', 'run', '-d', '--pull=never', '--memory=512m', '--entrypoint', entrypoint,
+    def start(self, image, entrypoint, args, ports, mitigations=True, memory='512m'):
+        cmd = ['podman', 'run', '-d', '--pull=never', '--entrypoint', entrypoint,
                '-v', f'{self.directory}:/test:ro']
+        if memory:
+            cmd += ['--memory=' + memory]
         for port in ports:
             cmd += ['-p', f'127.0.0.1::{port}']
-        for name, destination in [('zz-security-hardening.ini', 'php/conf.d'),
-                                  ('zz-security-hardening.conf', 'php-fpm.d')]:
-            cmd += ['-v', f'{FILES / name}:/usr/local/etc/{destination}/{name}:ro']
+        if mitigations:
+            for name, destination in [('zz-security-hardening.ini', 'php/conf.d'),
+                                      ('zz-security-hardening.conf', 'php-fpm.d')]:
+                cmd += ['-v', f'{FILES / name}:/usr/local/etc/{destination}/{name}:ro']
         cid = command(*cmd, image, *args)
         self.containers.append(cid)
         result = {}
@@ -188,7 +312,7 @@ class ContainerTests(unittest.TestCase):
                 with self.subTest(image=image, app=app):
                     rendered = env.from_string(shell).render(
                         gencc_php_incident_candidate={'path': str(self.directory)},
-                        item={'name': app, 'image': image, 'memory_mb': 512, 'max_children': children})
+                        item={'name': app, 'image': image, 'memory_mb': 512, 'max_children': children, 'mode': 'mitigated'})
                     self.assertIn('Verified container memory cap', command('bash', '-c', rendered))
             original = (self.directory / 'zz-security-hardening.conf').read_text()
             try:
@@ -198,11 +322,27 @@ class ContainerTests(unittest.TestCase):
             finally:
                 (self.directory / 'zz-security-hardening.conf').write_text(original)
 
-    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0'):
+    def verify_deployment_probe(self, cid, expected_memory='536870912', expected_children='0', mode='mitigated'):
         return subprocess.run(['podman', 'exec', '-i', cid, 'php', '/dev/stdin',
-                               expected_memory, expected_children],
+                               expected_memory, expected_children, mode],
                               input=(FILES / 'php-incident-verify.php').read_text(),
                               capture_output=True, text=True, timeout=45)
+
+    @unittest.skipUnless(os.environ.get('GENCC_PATCHED_PHP_TEST_IMAGE'), 'set GENCC_PATCHED_PHP_TEST_IMAGE for patched portal checks')
+    def test_patched_portal_normal_settings_pass_and_incident_mounts_are_rejected(self):
+        image = os.environ['GENCC_PATCHED_PHP_TEST_IMAGE']
+        for mitigations in [False, True]:
+            with self.subTest(mitigations=mitigations):
+                cid, ports = self.start(image, 'php-fpm', ['-F'], [9000],
+                                        mitigations=mitigations, memory=None)
+                self.wait(ports[9000])
+                result = self.verify_deployment_probe(cid, expected_memory='0', mode='patched')
+                if mitigations:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('memory', result.stderr.lower())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('patched', result.stdout.lower())
 
     @unittest.skipUnless(os.environ.get('GENCC_PHP_TEST_IMAGES'), 'set GENCC_PHP_TEST_IMAGES for local FPM tests')
     def test_live_fpm_admin_settings_worker_recycling_and_restart(self):
@@ -256,6 +396,40 @@ echo json_encode(['pid' => getmypid(), 'version' => PHP_VERSION,
                 self.assertIn('pm.max_requests', rejected.stderr)
                 self.assertEqual(command('podman', 'exec', cid, 'sh', '-c',
                                          "find /tmp -maxdepth 1 -name 'gencc-php-check-*' -print"), '')
+
+    @unittest.skipUnless(os.environ.get('GENCC_NGINX_TEST_IMAGE'), 'set GENCC_NGINX_TEST_IMAGE for local HTTP tests')
+    def test_restored_staging_portal_allows_multipart_while_search_stays_blocked(self):
+        command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                '-subj', '/CN=localhost', '-keyout', str(self.directory / 'privkey.pem'),
+                '-out', str(self.directory / 'fullchain.pem'))
+        values = context('staging') | {'gencc_search_hostname_redirects': ['old-search.example.test']}
+        for name in ['gencc-security.conf', 'gencc-ip-blocklist.conf', 'gencc-proxy-params.conf']:
+            (self.directory / name).write_text(render('nginx_tls', name + '.j2', values))
+        for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
+            config = render('nginx_tls', template, values)
+            config = config.replace('/etc/nginx/snippets/', '/test/')
+            config = config.replace('/etc/letsencrypt/live/gencc-stage/', '/test/')
+            (self.directory / 'nginx.conf').write_text(
+                'events {}\nhttp {\ninclude /test/gencc-security.conf;\n' + config +
+                '\nserver { listen 8080; location / { return 200 "portal upstream"; } }\n' +
+                'server { listen 8081; location / { return 200 "search upstream"; } }\n}\n')
+            cid, ports = self.start(os.environ['GENCC_NGINX_TEST_IMAGE'], 'nginx',
+                                   ['-c', '/test/nginx.conf', '-g', 'daemon off;'], [80, 443])
+            self.wait(ports[80])
+            tls = template == 'gencc-https.conf.j2'
+            for content_type in ['multipart/form-data; boundary=test', 'MuLtIpArT/FoRm-DaTa']:
+                status, _, body = http_status(ports, values['gencc_submit_hostname'], tls,
+                                              content_type=content_type, details=True)
+                self.assertEqual(status, 200)
+                self.assertEqual(body, 'portal upstream')
+                if tls:
+                    self.assertEqual(http_status(ports, values['gencc_submit_hostname'], False,
+                                                 content_type=content_type), 301)
+                for host, protocol in product([values['gencc_search_hostname'], 'old-search.example.test'],
+                                               [False, True] if tls else [False]):
+                    self.assertEqual(http_status(ports, host, protocol, content_type=content_type), 415)
+            command('podman', 'rm', '-f', cid)
+            self.containers.remove(cid)
 
     @unittest.skipUnless(os.environ.get('GENCC_NGINX_TEST_IMAGE'), 'set GENCC_NGINX_TEST_IMAGE for local HTTP tests')
     def test_nginx_bootstrap_tls_redirects_and_chunked_body_limit(self):
