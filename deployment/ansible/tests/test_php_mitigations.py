@@ -95,7 +95,7 @@ class Templates(unittest.TestCase):
     def test_portal_offline_removes_every_upstream_and_can_be_reversed(self):
         for environment in ['staging', 'production']:
             values = context(environment)
-            self.assertEqual(values['gencc_php_incident_portal_offline'], environment == 'production')
+            self.assertFalse(values['gencc_php_incident_portal_offline'])
             for template in ['gencc-http.conf.j2', 'gencc-https.conf.j2']:
                 for offline in [True, False]:
                     with self.subTest(environment=environment, template=template, offline=offline):
@@ -132,10 +132,10 @@ class Templates(unittest.TestCase):
                                                ('zz-security-hardening.conf', 'php-fpm.d')]:
                     self.assertIn(f'Volume={values["gencc_php_config_dir"]}/{filename}:/usr/local/etc/{destination}/{filename}:ro', config)
 
-    def test_staging_restores_only_patched_portal_and_production_stays_closed(self):
+    def test_both_environments_restore_only_patched_portal(self):
         for environment in ['staging', 'production']:
             values = context(environment) | {'gencc_submit_hostname_redirects': ['old-portal.example.test']}
-            protected = environment == 'production'
+            protected = False
             self.assertEqual(values['gencc_php_incident_portal_mitigations'], protected)
             self.assertEqual(values['gencc_php_incident_portal_offline'], protected)
             if not protected:
@@ -200,7 +200,7 @@ class Templates(unittest.TestCase):
                 for item in targets:
                     rendered = env.from_string(shell).render(values, item=item,
                         gencc_php_incident_candidate={'path': '/tmp/candidate'})
-                    patched = item['name'] == 'gencc-sub' and environment == 'staging'
+                    patched = item['name'] == 'gencc-sub'
                     with self.subTest(environment=environment, selected=selected, app=item['name']):
                         self.assertEqual(item['mode'], 'patched' if patched else 'mitigated')
                         self.assertEqual('--memory=' in rendered, not patched)
@@ -350,7 +350,10 @@ class ContainerTests(unittest.TestCase):
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
                 '-subj', '/CN=localhost', '-keyout', str(self.directory / 'privkey.pem'),
                 '-out', str(self.directory / 'fullchain.pem'))
-        values = context('production') | {'gencc_submit_hostname_redirects': ['old-portal.example.test']}
+        values = context('production') | {
+            'gencc_submit_hostname_redirects': ['old-portal.example.test'],
+            'gencc_php_incident_portal_mitigations': True,
+        }
         for name in ['gencc-security.conf', 'gencc-ip-blocklist.conf', 'gencc-proxy-params.conf']:
             (self.directory / name).write_text(render('nginx_tls', name + '.j2', values))
         acme = self.directory / 'acme/.well-known/acme-challenge'
