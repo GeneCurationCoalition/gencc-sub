@@ -1,9 +1,8 @@
 # Temporary PHP incident deployment — October 2026
 
 [PHP advisory](https://www.php.net/archive/2026.php#2026-10-21-5).
-Staging portal uses image `2.3.0` (PHP 8.3.36) with uploads restored.
-Production portal remains in maintenance; search retains interim mitigations
-in both environments.
+Both inventories select portal image `2.3.0` (PHP 8.3.36) with uploads restored.
+Search retains interim mitigations in both environments.
 
 ## Portal rollout
 
@@ -16,8 +15,7 @@ ansible-playbook -i inventories/staging.ini playbooks/php-incident-edge.yml --as
 ```
 
 Then verify a browser upload, search availability, and search multipart rejection.
-For production, first select the patched image and disable portal mitigations in
-its inventory, then use the same commands with `inventories/production.ini`.
+For production, use the same commands with `inventories/production.ini`.
 
 The runtime playbook preserves the live `.env`. Staging's live settings differ
 from its vault; reconcile that drift before using the full `site.yml` playbook.
