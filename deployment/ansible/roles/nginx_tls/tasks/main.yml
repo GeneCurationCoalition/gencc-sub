@@ -54,6 +54,15 @@
     mode: "0644"
   notify: reload nginx
 
+- name: Deploy nginx compression config (scripts, styles and JSON)
+  ansible.builtin.template:
+    src: gencc-compression.conf.j2
+    dest: /etc/nginx/conf.d/gencc-compression.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
+
 - name: Deploy nginx IP blocklist
   ansible.builtin.template:
     src: gencc-ip-blocklist.conf.j2

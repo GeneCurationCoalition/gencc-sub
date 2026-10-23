@@ -4,7 +4,7 @@
 # Container images
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.3.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.2.1
-gencc_app_image: ghcr.io/genecurationcoalition/gencc:sha-0b6d0cd
+gencc_app_image: ghcr.io/genecurationcoalition/gencc:sha-743aadd
 
 # PHP INCIDENT 2026-10: reopen only after the patched portal passes preflight
 # and FPM syntax checks.
