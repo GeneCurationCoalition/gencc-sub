@@ -22,9 +22,11 @@ gencc_app_port: 8082
 # gencc-app, the new public browser. An environment runs it by setting
 # gencc_app_hostname and gencc_app_image; deploy it with playbooks/gencc-app.yml.
 gencc_app_memory_limit_mb: 1024
-# The address nginx's connections reach the app from through rootlessport, so
-# download quotas count the client in X-Forwarded-For. Empty: trust no proxy.
-gencc_app_trust_proxy: ""
+# The address nginx's connections reach the app from: slirp4netns's port
+# forwarder, the same on every rootless VM (measured on staging, 23 October
+# 2026). Trusting it lets download quotas count the client nginx names in
+# X-Forwarded-For; only processes on the VM connect from it.
+gencc_app_trust_proxy: 10.0.2.100
 
 # Host paths
 gencc_secrets_dir: /etc/gencc
