@@ -82,6 +82,7 @@ map $request_uri $bot_exempt_path {
     default                     0;
     ~^/download/                1;
     ~^/-/healthz                1;
+    ~^/-/readyz                 1;
     ~^/robots\.txt              1;
     ~^/favicon\.ico             1;
 }

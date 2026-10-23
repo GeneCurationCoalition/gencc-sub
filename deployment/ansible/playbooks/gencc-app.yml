@@ -17,7 +17,19 @@
           - gencc_app_image is defined
           - gencc_app_releases_bucket is defined
         fail_msg: "Set gencc_app_hostname, gencc_app_image and gencc_app_releases_bucket for this environment."
-  roles:
-    - mysql
-    - quadlet
-    - nginx_tls
+  # In order: the reader exists before the container starts, and the container
+  # before nginx sends it traffic.
+  tasks:
+    - name: Configure MySQL
+      ansible.builtin.import_role:
+        name: mysql
+    - name: Create the gencc-app database reader
+      ansible.builtin.import_role:
+        name: mysql
+        tasks_from: app_reader
+    - name: Install and start the gencc-app container
+      ansible.builtin.import_role:
+        name: quadlet
+    - name: Configure nginx and the certificate
+      ansible.builtin.import_role:
+        name: nginx_tls
