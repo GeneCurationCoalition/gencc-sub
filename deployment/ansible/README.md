@@ -67,6 +67,10 @@ The restore is destructive: it drops and recreates `gencc_mysql_database`.
 
 ## Security hardening
 
+For the October 2026 PHP incident, see
+[PHP-INTERIM-MITIGATION.md](PHP-INTERIM-MITIGATION.md) for the patched portal
+rollout, remaining search/production protections, and rollback instructions.
+
 The `nginx_tls` role deploys several layers of abuse prevention, configured via templates in `roles/nginx_tls/templates/`:
 
 **Bot blocking** — A user-agent map (`gencc-security.conf.j2`) blocks known SEO crawlers, AI training bots, and vulnerability scanners. Certain paths (downloads, health checks, robots.txt) are exempt so external tools can still fetch exports.

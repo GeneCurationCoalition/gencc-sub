@@ -1,0 +1,6 @@
+  # PHP INCIDENT 2026-10: nginx-only response, no application/PHP upstream.
+  default_type text/plain;
+  add_header Cache-Control "no-store" always;
+  location / {
+    return 503 "The GenCC Submission Portal is temporarily down for maintenance.\n\nWe are addressing PHP security vulnerabilities. For details, see:\nhttps://www.php.net/archive/2026.php#2026-10-21-5\n";
+  }

@@ -1,0 +1,18 @@
+---
+# Runtime-only PHP upgrade: preserve live credentials, data, MySQL and timers.
+# Preflight, enter maintenance, then deploy; use php-incident-edge.yml to reopen.
+- name: Upgrade the portal runtime while preserving existing host configuration
+  hosts: gcp_vms
+  become: true
+  vars:
+    gencc_deploy_apps: [gencc-sub]
+    gencc_deploy_write_env: false
+    gencc_php_incident_portal_offline: true
+  pre_tasks:
+    - name: Check the portal candidate before entering maintenance
+      ansible.builtin.import_role:
+        name: quadlet
+        tasks_from: php_incident_preflight
+  roles:
+    - nginx_tls
+    - quadlet

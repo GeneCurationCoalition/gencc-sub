@@ -9,6 +9,11 @@ gencc_deploy_user: gencc
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.0
 
+# Limit configuration writes and container restarts for a targeted rollout.
+gencc_deploy_apps: [gencc-sub, gencc-search]
+# Runtime-only rollouts may preserve the existing host environment files.
+gencc_deploy_write_env: true
+
 # Host bind ports (nginx routes to these)
 gencc_sub_port: 8080
 gencc_search_port: 8081
@@ -16,6 +21,22 @@ gencc_search_port: 8081
 # Host paths
 gencc_secrets_dir: /etc/gencc
 gencc_data_dir: /var/lib/gencc
+
+# -----------------------------------------------------------------------------
+# BEGIN PHP INCIDENT 2026-10: CVE-2026-109618 / CVE-2026-109619
+# See PHP-INTERIM-MITIGATION.md for coordinated removal after patching.
+# Public portal traffic receives a static nginx response; jobs keep running.
+gencc_php_incident_portal_offline: true
+gencc_php_incident_portal_mitigations: true
+# These host-managed files are mounted into BOTH apps, including existing images.
+gencc_php_config_dir: /etc/gencc/php
+# External caps must accompany FPM memory_limit=-1. Leave room for host MySQL.
+# Incident budgets, not guaranteed capacity for concurrent exports/imports.
+gencc_sub_memory_limit_mb: 3072
+gencc_search_memory_limit_mb: 2048
+gencc_host_memory_reserve_mb: 2048
+# END PHP INCIDENT 2026-10
+# -----------------------------------------------------------------------------
 
 # MySQL
 gencc_mysql_database: gencc_sub

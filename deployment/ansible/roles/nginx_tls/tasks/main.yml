@@ -1,4 +1,23 @@
 ---
+# Also protect the nginx-only entrypoint from reopening an old portal image.
+- name: Require patched live portal before reopening nginx routes
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    podman exec -i gencc-sub php /dev/stdin
+  args:
+    executable: /bin/bash
+    chdir: /
+    stdin: "{{ lookup('file', role_path ~ '/../quadlet/files/php-patched-version.php') }}"
+  become_user: "{{ gencc_deploy_user }}"
+  changed_when: false
+  register: gencc_php_incident_reopen_check
+  until: gencc_php_incident_reopen_check.rc == 0
+  retries: 60
+  delay: 3
+  when:
+    - not (gencc_php_incident_portal_offline | bool)
+
 - name: Install nginx + certbot + fail2ban dependencies
   ansible.builtin.apt:
     name:
@@ -156,18 +175,20 @@
   ansible.builtin.command: nginx -T
   register: gencc_nginx_rendered_config
   changed_when: false
-  when:
-    - gencc_enable_letsencrypt | bool
-    - gencc_le_cert.stat.exists
+
+# PHP INCIDENT 2026-10: incident-specific validation is isolated for removal.
+- name: Validate PHP incident edge configuration
+  ansible.builtin.import_tasks: php_incident_validate.yml
 
 - name: Assert hardened HTTPS nginx config is rendered
+  # PHP INCIDENT 2026-10: portal-specific locations are absent during maintenance.
   ansible.builtin.assert:
     that:
       - "'access_log /var/log/nginx/access.log gencc' in gencc_nginx_rendered_config.stdout"
-      - "'limit_req zone=general' in gencc_nginx_rendered_config.stdout"
+      - "(gencc_php_incident_portal_offline | bool) or 'limit_req zone=general' in gencc_nginx_rendered_config.stdout"
       - "'limit_req zone=search' in gencc_nginx_rendered_config.stdout"
       - "'limit_conn conn_per_ip 30' in gencc_nginx_rendered_config.stdout"
-      - "'location ^~ /api/pubmed' in gencc_nginx_rendered_config.stdout"
+      - "(gencc_php_incident_portal_offline | bool) or 'location ^~ /api/pubmed' in gencc_nginx_rendered_config.stdout"
     fail_msg: "Rendered nginx config is missing expected GenCC hardening directives."
   when:
     - gencc_enable_letsencrypt | bool

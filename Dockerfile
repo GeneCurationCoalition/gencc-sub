@@ -26,7 +26,7 @@ RUN npm run build
 
 
 # Production image
-FROM php:8.1-fpm
+FROM php:8.3.36-fpm-bookworm
 
 # Build argument for application version (set via --build-arg APP_VERSION=...)
 ARG APP_VERSION=dev
@@ -74,8 +74,8 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
 # opcache: bytecode caching for production performance
 
 # Copy Node.js from official image (recommended by docker-node best practices)
-COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/
-COPY --from=node:22-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && npm install -g pm2
 

@@ -1,0 +1,27 @@
+---
+# PHP INCIDENT 2026-10: CVE-2026-109618 / CVE-2026-109619.
+# Remove in coordination with the memory-limit override and Quadlet mounts.
+- name: Preflight when the Quadlet role is invoked without deployment preparation
+  ansible.builtin.include_tasks: php_incident_preflight.yml
+  when: not (gencc_php_incident_preflight_passed | default(false) | bool)
+
+- name: Create host-managed PHP mitigation configuration directory
+  ansible.builtin.file:
+    path: "{{ gencc_php_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0755"
+
+- name: Install shared PHP mitigation configuration only when needed
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ gencc_php_config_dir }}/{{ item }}"
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    mode: "0644"
+  loop:
+    - zz-security-hardening.ini
+    - zz-security-hardening.conf
+    - zz-security-search-pool.conf
+  when: "'gencc-search' in gencc_deploy_apps or gencc_php_incident_portal_mitigations | bool"
