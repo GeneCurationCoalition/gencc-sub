@@ -51,6 +51,10 @@ gencc_host_memory_reserve_mb: 2048
 # MySQL
 gencc_mysql_database: gencc_sub
 gencc_mysql_bind_address: "127.0.0.1"
+# Holds the whole database in memory (about 500 MB in October 2026, mostly the
+# submissions' JSON); Ubuntu's default is 128 MB. Needing this much for this
+# little data says the schema wants restructuring; don't raise it past 1G.
+gencc_mysql_innodb_buffer_pool_size: 1G
 
 # Users created in MySQL (passwords are in vault vars)
 gencc_mysql_sub_user: gencc_sub_app
