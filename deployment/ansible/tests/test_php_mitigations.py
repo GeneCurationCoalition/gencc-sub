@@ -84,13 +84,17 @@ class Templates(unittest.TestCase):
         self.assertEqual(task['name'], 'Require patched live portal before reopening nginx routes')
         self.assertIn('podman exec -i gencc-sub php /dev/stdin', task['ansible.builtin.shell'])
         self.assertIn('/quadlet/files/php-patched-version.php', task['args']['stdin'])
+        self.assertEqual(task['until'], task['register'] + '.rc == 0')
+        self.assertGreater(task['retries'], 0)
+        self.assertGreater(task['delay'], 0)
+        self.assertLessEqual(task['retries'] * task['delay'], 180)
         env = jinja2.Environment()
         env.filters['bool'] = to_bool
         for offline, mitigations in product([True, False], repeat=2):
             values = {'gencc_php_incident_portal_offline': offline,
                       'gencc_php_incident_portal_mitigations': mitigations}
             checks = [env.compile_expression(expression)(**values) for expression in task['when']]
-            self.assertEqual(all(checks), not offline and not mitigations)
+            self.assertEqual(all(checks), not offline)
 
     def test_portal_offline_removes_every_upstream_and_can_be_reversed(self):
         for environment in ['staging', 'production']:
@@ -215,9 +219,37 @@ class Templates(unittest.TestCase):
         verify = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_verify.yml').read_text())[0]
         self.assertEqual(verify['loop'], '{{ gencc_php_incident_targets }}')
 
+    def test_shared_mitigation_writes_validate_every_affected_application(self):
+        tasks = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_preflight.yml').read_text())
+        selection = next(task for task in tasks if 'gencc_php_incident_applications' in task.get('vars', {}))
+        install = yaml.safe_load((ROOT / 'roles/quadlet/tasks/php_incident_prepare.yml').read_text())[-1]
+        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env.filters['bool'] = to_bool
+        expression = selection['ansible.builtin.set_fact']['gencc_php_incident_targets'].strip()[2:-2]
+        for selected, mitigations in product(
+                [['gencc-sub'], ['gencc-search'], ['gencc-sub', 'gencc-search']], [False, True]):
+            values = context('production') | {
+                'gencc_deploy_apps': selected,
+                'gencc_php_incident_portal_mitigations': mitigations,
+            }
+            apps = [{key: env.from_string(value).render(values) if isinstance(value, str) else value
+                     for key, value in app.items()}
+                    for app in selection['vars']['gencc_php_incident_applications']]
+            targets = env.compile_expression(expression)(**values, gencc_php_incident_applications=apps)
+            names = {item['name'] for item in targets}
+            writes = env.compile_expression(install['when'])(**values)
+            with self.subTest(selected=selected, mitigations=mitigations):
+                self.assertEqual(writes, 'gencc-search' in selected or mitigations)
+                self.assertEqual(names, set(selected) | ({'gencc-search'} if writes else set()))
+                if writes:
+                    self.assertEqual(next(item['mode'] for item in targets
+                                          if item['name'] == 'gencc-search'), 'mitigated')
+
     def test_runtime_only_rollout_preserves_environment_and_stays_in_maintenance(self):
         play = yaml.safe_load((ROOT / 'playbooks/portal-runtime.yml').read_text())[0]
-        self.assertEqual(play['roles'], ['quadlet', 'nginx_tls'])
+        self.assertEqual(play['pre_tasks'][0]['ansible.builtin.import_role'],
+                         {'name': 'quadlet', 'tasks_from': 'php_incident_preflight'})
+        self.assertEqual(play['roles'], ['nginx_tls', 'quadlet'])
         self.assertEqual(play['vars']['gencc_deploy_apps'], ['gencc-sub'])
         self.assertFalse(play['vars']['gencc_deploy_write_env'])
         self.assertTrue(play['vars']['gencc_php_incident_portal_offline'])

@@ -20,9 +20,15 @@
       - gencc_deploy_apps | difference(['gencc-sub', 'gencc-search']) | length == 0
       - gencc_deploy_apps | unique | length == gencc_deploy_apps | length
 
+# An old portal shares mitigation files with search; validate both consumers
+# before writing those files, even when only the portal is being replaced.
 - name: Select application runtime checks for this deployment
   ansible.builtin.set_fact:
-    gencc_php_incident_targets: "{{ gencc_php_incident_applications | selectattr('name', 'in', gencc_deploy_apps) | list }}"
+    gencc_php_incident_targets: >-
+      {{ gencc_php_incident_applications
+         | selectattr('name', 'in', gencc_deploy_apps
+           + (['gencc-search'] if gencc_php_incident_portal_mitigations | bool else []))
+         | list }}
   vars:
     gencc_php_incident_applications:
       - name: gencc-sub
@@ -41,7 +47,7 @@
   become_user: "{{ gencc_deploy_user }}"
   register: gencc_php_incident_candidate
 
-- name: Validate selected images without application entrypoints or data
+- name: Validate affected images without application entrypoints or data
   block:
     - name: Stage candidate PHP incident files separately from active mounts
       ansible.builtin.copy:

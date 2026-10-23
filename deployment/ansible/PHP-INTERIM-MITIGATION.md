@@ -6,7 +6,8 @@ Search retains interim mitigations in both environments.
 
 ## Portal rollout
 
-From this directory, with the existing maintenance page active:
+From this directory; the runtime playbook checks the candidate image, activates
+maintenance, then replaces the portal container:
 
 ```sh
 ansible-playbook -i inventories/staging.ini playbooks/portal-runtime.yml --ask-vault-pass
@@ -31,6 +32,7 @@ ansible-playbook -i inventories/staging.ini playbooks/php-incident-edge.yml --as
 ```
 
 Verify 503, then restore the old image **with portal mitigations enabled**.
+Keep an old-image rollback in maintenance; reopening requires patched PHP.
 Keep search protected. After patching each application, remove its unlimited FPM
 memory override and incident container cap together; check for old in-container
 hot patches. Temporary sections are marked `PHP INCIDENT 2026-10`.
