@@ -12,6 +12,7 @@
       - gencc_mysql_search_password is defined
       - gencc_mysql_sub_password | length > 0
       - gencc_mysql_search_password | length > 0
+      - gencc_app_hostname is not defined or (gencc_mysql_app_password | default('') | length > 0)
     fail_msg: "Set MySQL passwords in `deployment/ansible/inventories/group_vars/all/vault.yml` (use Ansible Vault)."
 
 - name: Configure MySQL bind address (allows rootless podman connectivity)
@@ -46,3 +47,37 @@
   args:
     executable: /bin/bash
   no_log: true
+
+# gencc-app reads only what the public browser shows. Column lists keep password
+# hashes, tokens and private contacts unreadable. gencc-app's fixtures/grants.sql
+# holds the same grants for its database tests; change the two together.
+- name: Create the gencc-app reader with the public browser's grants
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mysql -uroot <<'SQL'
+    {% for host in ['localhost', '127.0.0.1', '10.0.2.%'] %}
+    CREATE USER IF NOT EXISTS '{{ gencc_mysql_app_user }}'@'{{ host }}' IDENTIFIED BY '{{ gencc_mysql_app_password }}';
+    {% for table in gencc_mysql_app_tables %}
+    GRANT SELECT ON {{ gencc_mysql_database }}.{{ table }} TO '{{ gencc_mysql_app_user }}'@'{{ host }}';
+    {% endfor %}
+    {% for table, columns in gencc_mysql_app_columns.items() %}
+    GRANT SELECT ({{ columns | join(', ') }}) ON {{ gencc_mysql_database }}.{{ table }} TO '{{ gencc_mysql_app_user }}'@'{{ host }}';
+    {% endfor %}
+    {% endfor %}
+    FLUSH PRIVILEGES;
+    SQL
+  args:
+    executable: /bin/bash
+  vars:
+    gencc_mysql_app_tables:
+      [submissions, genes, diseases, classifications, inheritances, pubmeds,
+       pubmed_submission, releases, migrations]
+    gencc_mysql_app_columns:
+      submitters:
+        [id, ident, type, curie, name, description, logo, logo_contents, logo_mime_type,
+         website, assertion, counts, status, allow_submissions, downloadable,
+         created_at, updated_at, deleted_at]
+      submitter_user: [id, submitter_id, user_id, is_contact]
+      users: [id, name, title, phone, email]
+  no_log: true
+  when: gencc_app_hostname is defined

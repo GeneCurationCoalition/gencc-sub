@@ -97,6 +97,19 @@
     - gencc_enable_letsencrypt | bool
     - gencc_le_cert_before.stat.exists | default(false)
 
+- name: Read the names on the existing Let's Encrypt certificate
+  ansible.builtin.command: >
+    openssl x509
+    -noout
+    -ext subjectAltName
+    -in /etc/letsencrypt/live/{{ gencc_letsencrypt_cert_name }}/fullchain.pem
+  register: gencc_le_cert_names
+  changed_when: false
+  failed_when: false
+  when:
+    - gencc_enable_letsencrypt | bool
+    - gencc_le_cert_before.stat.exists | default(false)
+
 - name: Install temporary HTTP-only nginx config (pre-certificate)
   ansible.builtin.template:
     src: gencc-http.conf.j2
@@ -148,7 +161,13 @@
   until: gencc_certbot_result.rc == 0
   when:
     - gencc_enable_letsencrypt | bool
-    - not (gencc_le_cert_before.stat.exists | default(false)) or (gencc_le_cert_validity.rc | default(1)) != 0
+    # Missing, expiring, or not naming every configured domain (one was added).
+    - >-
+      not (gencc_le_cert_before.stat.exists | default(false))
+      or (gencc_le_cert_validity.rc | default(1)) != 0
+      or (gencc_letsencrypt_domains
+          | difference(gencc_le_cert_names.stdout | default('') | regex_findall('DNS:([^,\\s]+)'))
+          | length > 0)
 
 - name: Check if Let's Encrypt certificate exists (post-issuance)
   ansible.builtin.stat:

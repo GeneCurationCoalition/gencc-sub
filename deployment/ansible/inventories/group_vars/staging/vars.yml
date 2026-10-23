@@ -4,6 +4,7 @@
 # Container images
 gencc_sub_image: ghcr.io/genecurationcoalition/gencc-sub:2.3.0
 gencc_search_image: ghcr.io/genecurationcoalition/gencc-search:2.2.1
+gencc_app_image: ghcr.io/genecurationcoalition/gencc:sha-0b6d0cd
 
 # PHP INCIDENT 2026-10: reopen only after the patched portal passes preflight
 # and FPM syntax checks.
@@ -13,10 +14,13 @@ gencc_php_incident_portal_mitigations: false
 # Public routing / TLS
 gencc_submit_hostname: portal-stage.thegencc.org
 gencc_search_hostname: search-stage.thegencc.org
+gencc_app_hostname: browser-stage.thegencc.org
+gencc_app_releases_bucket: gencc-dev
 gencc_letsencrypt_cert_name: gencc-stage
 gencc_letsencrypt_domains:
   - "{{ gencc_submit_hostname }}"
   - "{{ gencc_search_hostname }}"
+  - "{{ gencc_app_hostname }}"
 
 # Systemd timers for scheduled tasks
 gencc_enable_timers: true

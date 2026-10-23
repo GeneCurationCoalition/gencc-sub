@@ -1,0 +1,23 @@
+---
+# Deploy gencc-app, the new public browser, beside the portal and gencc-search.
+# Touches only gencc-app's MySQL user, data directory, environment file and
+# container, then nginx and the certificate: no maintenance mode, migrations,
+# export regeneration, queue or timer changes, and no other container restarts.
+#   ansible-playbook -i inventories/staging.ini playbooks/gencc-app.yml --ask-vault-pass --check --diff
+- name: Deploy gencc-app
+  hosts: gcp_vms
+  become: true
+  vars:
+    gencc_deploy_apps: [gencc-app]
+  pre_tasks:
+    - name: Require gencc-app settings for this environment
+      ansible.builtin.assert:
+        that:
+          - gencc_app_hostname is defined
+          - gencc_app_image is defined
+          - gencc_app_releases_bucket is defined
+        fail_msg: "Set gencc_app_hostname, gencc_app_image and gencc_app_releases_bucket for this environment."
+  roles:
+    - mysql
+    - quadlet
+    - nginx_tls
