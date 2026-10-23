@@ -1,7 +1,7 @@
 ---
-# gencc-app's database reader, run by playbooks/gencc-app.yml after the role's
-# main tasks. Its grants name tables, which must exist, so it isn't part of
-# site.yml: on a new VM the schema arrives later, in db_bootstrap.
+# gencc-app's database reader, run by playbooks/gencc-app.yml alone. Its grants
+# name tables, which must exist, so it isn't part of site.yml: on a new VM the
+# schema arrives later, in db_bootstrap.
 - name: Require the gencc-app database password
   ansible.builtin.assert:
     that:

@@ -3,6 +3,8 @@
 # Touches only gencc-app's MySQL user, data directory, environment file and
 # container, then nginx and the certificate: no maintenance mode, migrations,
 # export regeneration, queue or timer changes, and no other container restarts.
+# MySQL's own configuration and the other apps' users stay with site.yml, so
+# this never restarts MySQL.
 #   ansible-playbook -i inventories/staging.ini playbooks/gencc-app.yml --ask-vault-pass --check --diff
 - name: Deploy gencc-app
   hosts: gcp_vms
@@ -20,9 +22,6 @@
   # In order: the reader exists before the container starts, and the container
   # before nginx sends it traffic.
   tasks:
-    - name: Configure MySQL
-      ansible.builtin.import_role:
-        name: mysql
     - name: Create the gencc-app database reader
       ansible.builtin.import_role:
         name: mysql
