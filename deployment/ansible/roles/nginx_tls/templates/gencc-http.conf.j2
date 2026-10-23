@@ -41,3 +41,22 @@ server {
     proxy_pass http://127.0.0.1:{{ gencc_search_port }};
   }
 }
+{% if gencc_app_hostname is defined %}
+
+server {
+{% include 'gencc-php-mitigation.conf.j2' %}
+
+  listen 80;
+  server_name {{ gencc_app_hostname }};
+  client_max_body_size 1m;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/acme-challenge;
+  }
+
+  location / {
+    include /etc/nginx/snippets/gencc-proxy-params.conf;
+    proxy_pass http://127.0.0.1:{{ gencc_app_port }};
+  }
+}
+{% endif %}

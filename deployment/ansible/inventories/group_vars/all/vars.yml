@@ -17,6 +17,16 @@ gencc_deploy_write_env: true
 # Host bind ports (nginx routes to these)
 gencc_sub_port: 8080
 gencc_search_port: 8081
+gencc_app_port: 8082
+
+# gencc-app, the new public browser. An environment runs it by setting
+# gencc_app_hostname and gencc_app_image; deploy it with playbooks/gencc-app.yml.
+gencc_app_memory_limit_mb: 1024
+# The address nginx's connections reach the app from: slirp4netns's port
+# forwarder, the same on every rootless VM (measured on staging, 23 October
+# 2026). Trusting it lets download quotas count the client nginx names in
+# X-Forwarded-For; only processes on the VM connect from it.
+gencc_app_trust_proxy: 10.0.2.100
 
 # Host paths
 gencc_secrets_dir: /etc/gencc
@@ -45,6 +55,7 @@ gencc_mysql_bind_address: "127.0.0.1"
 # Users created in MySQL (passwords are in vault vars)
 gencc_mysql_sub_user: gencc_sub_app
 gencc_mysql_search_user: gencc_search_reader
+gencc_mysql_app_user: gencc_app
 
 # Container-to-host MySQL host for rootless slirp4netns
 gencc_container_db_host: 10.0.2.2

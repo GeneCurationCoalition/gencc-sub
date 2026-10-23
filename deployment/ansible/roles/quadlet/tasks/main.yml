@@ -76,6 +76,40 @@
     mode: "0644"
   when: "'gencc-search' in gencc_deploy_apps"
 
+- name: Ensure the gencc-app data directory exists
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0750"
+  loop:
+    - "{{ gencc_data_dir }}/gencc-app"
+    - "{{ gencc_data_dir }}/gencc-app/data"
+  when: "'gencc-app' in gencc_deploy_apps"
+
+- name: Write the gencc-app environment file
+  ansible.builtin.template:
+    src: gencc-app.env.j2
+    dest: "{{ gencc_secrets_dir }}/gencc-app.env"
+    owner: root
+    group: "{{ gencc_deploy_user }}"
+    # Read by podman as the deploy user, not mounted into the container.
+    mode: "0640"
+  when:
+    - "'gencc-app' in gencc_deploy_apps"
+    - gencc_deploy_write_env | bool
+  no_log: true
+
+- name: Install gencc-app quadlet unit
+  ansible.builtin.template:
+    src: gencc-app.container.j2
+    dest: "/home/{{ gencc_deploy_user }}/.config/containers/systemd/gencc-app.container"
+    owner: "{{ gencc_deploy_user }}"
+    group: "{{ gencc_deploy_user }}"
+    mode: "0644"
+  when: "'gencc-app' in gencc_deploy_apps"
+
 - name: Reload user systemd for Quadlet (requires lingering)
   ansible.builtin.shell: |
     set -euo pipefail

@@ -8,6 +8,7 @@
       - gencc_host_memory_reserve_mb | int >= 2048
       - >-
         ((gencc_sub_memory_limit_mb | int if gencc_php_incident_portal_mitigations | bool else 0) + gencc_search_memory_limit_mb | int
+        + (gencc_app_memory_limit_mb | int if gencc_app_hostname is defined else 0)
         + gencc_host_memory_reserve_mb | int) <= ansible_facts.memtotal_mb
     fail_msg: >-
       FPM memory_limit=-1 requires finite container caps and at least 2 GiB
@@ -17,7 +18,7 @@
   ansible.builtin.assert:
     that:
       - gencc_deploy_apps | length > 0
-      - gencc_deploy_apps | difference(['gencc-sub', 'gencc-search']) | length == 0
+      - gencc_deploy_apps | difference(['gencc-sub', 'gencc-search', 'gencc-app']) | length == 0
       - gencc_deploy_apps | unique | length == gencc_deploy_apps | length
 
 # An old portal shares mitigation files with search; validate both consumers

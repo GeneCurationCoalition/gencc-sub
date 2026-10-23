@@ -1,0 +1,43 @@
+---
+# gencc-app's database reader, run by playbooks/gencc-app.yml alone. Its grants
+# name tables, which must exist, so it isn't part of site.yml: on a new VM the
+# schema arrives later, in db_bootstrap.
+- name: Require the gencc-app database password
+  ansible.builtin.assert:
+    that:
+      - gencc_mysql_app_password is defined
+      - gencc_mysql_app_password | length > 0
+    fail_msg: "Set gencc_mysql_app_password in this environment's vault."
+# gencc-app reads only what the public browser shows. Column lists keep password
+# hashes, tokens and private contacts unreadable. gencc's fixtures/grants.sql
+# holds the same grants for its database tests; change the two together.
+- name: Create the gencc-app reader with the public browser's grants
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mysql -uroot <<'SQL'
+    {% for host in ['localhost', '127.0.0.1', '10.0.2.%'] %}
+    CREATE USER IF NOT EXISTS '{{ gencc_mysql_app_user }}'@'{{ host }}' IDENTIFIED BY '{{ gencc_mysql_app_password }}';
+    ALTER USER '{{ gencc_mysql_app_user }}'@'{{ host }}' IDENTIFIED BY '{{ gencc_mysql_app_password }}';
+    {% for table in gencc_mysql_app_tables %}
+    GRANT SELECT ON {{ gencc_mysql_database }}.{{ table }} TO '{{ gencc_mysql_app_user }}'@'{{ host }}';
+    {% endfor %}
+    {% for table, columns in gencc_mysql_app_columns.items() %}
+    GRANT SELECT ({{ columns | join(', ') }}) ON {{ gencc_mysql_database }}.{{ table }} TO '{{ gencc_mysql_app_user }}'@'{{ host }}';
+    {% endfor %}
+    {% endfor %}
+    FLUSH PRIVILEGES;
+    SQL
+  args:
+    executable: /bin/bash
+  vars:
+    gencc_mysql_app_tables:
+      [submissions, genes, diseases, classifications, inheritances, pubmeds,
+       pubmed_submission, releases, migrations]
+    gencc_mysql_app_columns:
+      submitters:
+        [id, ident, type, curie, name, description, logo, logo_contents, logo_mime_type,
+         website, assertion, counts, status, allow_submissions, downloadable,
+         created_at, updated_at, deleted_at]
+      submitter_user: [id, submitter_id, user_id, is_contact]
+      users: [id, name, title, phone, email]
+  no_log: true

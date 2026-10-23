@@ -1,0 +1,24 @@
+[Unit]
+Description=gencc-app container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=gencc-app
+Image={{ gencc_app_image }}
+Network=slirp4netns:allow_host_loopback=true
+PublishPort=127.0.0.1:{{ gencc_app_port }}:4100
+# Settings and the database password, as environment variables.
+EnvironmentFile={{ gencc_secrets_dir }}/gencc-app.env
+# The container's node user is the host's deploy user, so the data directory
+# needs no world-writable mode.
+UserNS=keep-id:uid=1000,gid=1000
+Volume={{ gencc_data_dir }}/gencc-app/data:/data
+PodmanArgs=--memory={{ gencc_app_memory_limit_mb }}m
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
