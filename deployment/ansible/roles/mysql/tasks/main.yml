@@ -21,6 +21,14 @@
     line: "bind-address = {{ gencc_mysql_bind_address }}"
   notify: restart mysql
 
+- name: Configure the InnoDB buffer pool size
+  ansible.builtin.lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^innodb_buffer_pool_size\s*='
+    line: "innodb_buffer_pool_size = {{ gencc_mysql_innodb_buffer_pool_size }}"
+    insertafter: '^\[mysqld\]'
+  notify: restart mysql
+
 - name: Create database and users (localhost + loopback + slirp subnet)
   ansible.builtin.shell: |
     set -euo pipefail
